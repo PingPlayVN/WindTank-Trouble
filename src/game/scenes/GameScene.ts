@@ -21,16 +21,25 @@ import {
   type OnlineMatchConfig,
 } from '../network/PeerMultiplayerManager';
 import { AISystem } from '../systems/AISystem';
+import {
+  computeWeaponDamage,
+  resolveEffectiveBattleModeRules,
+  type DamageSourceKind,
+  type EffectiveBattleModeRules,
+} from '../systems/BattleModeSim';
 import { resolveAllTankCollisions } from '../systems/CollisionSystem';
 import { EffectsSystem } from '../systems/EffectsSystem';
 import { InputSystem } from '../systems/InputSystem';
 import { MatchSystem } from '../systems/MatchSystem';
 import { isMazeValidAndConnected } from '../systems/MazeSystem';
+import { NightVisionSystem } from '../systems/NightVisionSystem';
 import { drillMazeWallAtPoint } from '../systems/PowerUpSim';
 import { PowerUpSystem } from '../systems/PowerUpSystem';
 import { ProjectileSystem } from '../systems/ProjectileSystem';
+import { TntBarrelSystem } from '../systems/TntBarrelSystem';
 import type {
   AIDifficulty,
+  BattleModeId,
   BuiltArenaLayout,
   NetworkRole,
   PlayerConfig,
@@ -45,6 +54,9 @@ import type { UIScene } from './UIScene';
 export interface HudSnapshot {
   roundNumber: number;
   mapName: string;
+  battleMode: BattleModeId;
+  hasArmorHp: boolean;
+  isNightOps: boolean;
   winningScore: number;
   ties: number;
   crateIntervalSec: number;
@@ -56,6 +68,8 @@ export interface HudSnapshot {
     aiDifficulty: AIDifficulty;
     score: number;
     ammo: number;
+    hp: number;
+    maxHp: number;
     alive: boolean;
     skill: SkillId | null;
     visualSuit: SkillId | null;
@@ -90,6 +104,9 @@ export class GameScene extends Phaser.Scene {
   private projectileSystem!: ProjectileSystem;
   private effectsSystem!: EffectsSystem;
   private powerUpSystem!: PowerUpSystem;
+  private tntBarrelSystem!: TntBarrelSystem;
+  private nightVisionSystem!: NightVisionSystem;
+  private battleRules!: EffectiveBattleModeRules;
   private matchSystem!: MatchSystem;
 
   private isPaused = false;
@@ -239,17 +256,51 @@ export class GameScene extends Phaser.Scene {
       this.powerUpSystem.setNetEventSink((ev) => peerMultiplayer.sendEvent(ev));
     }
 
+    const effectiveBattleMode = this.onlineConfig
+      ? (this.onlineConfig.battleMode ?? 'classic')
+      : s.battleMode;
+    const effectiveMaxHp = this.onlineConfig
+      ? (this.onlineConfig.maxArmorHp ?? 100)
+      : s.maxArmorHp;
+    const effectiveTntOpt = this.onlineConfig
+      ? (this.onlineConfig.tntBarrelsOption ?? 'auto')
+      : s.tntBarrelsOption;
+    this.battleRules = resolveEffectiveBattleModeRules(
+      effectiveBattleMode,
+      effectiveMaxHp,
+      effectiveTntOpt,
+    );
+
     this.tanks = this.activePlayers.map((pCfg, idx) => {
       const spawn = this.arena.spawns[idx % this.arena.spawns.length];
-      return new Tank(this, pCfg, spawn, this.arena.scaleRatio);
+      const tank = new Tank(this, pCfg, spawn, this.arena.scaleRatio);
+      tank.configureArmorMode(this.battleRules.hasArmorHp, this.battleRules.maxHp);
+      return tank;
     });
     resolveAllTankCollisions(
       this.tanks.map((t) => t.kinematics),
       this.arena.walls,
     );
-    for (const t of this.tanks) t.syncVisuals();
 
+    this.tntBarrelSystem = new TntBarrelSystem(this, this.arena, this.effectsSystem, () =>
+      this.redrawWallLayer(),
+    );
+    if (this.battleRules.hasTntBarrels && this.networkRole !== 'guest') {
+      this.tntBarrelSystem.spawnInitialBarrels(this.tanks, roundSeed);
+    }
+
+    this.nightVisionSystem = new NightVisionSystem(this, this.arena, this.battleRules.isNightOps);
     this.aiSystem = new AISystem(this.activePlayers, roundSeed);
+
+    for (const t of this.tanks) t.syncVisuals();
+    this.nightVisionSystem.updateAndRender(
+      0,
+      this.getNightVisionViewerTanks(),
+      this.projectileSystem.getKinematicsList(),
+      this.powerUpSystem.getCrateStates(),
+      this.tntBarrelSystem.getBarrelStates(),
+      this.tanks,
+    );
     this.inputSystem = new InputSystem(this.roster);
     this.inputSystem.attach();
     this.inputSystem.onPauseRequested(() => {
@@ -424,12 +475,53 @@ export class GameScene extends Phaser.Scene {
       victim.kinematics.y,
       victim.palette,
     );
+    this.nightVisionSystem?.triggerExplosionFlash(victim.kinematics.x, victim.kinematics.y, 280);
     if (this.networkRole === 'host') {
       peerMultiplayer.sendEvent({
         kind: 'tank_eliminated',
         victimIndex: victim.index,
         x: victim.kinematics.x,
         y: victim.kinematics.y,
+      });
+    }
+    return true;
+  }
+
+  private applyCombatHitToTank(
+    victim: Tank,
+    source: DamageSourceKind,
+    hitX: number,
+    hitY: number,
+    explicitDamage?: number,
+  ): boolean {
+    if (!victim.kinematics.alive || victim.isShielded()) return false;
+    const dmg = explicitDamage ?? computeWeaponDamage(source);
+    const continuous =
+      source === 'flame'
+        ? 'flame'
+        : source === 'reaper'
+          ? 'reaper'
+          : source === 'ground_spike'
+            ? 'ground_spike'
+            : undefined;
+    const res = victim.applyArmorDamage(dmg, continuous);
+    if (!res.applied) return false;
+
+    if (res.lethal) {
+      return this.eliminateTankWithExplosion(victim);
+    }
+
+    audioManager.playWallBounce(2);
+    const ratio = victim.getHpRatio();
+    this.effectsSystem.emitArmorHitImpact(hitX, hitY, victim.palette.primary, ratio);
+    this.nightVisionSystem?.triggerMuzzleFlashLight(hitX, hitY, false);
+    if (this.networkRole === 'host') {
+      peerMultiplayer.sendEvent({
+        kind: 'armor_hit',
+        victimIndex: victim.index,
+        x: Math.round(hitX),
+        y: Math.round(hitY),
+        hpRatio: Number(ratio.toFixed(2)),
       });
     }
     return true;
@@ -533,6 +625,14 @@ export class GameScene extends Phaser.Scene {
               : this.inputSystem.consumeBufferedFire(tank.index);
           },
         );
+        if (fireRes.fired) {
+          const muzzle = tank.getMuzzleWorldPos();
+          this.nightVisionSystem.triggerMuzzleFlashLight(
+            muzzle.x,
+            muzzle.y,
+            Boolean(tank.getEquippedSkill()),
+          );
+        }
         if (fireRes.hudDirty) {
           hudDirty = true;
         }
@@ -556,6 +656,13 @@ export class GameScene extends Phaser.Scene {
             (tx, ty, ang) => this.effectsSystem.stampTreadMark(tx, ty, ang),
             (ex, ey) => this.effectsSystem.emitExhaustPuff(ex, ey),
           );
+          if (stateChanges.emitCriticalDamage) {
+            this.effectsSystem.emitCriticalHullDamageTick(
+              tank.kinematics.x,
+              tank.kinematics.y,
+              tank.getHpRatio(),
+            );
+          }
           if (stateChanges.shieldJustExpired || stateChanges.reaperJustEnded) {
             this.effectsSystem.emitSuitRevert(tank.kinematics.x, tank.kinematics.y);
             hudDirty = true;
@@ -566,14 +673,39 @@ export class GameScene extends Phaser.Scene {
           this.tanks.map((t) => t.kinematics),
           this.arena.walls,
         );
+        this.tntBarrelSystem.resolveTankCollisions(this.tanks);
 
         const preRes = this.powerUpSystem.preProjectileSubStep(
           subDt,
           this.tanks,
           this.matchSystem.getPhase(),
-          (victim) => {
-            if (this.eliminateTankWithExplosion(victim)) {
+          (victim, source) => {
+            if (this.applyCombatHitToTank(victim, source, victim.kinematics.x, victim.kinematics.y)) {
               hudDirty = true;
+            }
+          },
+          (beamPts) => {
+            this.nightVisionSystem.triggerLaserFlashCorridor(beamPts);
+            for (let pIdx = 0; pIdx < beamPts.length - 1; pIdx++) {
+              this.tntBarrelSystem.triggerBarrelsAlongSegment(
+                beamPts[pIdx].x,
+                beamPts[pIdx].y,
+                beamPts[pIdx + 1].x,
+                beamPts[pIdx + 1].y,
+                this.tanks,
+                (vIdx, dmg) => {
+                  const vt = this.tanks.find((t) => t.index === vIdx);
+                  if (vt && this.applyCombatHitToTank(vt, 'tnt_barrel', vt.kinematics.x, vt.kinematics.y, dmg)) {
+                    hudDirty = true;
+                  }
+                },
+                (bx, by, br) => {
+                  this.nightVisionSystem.triggerExplosionFlash(bx, by, br * 2.2);
+                  if (this.networkRole === 'host') {
+                    peerMultiplayer.sendEvent({ kind: 'barrel_blast', x: bx, y: by, blastRadius: br });
+                  }
+                },
+              );
             }
           },
         );
@@ -583,13 +715,17 @@ export class GameScene extends Phaser.Scene {
           subDt,
           this.tanks,
           this.arena.walls,
-          (px, py) => this.effectsSystem.emitShellExpire(px, py),
+          (px, py) => {
+            this.effectsSystem.emitShellExpire(px, py);
+            this.nightVisionSystem.triggerFlareExpireEmber(px, py);
+          },
           (proj, hx, hy) => this.powerUpSystem.handleDrillWallImpact(proj, hx, hy),
         );
 
         for (const b of simEvents.bounces) {
           audioManager.playWallBounce(b.bounces);
           this.effectsSystem.emitWallBounce(b.x, b.y);
+          this.nightVisionSystem.triggerFlareBounceFlash(b.x, b.y);
           if (this.networkRole === 'host') {
             peerMultiplayer.sendEvent({
               kind: 'wall_bounce',
@@ -602,22 +738,46 @@ export class GameScene extends Phaser.Scene {
 
         for (const hit of simEvents.hits) {
           const victim = this.tanks.find((t) => t.index === hit.victimIndex);
+          const proj = this.projectileSystem.getProjectileById(hit.projectileId);
+          const variant = proj?.kinematics.variant ?? 'standard';
           if (victim) {
             if (victim.isShielded()) {
               audioManager.playShieldDeflect();
               this.effectsSystem.emitShieldDeflect(hit.x, hit.y);
-            } else if (this.eliminateTankWithExplosion(victim)) {
+            } else if (this.applyCombatHitToTank(victim, variant, hit.x, hit.y)) {
               hudDirty = true;
             }
           }
+        }
+
+        if (
+          this.tntBarrelSystem.updateSubStep(
+            subDt,
+            this.tanks,
+            this.projectileSystem,
+            (vIdx, dmg) => {
+              const vt = this.tanks.find((t) => t.index === vIdx);
+              if (vt && this.applyCombatHitToTank(vt, 'tnt_barrel', vt.kinematics.x, vt.kinematics.y, dmg)) {
+                hudDirty = true;
+              }
+            },
+            (bx, by, br) => {
+              this.nightVisionSystem.triggerExplosionFlash(bx, by, br * 2.2);
+              if (this.networkRole === 'host') {
+                peerMultiplayer.sendEvent({ kind: 'barrel_blast', x: bx, y: by, blastRadius: br });
+              }
+            },
+          )
+        ) {
+          hudDirty = true;
         }
 
         this.powerUpSystem.postProjectileSubStep(
           subDt,
           this.tanks,
           simEvents.hits,
-          (victim) => {
-            if (this.eliminateTankWithExplosion(victim)) {
+          (victim, source) => {
+            if (this.applyCombatHitToTank(victim, source, victim.kinematics.x, victim.kinematics.y)) {
               hudDirty = true;
             }
           },
@@ -653,6 +813,15 @@ export class GameScene extends Phaser.Scene {
       this.powerUpSystem.syncVisuals(totalDt, this.tanks);
     }
 
+    this.tntBarrelSystem.syncVisuals(totalDt);
+    this.nightVisionSystem.updateAndRender(
+      totalDt,
+      this.getNightVisionViewerTanks(),
+      this.projectileSystem.getKinematicsList(),
+      this.powerUpSystem.getCrateStates(),
+      this.tntBarrelSystem.getBarrelStates(),
+      this.tanks,
+    );
     this.matchSystem.update(totalDt, this.tanks);
     this.effectsSystem.update(totalDt);
 
@@ -706,6 +875,9 @@ export class GameScene extends Phaser.Scene {
           angle: Math.round(t.kinematics.angle * 1000) / 1000,
           alive: t.kinematics.alive,
           ammo: this.projectileSystem.getRemainingAmmo(t.index),
+          hp: t.getHp(),
+          maxHp: t.getMaxHp(),
+          hasArmor: t.hasArmorHpEnabled(),
           skill: sk.skill,
           skillAmmo: sk.ammo,
           chargingLaserRemaining: Math.round(sk.chargingLaserRemaining * 100) / 100,
@@ -718,6 +890,7 @@ export class GameScene extends Phaser.Scene {
       crates: entities.crates,
       mines: entities.mines,
       spikeZones: entities.spikeZones,
+      barrels: this.tntBarrelSystem.getNetworkSnapshots(),
     });
   }
 
@@ -771,6 +944,9 @@ export class GameScene extends Phaser.Scene {
       }
       this.projectileSystem.applyNetworkProjectiles(snap.projectiles, dt);
       this.powerUpSystem.applyNetworkWorldEntities(snap.crates, snap.mines, snap.spikeZones);
+      if (snap.barrels) {
+        this.tntBarrelSystem.applyNetworkSnapshots(snap.barrels);
+      }
       this.emitHudSync();
     } else {
       for (const t of this.tanks) t.stepGuestDeadReckoning(dt);
@@ -786,6 +962,26 @@ export class GameScene extends Phaser.Scene {
 
     for (const t of this.tanks) t.syncVisuals();
     this.powerUpSystem.syncVisuals(dt, this.tanks);
+    this.tntBarrelSystem.syncVisuals(dt);
+    this.nightVisionSystem.updateAndRender(
+      dt,
+      this.getNightVisionViewerTanks(),
+      this.projectileSystem.getKinematicsList(),
+      this.powerUpSystem.getCrateStates(),
+      this.tntBarrelSystem.getBarrelStates(),
+      this.tanks,
+    );
+  }
+
+  private getNightVisionViewerTanks(): Tank[] {
+    if (this.networkRole === 'host') {
+      return this.tanks.filter((t) => t.index === 0);
+    }
+    if (this.networkRole === 'guest') {
+      return this.tanks.filter((t) => t.index === 1);
+    }
+    const humanTanks = this.tanks.filter((t) => !this.aiSystem.isAIControlled(t.index));
+    return humanTanks.length > 0 ? humanTanks : this.tanks;
   }
 
   private handleGuestNetEvent(ev: NetGameEvent): boolean {
@@ -819,6 +1015,7 @@ export class GameScene extends Phaser.Scene {
       case 'wall_bounce':
         audioManager.playWallBounce(ev.bounces);
         this.effectsSystem.emitWallBounce(ev.x, ev.y);
+        this.nightVisionSystem.triggerFlareBounceFlash(ev.x, ev.y);
         return false;
 
       case 'wall_drilled': {
@@ -834,6 +1031,26 @@ export class GameScene extends Phaser.Scene {
       case 'laser_blast':
         audioManager.playLaserBlast();
         this.effectsSystem.emitLaserBeamBlast(ev.points, ev.victims);
+        this.nightVisionSystem.triggerLaserFlashCorridor(ev.points);
+        return false;
+
+      case 'armor_hit': {
+        const victim = this.tanks.find((t) => t.index === ev.victimIndex);
+        audioManager.playWallBounce(2);
+        this.effectsSystem.emitArmorHitImpact(
+          ev.x,
+          ev.y,
+          victim ? victim.palette.primary : 0xffca28,
+          ev.hpRatio,
+        );
+        this.nightVisionSystem.triggerMuzzleFlashLight(ev.x, ev.y, false);
+        return false;
+      }
+
+      case 'barrel_blast':
+        audioManager.playTankExplosion();
+        this.effectsSystem.emitTntBarrelExplosion(ev.x, ev.y, ev.blastRadius);
+        this.nightVisionSystem.triggerExplosionFlash(ev.x, ev.y, ev.blastRadius * 2.2);
         return false;
 
       case 'shield_fx':
@@ -980,6 +1197,14 @@ export class GameScene extends Phaser.Scene {
       this.roster = PlayerManager.buildRoster(s);
       this.activePlayers = this.roster.filter((p) => p.active);
       this.aiSystem.updateSlotConfigs(this.activePlayers, this.currentRoundSeed);
+      const updatedRules = resolveEffectiveBattleModeRules(
+        s.battleMode,
+        s.maxArmorHp,
+        s.tntBarrelsOption,
+      );
+      this.battleRules.mode = updatedRules.mode;
+      this.battleRules.isNightOps = updatedRules.isNightOps;
+      this.nightVisionSystem?.setEnabled(updatedRules.isNightOps);
     }
     this.emitHudSync();
   }
@@ -1024,6 +1249,9 @@ export class GameScene extends Phaser.Scene {
     return {
       roundNumber: this.scoreManager.getRoundNumber(),
       mapName: this.arena.grid.name,
+      battleMode: this.battleRules.mode,
+      hasArmorHp: this.battleRules.hasArmorHp,
+      isNightOps: this.battleRules.isNightOps,
       winningScore: this.scoreManager.getWinningScore(),
       ties: this.scoreManager.getTies(),
       crateIntervalSec: crateSec,
@@ -1035,6 +1263,8 @@ export class GameScene extends Phaser.Scene {
         aiDifficulty: s.playerAIDifficulty[t.index] ?? 'normal',
         score: this.scoreManager.getScore(t.index),
         ammo: this.projectileSystem ? this.projectileSystem.getRemainingAmmo(t.index) : 10,
+        hp: t.getHp(),
+        maxHp: t.getMaxHp(),
         alive: t.kinematics.alive,
         skill: t.getEquippedSkill(),
         visualSuit: t.getActiveVisualSuit(),
@@ -1160,6 +1390,18 @@ export class GameScene extends Phaser.Scene {
       get mapId() {
         return self.arena?.grid.id ?? '';
       },
+      get battleMode() {
+        return self.battleRules?.mode ?? 'classic';
+      },
+      get hasArmorHp() {
+        return Boolean(self.battleRules?.hasArmorHp);
+      },
+      get isNightOps() {
+        return Boolean(self.nightVisionSystem?.isEnabled());
+      },
+      get activeBarrels() {
+        return self.tntBarrelSystem?.getActiveCount() ?? 0;
+      },
       get wallCount() {
         return self.arena?.walls.length ?? 0;
       },
@@ -1204,6 +1446,8 @@ export class GameScene extends Phaser.Scene {
           y: Math.round(t.kinematics.y),
           angle: Number(t.kinematics.angle.toFixed(2)),
           alive: t.kinematics.alive,
+          hp: t.getHp(),
+          maxHp: t.getMaxHp(),
           score: self.scoreManager.getScore(t.index),
           ammo: self.projectileSystem.getRemainingAmmo(t.index),
           skill: t.getEquippedSkill(),
@@ -1219,6 +1463,8 @@ export class GameScene extends Phaser.Scene {
 
   private cleanupSceneResources(): void {
     this.inputSystem?.detach();
+    this.nightVisionSystem?.destroy();
+    this.tntBarrelSystem?.destroy();
     this.powerUpSystem?.destroy();
     this.projectileSystem?.destroy();
     this.effectsSystem?.destroy();

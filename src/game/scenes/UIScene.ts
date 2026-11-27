@@ -6,6 +6,7 @@ import {
   DESIGN_WIDTH,
   formatCrateSpawnIntervalLabel,
   getAIDifficultyDescriptor,
+  getBattleModeDescriptor,
   getPaletteById,
   getSkillDescriptor,
   MOBILE_ARENA_VIEWPORT,
@@ -37,6 +38,7 @@ interface PlayerPlaqueRefs {
   eliminatedCross: Phaser.GameObjects.Graphics;
   nameLbl: Phaser.GameObjects.Text;
   scoreText: Phaser.GameObjects.Text;
+  hpGraphics: Phaser.GameObjects.Graphics;
   ammoGraphics: Phaser.GameObjects.Graphics;
   skillBadgeBg: Phaser.GameObjects.Graphics;
   skillBadgeText: Phaser.GameObjects.Text;
@@ -244,9 +246,9 @@ export class UIScene extends Phaser.Scene {
 
     const isMobile = settingsManager.isTouchControlsActive();
     this.goalBadgeText = this.add
-      .text(DESIGN_WIDTH / 2 - (isMobile ? 105 : 58), y, 'ĐẠT TRƯỚC 5 ĐIỂM', {
+      .text(isMobile ? 454 : DESIGN_WIDTH / 2 - 58, y, 'ĐẠT TRƯỚC 5 ĐIỂM', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
-        fontSize: '13px',
+        fontSize: isMobile ? '12px' : '13px',
         fontStyle: '800',
         color: UI_COLORS.inkMutedHex,
       })
@@ -410,15 +412,16 @@ export class UIScene extends Phaser.Scene {
     const isOnline = peerMultiplayer.isOnlineSession();
     const compactMode = settingsManager.isTouchControlsActive();
 
+    const modeDesc = getBattleModeDescriptor(snap.battleMode ?? 'classic');
     this.roundTitleText.setText(`HIỆP ${snap.roundNumber} • ${snap.mapName.toUpperCase()}`);
     const goalBase =
       snap.winningScore <= 0 ? '∞ VÔ TẬN' : `THẮNG: ${snap.winningScore}Đ`;
     const crateLabel = formatCrateSpawnIntervalLabel(snap.crateIntervalSec, true);
     const goalCopy =
       snap.ties > 0
-        ? `${goalBase} • ${crateLabel} • HÒA: ${snap.ties}`
-        : `${goalBase} • ${crateLabel}`;
-    this.goalBadgeText.setText(isOnline ? '' : goalCopy);
+        ? `${modeDesc.shortBadge} • ${goalBase} • ${crateLabel} • HÒA: ${snap.ties}`
+        : `${modeDesc.shortBadge} • ${goalBase} • ${crateLabel}`;
+    this.goalBadgeText.setText(isOnline ? modeDesc.shortBadge : goalCopy);
 
     if (this.plaques.size !== snap.players.length || this.lastBuiltCompactMode !== compactMode) {
       this.rebuildScoreboardPlaques(snap);
@@ -501,6 +504,22 @@ export class UIScene extends Phaser.Scene {
           });
         }
         ref.lastScore = p.score;
+      }
+
+      ref.hpGraphics.clear();
+      if (snap.hasArmorHp) {
+        const ratio = p.maxHp > 0 ? Math.max(0, Math.min(1, p.hp / p.maxHp)) : 0;
+        const barW = ref.compact ? 74 : 114;
+        const barH = ref.compact ? 4.5 : 6;
+        const fillCol = ratio > 0.6 ? 0x00c853 : ratio > 0.3 ? 0xffb300 : 0xff1744;
+        ref.hpGraphics.fillStyle(0xd8dde6, 1);
+        ref.hpGraphics.fillRoundedRect(0, -barH / 2, barW, barH, 2.5);
+        if (ratio > 0 && p.alive) {
+          ref.hpGraphics.fillStyle(fillCol, 1);
+          ref.hpGraphics.fillRoundedRect(0, -barH / 2, Math.max(3, barW * ratio), barH, 2.5);
+        }
+        ref.hpGraphics.lineStyle(1, UI_COLORS.inkDark, 0.55);
+        ref.hpGraphics.strokeRoundedRect(0, -barH / 2, barW, barH, 2.5);
       }
 
       ref.ammoGraphics.clear();
@@ -628,18 +647,19 @@ export class UIScene extends Phaser.Scene {
       eliminatedCross.lineBetween(iconX + 15, -15, iconX - 15, 15);
 
       const nameLbl = this.add
-        .text(-plaqueW / 2 + 82, -17, `XE ${p.index + 1}`, {
+        .text(-plaqueW / 2 + 82, -21, `XE ${p.index + 1}`, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '13.5px',
+          fontSize: '13px',
           fontStyle: '900',
           color: palette.primaryHex,
         })
         .setOrigin(0, 0.5);
 
-      const ammoGraphics = this.add.graphics().setPosition(-plaqueW / 2 + 108, 13);
-      const skillBadgeBg = this.add.graphics().setPosition(-plaqueW / 2 + 142, 13);
+      const hpGraphics = this.add.graphics().setPosition(-plaqueW / 2 + 82, -5);
+      const ammoGraphics = this.add.graphics().setPosition(-plaqueW / 2 + 108, 15);
+      const skillBadgeBg = this.add.graphics().setPosition(-plaqueW / 2 + 142, 15);
       const skillBadgeText = this.add
-        .text(-plaqueW / 2 + 142, 13, '', {
+        .text(-plaqueW / 2 + 142, 15, '', {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
           fontSize: '10.5px',
           fontStyle: '900',
@@ -662,6 +682,7 @@ export class UIScene extends Phaser.Scene {
         tankIcon,
         eliminatedCross,
         nameLbl,
+        hpGraphics,
         ammoGraphics,
         skillBadgeBg,
         skillBadgeText,
@@ -675,6 +696,7 @@ export class UIScene extends Phaser.Scene {
         eliminatedCross,
         nameLbl,
         scoreText,
+        hpGraphics,
         ammoGraphics,
         skillBadgeBg,
         skillBadgeText,
@@ -728,18 +750,19 @@ export class UIScene extends Phaser.Scene {
       eliminatedCross.lineBetween(iconX + 9, -9, iconX - 9, 9);
 
       const nameLbl = this.add
-        .text(-pillW / 2 + 42, -7, `XE ${p.index + 1}`, {
+        .text(-pillW / 2 + 42, -9, `XE ${p.index + 1}`, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '10.5px',
+          fontSize: '10px',
           fontStyle: '900',
           color: palette.primaryHex,
         })
         .setOrigin(0, 0.5);
 
-      const ammoGraphics = this.add.graphics().setPosition(-pillW / 2 + 78, 8);
-      const skillBadgeBg = this.add.graphics().setPosition(-pillW / 2 + 92, 7);
+      const hpGraphics = this.add.graphics().setPosition(-pillW / 2 + 42, 0);
+      const ammoGraphics = this.add.graphics().setPosition(-pillW / 2 + 78, 9);
+      const skillBadgeBg = this.add.graphics().setPosition(-pillW / 2 + 92, 8);
       const skillBadgeText = this.add
-        .text(-pillW / 2 + 92, 7, '', {
+        .text(-pillW / 2 + 92, 8, '', {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
           fontSize: '9px',
           fontStyle: '900',
@@ -762,6 +785,7 @@ export class UIScene extends Phaser.Scene {
         tankIcon,
         eliminatedCross,
         nameLbl,
+        hpGraphics,
         ammoGraphics,
         skillBadgeBg,
         skillBadgeText,
@@ -775,6 +799,7 @@ export class UIScene extends Phaser.Scene {
         eliminatedCross,
         nameLbl,
         scoreText,
+        hpGraphics,
         ammoGraphics,
         skillBadgeBg,
         skillBadgeText,

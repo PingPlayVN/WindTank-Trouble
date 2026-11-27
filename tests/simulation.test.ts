@@ -30,6 +30,16 @@ import {
   traceBallisticShot,
 } from '../src/game/systems/AISim';
 import {
+  applySafeTankKnockback,
+  castFlashlightPolygon,
+  computeBarrelExplosionImpact,
+  computeWeaponDamage,
+  findProjectileBarrelHits,
+  resolveEffectiveBattleModeRules,
+  resolveTankBarrelCollisions,
+  spawnTntBarrels,
+} from '../src/game/systems/BattleModeSim';
+import {
   computeSafeMuzzleSpawn,
   resolveAllTankCollisions,
   resolveTankWallCollisions,
@@ -1508,6 +1518,242 @@ test('Bug regression: Windows touchscreen laptop / 2-in-1 MUST stay in PC mode, 
     'MacBook must be detected as PC (false)',
   );
 });
+
+test('Battle Modes (Armor HP Durability, Explosive TNT Barrels, Night Ops Flashlight Raycasting & AI Tactics)', () => {
+  // 1. Battle Mode rule resolution & SettingsManager persistence
+  const sm = new SettingsManager();
+  sm.setBattleMode('night_armored');
+  sm.setMaxArmorHp(150);
+  sm.setTntBarrelsOption('auto');
+  sm.setAITactic('sniper');
+  assert.equal(sm.getSettings().battleMode, 'night_armored');
+  assert.equal(sm.getSettings().maxArmorHp, 150);
+  assert.equal(sm.getSettings().aiTactic, 'sniper');
+
+  const classicRules = resolveEffectiveBattleModeRules('classic', 150, 'auto');
+  assert.equal(classicRules.hasArmorHp, false);
+  assert.equal(classicRules.isNightOps, false);
+  assert.equal(classicRules.hasTntBarrels, false);
+
+  const nightArmoredRules = resolveEffectiveBattleModeRules('night_armored', 150, 'auto');
+  assert.equal(nightArmoredRules.hasArmorHp, true);
+  assert.equal(nightArmoredRules.maxHp, 150);
+  assert.equal(nightArmoredRules.isNightOps, true);
+  assert.equal(nightArmoredRules.hasTntBarrels, true);
+
+  // 2. Specialized Weapon Damage Table
+  assert.equal(computeWeaponDamage('standard'), 25);
+  assert.equal(computeWeaponDamage('gatling'), 9);
+  assert.equal(computeWeaponDamage('laser'), 80);
+  assert.equal(computeWeaponDamage('mine'), 75);
+  assert.equal(computeWeaponDamage('homing_missile'), 56);
+
+  // 3. Deterministic TNT Barrel spawning, collision separation, chain-reaction & wall-safe knockback
+  const grid = resolveMazeForRound('procedural_large', 1, 2, 2026);
+  const arena = buildArenaLayout(grid, 2, 2026, ARENA_VIEWPORT);
+  const tanks: TankKinematics[] = arena.spawns.slice(0, 2).map((sp, i) => ({
+    index: i as 0 | 1,
+    x: sp.x,
+    y: sp.y,
+    vx: 0,
+    vy: 0,
+    angle: sp.angle,
+    radius: 13 * arena.scaleRatio,
+    alive: true,
+  }));
+
+  const barrels = spawnTntBarrels(arena, tanks, 2026);
+  assert.ok(barrels.length >= 4, `Expected >= 4 TNT barrels, got ${barrels.length}`);
+  for (const b of barrels) {
+    for (const t of tanks) {
+      assert.ok(
+        Math.hypot(b.x - t.x, b.y - t.y) >= arena.cellSize * 1.7,
+        'TNT barrels must spawn safely away from tank spawn points',
+      );
+    }
+  }
+
+  // Tank overlapping a barrel is pushed out cleanly
+  const firstBarrel = barrels[0];
+  const testTank: TankKinematics = {
+    ...tanks[0],
+    x: firstBarrel.x + 3,
+    y: firstBarrel.y,
+  };
+  resolveTankBarrelCollisions([testTank], [firstBarrel], arena.walls);
+  assert.ok(
+    Math.hypot(testTank.x - firstBarrel.x, testTank.y - firstBarrel.y) >=
+      testTank.radius + firstBarrel.radius - 0.5,
+    'Tank must be separated outside solid TNT barrel radius',
+  );
+
+  // Projectile hitting barrel registers hit & explosion computes splash damage + chained barrels
+  const shot: ProjectileKinematics = {
+    id: 1,
+    ownerIndex: 0,
+    x: firstBarrel.x + 2,
+    y: firstBarrel.y,
+    prevX: firstBarrel.x - 10,
+    prevY: firstBarrel.y,
+    vx: 260,
+    vy: 0,
+    radius: 4,
+    age: 0.1,
+    maxLifetime: 5,
+    bounces: 0,
+    maxBounces: 10,
+    graceTimer: 0,
+    active: true,
+    variant: 'standard',
+  };
+  const barrelHits = findProjectileBarrelHits([shot], barrels);
+  assert.equal(barrelHits.length, 1);
+  assert.equal(barrelHits[0].barrelId, firstBarrel.id);
+
+  const neighborBarrel = {
+    ...firstBarrel,
+    id: 99,
+    x: firstBarrel.x + arena.cellSize * 0.9,
+    y: firstBarrel.y,
+  };
+  const nearbyVictim: TankKinematics = {
+    ...tanks[1],
+    x: firstBarrel.x + arena.cellSize * 0.6,
+    y: firstBarrel.y,
+  };
+  const blastImpact = computeBarrelExplosionImpact(
+    firstBarrel,
+    [firstBarrel, neighborBarrel],
+    [nearbyVictim],
+    arena,
+  );
+  assert.equal(blastImpact.victims.length, 1);
+  assert.ok(blastImpact.victims[0].damage >= 20 && blastImpact.victims[0].damage <= 48);
+  assert.deepEqual(blastImpact.chainedBarrelIds, [99]);
+  assert.equal(blastImpact.wallProbePoints.length, 4);
+
+  // Wall-safe knockback never pushes tank outside outer arena walls
+  const cornerTank: TankKinematics = {
+    ...tanks[0],
+    x: arena.originX + 18,
+    y: arena.originY + 18,
+  };
+  applySafeTankKnockback(cornerTank, -120, -120, arena.walls);
+  assert.ok(cornerTank.x > arena.originX + cornerTank.radius * 0.8);
+  assert.ok(cornerTank.y > arena.originY + cornerTank.radius * 0.8);
+
+  // 4. Night Ops 2D Headlight Visibility Cone Raycasting stops strictly at walls!
+  const blockerWall: WallRect = {
+    x: 200,
+    y: 180,
+    width: 10,
+    height: 120,
+    minX: 200,
+    minY: 180,
+    maxX: 210,
+    maxY: 300,
+  };
+  const conePoly = castFlashlightPolygon(120, 240, 0, Math.PI / 6, 300, [blockerWall], undefined, 20);
+  // Center ray (index 1 + 10 = 11, angle = 0) must terminate right at `minX = 200`!
+  const centerTip = conePoly[11];
+  assert.ok(
+    Math.abs(centerTip.x - 200) < 0.5,
+    `Flashlight ray should stop at wall x=200, got ${centerTip.x.toFixed(2)}`,
+  );
+});
+
+test('Night Ops Signal-Flare 360° Raycasting & Projectile Light Coalescing', async () => {
+  const { castOmnidirectionalLightPolygon, coalesceProjectileLightSources } = await import(
+    '../src/game/systems/BattleModeSim'
+  );
+
+  const wallRight: WallRect = {
+    x: 160,
+    y: 40,
+    width: 10,
+    height: 160,
+    minX: 160,
+    minY: 40,
+    maxX: 170,
+    maxY: 200,
+  };
+
+  // Flare shell at (100, 120) with 180px max radius:
+  // East ray (`i = 0`, `angle = 0`) MUST stop at `x = 160` (`hitWall = true`),
+  // while West ray (`i = 18`, `angle = pi`) reaches full `180px` (`x = -80`, `hitWall = false`)!
+  const flarePoly = castOmnidirectionalLightPolygon(100, 120, 180, [wallRight], undefined, 36);
+  assert.equal(flarePoly.length, 36);
+  assert.equal(flarePoly[0].hitWall, true);
+  assert.ok(Math.abs(flarePoly[0].x - 160) < 0.5);
+  assert.equal(flarePoly[18].hitWall, false);
+  assert.ok(Math.abs(flarePoly[18].x - -80) < 0.5);
+
+  // Coalescing merges dense overlapping Flame puffs while keeping distant standard shells separate
+  const merged = coalesceProjectileLightSources(
+    [
+      {
+        id: 0,
+        ownerIndex: 0,
+        x: 100,
+        y: 100,
+        prevX: 98,
+        prevY: 100,
+        vx: 200,
+        vy: 0,
+        radius: 6,
+        bounces: 0,
+        maxBounces: 0,
+        age: 0,
+        maxLifetime: 1,
+        graceTimer: 0,
+        active: true,
+        variant: 'flame',
+      },
+      {
+        id: 1,
+        ownerIndex: 0,
+        x: 112,
+        y: 104,
+        prevX: 110,
+        prevY: 104,
+        vx: 200,
+        vy: 0,
+        radius: 6,
+        bounces: 0,
+        maxBounces: 0,
+        age: 0,
+        maxLifetime: 1,
+        graceTimer: 0,
+        active: true,
+        variant: 'flame',
+      },
+      {
+        id: 2,
+        ownerIndex: 1,
+        x: 320,
+        y: 240,
+        prevX: 324,
+        prevY: 239,
+        vx: -220,
+        vy: 40,
+        radius: 4,
+        bounces: 1,
+        maxBounces: 5,
+        age: 0.4,
+        maxLifetime: 8,
+        graceTimer: 0,
+        active: true,
+        variant: 'standard',
+      },
+    ],
+    28,
+  );
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].variant, 'flame');
+  assert.equal(merged[0].weight, 2);
+  assert.equal(merged[1].variant, 'standard');
+});
+
 
 
 

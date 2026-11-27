@@ -266,15 +266,15 @@ export class SetupScene extends Phaser.Scene {
       width: 360,
       height: 56,
       lipHeight: 5,
-      label: 'BẮT ĐẦU TRẬN ĐẤU →',
-      fontSize: 21,
+      label: 'TIẾP TỤC: CHỌN CHẾ ĐỘ →',
+      fontSize: 19.5,
       fillColor: 0x43a047,
       hoverColor: 0x4caf50,
       textColor: '#FFFFFF',
       onClick: () => {
         if (this.activeModal || this.activeSkillModal || this.activeRulesModal) return;
         this.scoreStepper?.commitAndStopEditing();
-        this.scene.start('GameScene', { freshMatch: true });
+        this.scene.start('ModeSelectScene');
       },
     });
 
@@ -308,7 +308,7 @@ export class SetupScene extends Phaser.Scene {
         this.scene.start('MenuScene');
       } else if (e.code === 'Enter') {
         audioManager.playUiClick(false);
-        this.scene.start('GameScene', { freshMatch: true });
+        this.scene.start('ModeSelectScene');
       }
     };
     window.addEventListener('keydown', this.onKeyDownBound);

@@ -5,6 +5,8 @@ import {
   DESIGN_WIDTH,
   formatCrateSpawnIntervalLabel,
   getAIDifficultyDescriptor,
+  getAITacticDescriptor,
+  getBattleModeDescriptor,
   getPaletteById,
   normalizeCrateSpawnInterval,
   parseCustomIntervalInput,
@@ -44,6 +46,8 @@ export class MatchRulesModal {
   private scoreStepper: ScoreStepperHandle | null = null;
   private maxCratesBtn!: ArcadeButtonHandle;
   private mapBtn!: ArcadeButtonHandle;
+  private battleModeBtn!: ArcadeButtonHandle;
+  private aiTacticBtn!: ArcadeButtonHandle;
   private statusText!: Phaser.GameObjects.Text;
 
   private aiSlotButtons: Array<{
@@ -195,6 +199,9 @@ export class MatchRulesModal {
         settingsManager.setMaxCratesOnFloor(POWERUP_CONFIG.maxCratesOnFloor);
         settingsManager.setAllSkillsEnabled(true);
         settingsManager.setWinningScore(5);
+        settingsManager.setBattleMode('classic');
+        settingsManager.setTntBarrelsOption('auto');
+        settingsManager.setAITactic('balanced');
         this.scoreStepper?.setValue(5);
         this.refreshAllControls();
         this.onRulesChanged?.();
@@ -554,17 +561,12 @@ export class MatchRulesModal {
     rowBg.strokeRoundedRect(centerX - 480, y - 23, 960, 46, 10);
 
     const mapLbl = this.scene.add
-      .text(
-        centerX - 462,
-        y,
-        this.inMatch ? 'BẢN ĐỒ (HIỆP KẾ TIẾP):' : 'CHẾ ĐỘ BẢN ĐỒ MÊ CUNG:',
-        {
-          fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '13.5px',
-          fontStyle: '900',
-          color: UI_COLORS.inkDarkHex,
-        },
-      )
+      .text(centerX - 462, y, 'BẢN ĐỒ:', {
+        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontSize: '13px',
+        fontStyle: '900',
+        color: UI_COLORS.inkDarkHex,
+      })
       .setOrigin(0, 0.5);
 
     const cycleMap = (dir: 1 | -1) => {
@@ -581,42 +583,87 @@ export class MatchRulesModal {
     };
 
     const prevBtn = createArcadeButton(this.scene, {
-      x: centerX - 186,
+      x: centerX - 364,
       y,
-      width: 36,
+      width: 32,
       height: 34,
       lipHeight: 2.5,
       label: '◀',
-      fontSize: 13,
+      fontSize: 12.5,
       fillColor: UI_COLORS.cardAltBg,
       onClick: () => cycleMap(-1),
     });
 
     this.mapBtn = createArcadeButton(this.scene, {
-      x: centerX + 128,
+      x: centerX - 196,
       y,
-      width: 576,
+      width: 288,
       height: 34,
       lipHeight: 2.5,
       label: '',
-      fontSize: 13,
+      fontSize: 12,
       fillColor: UI_COLORS.cardBg,
       onClick: () => cycleMap(1),
     });
 
     const nextBtn = createArcadeButton(this.scene, {
-      x: centerX + 442,
+      x: centerX - 28,
       y,
-      width: 36,
+      width: 32,
       height: 34,
       lipHeight: 2.5,
       label: '▶',
-      fontSize: 13,
+      fontSize: 12.5,
       fillColor: UI_COLORS.cardAltBg,
       onClick: () => cycleMap(1),
     });
 
-    this.contentRoot.add([rowBg, mapLbl, prevBtn.container, this.mapBtn.container, nextBtn.container]);
+    this.battleModeBtn = createArcadeButton(this.scene, {
+      x: centerX + 132,
+      y,
+      width: 268,
+      height: 34,
+      lipHeight: 2.5,
+      label: '',
+      fontSize: 12,
+      fillColor: 0xfff8e1,
+      hoverColor: 0xffecb3,
+      onClick: () => {
+        this.commitAllEdits();
+        settingsManager.cycleBattleMode(1);
+        this.refreshAllControls();
+        this.onRulesChanged?.();
+      },
+    });
+
+    this.aiTacticBtn = createArcadeButton(this.scene, {
+      x: centerX + 374,
+      y,
+      width: 196,
+      height: 34,
+      lipHeight: 2.5,
+      label: '',
+      fontSize: 12,
+      fillColor: 0xe3f2fd,
+      hoverColor: 0xbbdefb,
+      textColor: '#0D47A1',
+      onClick: () => {
+        this.commitAllEdits();
+        settingsManager.cycleAITactic(1);
+        this.refreshAllControls();
+        this.onRulesChanged?.();
+      },
+    });
+
+    this.contentRoot.add([
+      rowBg,
+      mapLbl,
+      prevBtn.container,
+      this.mapBtn.container,
+      nextBtn.container,
+      this.battleModeBtn.container,
+      this.aiTacticBtn.container,
+    ]);
   }
 
   private buildSkillsToggleMatrix(centerX: number, topY: number): void {
@@ -810,7 +857,14 @@ export class MatchRulesModal {
 
     this.maxCratesBtn.setLabel(`TỐI ĐA: ${s.maxCratesOnFloor} THÙNG`);
     const mode = MAP_MODES.find((m) => m.id === s.mapMode) ?? MAP_MODES[0];
-    this.mapBtn.setLabel(`BẢN ĐỒ: ${mode.label.toUpperCase()}  •  ${mode.subtitle}`);
+    this.mapBtn.setLabel(`${mode.label.toUpperCase()}`);
+
+    const bMode = getBattleModeDescriptor(s.battleMode);
+    this.battleModeBtn.setLabel(`CHẾ ĐỘ: ${bMode.shortBadge}`);
+    this.battleModeBtn.setFill(bMode.bgTint, bMode.bgTint, bMode.accentHex);
+
+    const tactic = getAITacticDescriptor(s.aiTactic);
+    this.aiTacticBtn.setLabel(`AI: ${tactic.shortLabel}`);
 
     // Refresh Live Per-Tank Human / AI + 4-Tier Difficulty Controls
     for (let i = 0; i < 4; i++) {

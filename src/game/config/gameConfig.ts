@@ -3,6 +3,7 @@ import { DESIGN_HEIGHT, DESIGN_WIDTH, UI_COLORS } from './constants';
 import { BootScene } from '../scenes/BootScene';
 import { GameScene } from '../scenes/GameScene';
 import { MenuScene } from '../scenes/MenuScene';
+import { ModeSelectScene } from '../scenes/ModeSelectScene';
 import { OnlineLobbyScene } from '../scenes/OnlineLobbyScene';
 import { PreloadScene } from '../scenes/PreloadScene';
 import { ResultScene } from '../scenes/ResultScene';
@@ -37,6 +38,7 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
     MenuScene,
     OnlineLobbyScene,
     SetupScene,
+    ModeSelectScene,
     GameScene,
     UIScene,
     ResultScene,

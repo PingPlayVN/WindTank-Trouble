@@ -1,9 +1,11 @@
 import Phaser from 'phaser';
 import {
+  BATTLE_MODE_DESCRIPTORS,
   DESIGN_HEIGHT,
   DESIGN_WIDTH,
   formatCrateSpawnIntervalLabel,
   formatWinningScoreLabel,
+  getBattleModeDescriptor,
   getPaletteById,
   UI_COLORS,
 } from '../config/constants';
@@ -553,8 +555,8 @@ export class OnlineLobbyScene extends Phaser.Scene {
   }
 
   private buildVersusAndRulesCard(cx: number, cy: number, st: LobbySharedState): void {
-    const w = 520;
-    const h = 446;
+    const w = 532;
+    const h = 468;
     const card = this.add.graphics();
     card.fillStyle(0x1d1f22, 0.12);
     card.fillRoundedRect(cx - w / 2 + 4, cy - h / 2 + 6, w, h, 14);
@@ -565,55 +567,145 @@ export class OnlineLobbyScene extends Phaser.Scene {
     this.roomPanelContainer.add(card);
 
     // Host Slot (`XE 1`) vs Guest Slot (`XE 2`)
-    this.buildPlayerSlotBox(cx - 134, cy - 86, 'host', st);
-    this.buildPlayerSlotBox(cx + 134, cy - 86, 'guest', st);
+    this.buildPlayerSlotBox(cx - 136, cy - 122, 'host', st);
+    this.buildPlayerSlotBox(cx + 136, cy - 122, 'guest', st);
 
     const vsTxt = this.add
-      .text(cx, cy - 92, 'VS', {
+      .text(cx, cy - 124, 'VS', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
-        fontSize: '26px',
+        fontSize: '25px',
         fontStyle: '900',
         color: UI_COLORS.dangerRedHex,
       })
       .setOrigin(0.5, 0.5);
     this.roomPanelContainer.add(vsTxt);
 
-    // Match Rules Summary Banner
     const mapDesc = MAP_MODES.find((m) => m.id === st.mapMode) ?? MAP_MODES[0];
-    const rulesSummaryBox = this.add.graphics();
-    rulesSummaryBox.fillStyle(0xf4f6f8, 1);
-    rulesSummaryBox.fillRoundedRect(cx - 232, cy + 44, 464, 68, 10);
-    rulesSummaryBox.lineStyle(1.8, 0xd0d4dc, 1);
-    rulesSummaryBox.strokeRoundedRect(cx - 232, cy + 44, 464, 68, 10);
-
-    const rulesSummaryTxt = this.add
-      .text(
-        cx,
-        cy + 78,
-        `BẢN ĐỒ: ${mapDesc.label.toUpperCase()}\n` +
-          `${formatWinningScoreLabel(st.winningScore, true)}  •  ${formatCrateSpawnIntervalLabel(
-            st.powerUpSpawnIntervalSec,
-            true,
-          )}  •  KỸ NĂNG: ${st.enabledSkills.length}/10`,
-        {
-          fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '13px',
-          fontStyle: '800',
-          color: UI_COLORS.inkDarkHex,
-          align: 'center',
-          lineSpacing: 5,
-        },
-      )
-      .setOrigin(0.5, 0.5);
-
-    this.roomPanelContainer.add([rulesSummaryBox, rulesSummaryTxt]);
+    const activeBattleMode = st.battleMode ?? 'classic';
+    const bModeDesc = getBattleModeDescriptor(activeBattleMode);
+    const tntOpt = st.tntBarrelsOption ?? 'auto';
+    const maxHp = st.maxArmorHp ?? 100;
+    const tntActive = tntOpt === 'on' || (tntOpt === 'auto' && bModeDesc.defaultTntBarrels);
 
     if (this.modeTab === 'host') {
+      const modeTitle = this.add
+        .text(cx, cy - 8, 'CHỌN CHẾ ĐỘ ĐẤU ONLINE (CHỦ PHÒNG):', {
+          fontFamily: "'Segoe UI', 'Inter', sans-serif",
+          fontSize: '12px',
+          fontStyle: '900',
+          color: UI_COLORS.inkMutedHex,
+        })
+        .setOrigin(0.5, 0.5);
+      this.roomPanelContainer.add(modeTitle);
+
+      // 4 Direct Clickable Battle Mode Pills for Host (`☀️ Cổ Điển`, `🛡️ Giáp+TNT`, `🔦 Bóng Tối`, `⚡ Tử Chiến`)
+      const pillLabels: Record<string, string> = {
+        classic: '☀️ CỔ ĐIỂN',
+        armored_tnt: '🛡️ GIÁP+TNT',
+        night_ops: '🔦 BÓNG TỐI',
+        night_armored: '⚡ TỬ CHIẾN',
+      };
+      const pillW = 116;
+      const pillGap = 7;
+      const startX =
+        cx -
+        ((BATTLE_MODE_DESCRIPTORS.length * pillW +
+          (BATTLE_MODE_DESCRIPTORS.length - 1) * pillGap) /
+          2) +
+        pillW / 2;
+
+      BATTLE_MODE_DESCRIPTORS.forEach((desc, idx) => {
+        const selected = desc.id === activeBattleMode;
+        const btn = createArcadeButton(this, {
+          x: startX + idx * (pillW + pillGap),
+          y: cy + 24,
+          width: pillW,
+          height: 36,
+          lipHeight: 2.5,
+          label: pillLabels[desc.id] ?? desc.shortBadge,
+          fontSize: 11.5,
+          fillColor: selected ? desc.accentColor : UI_COLORS.cardAltBg,
+          hoverColor: selected ? desc.accentColor : 0xdce2ea,
+          textColor: selected ? '#FFFFFF' : UI_COLORS.inkDarkHex,
+          onClick: () => {
+            settingsManager.setBattleMode(desc.id);
+            peerMultiplayer.syncHostSettingsFromManager();
+          },
+        });
+        this.roomPanelContainer.add(btn.container);
+      });
+
+      // Quick TNT & Armor HP Sub-Modifier Row (`y = cy + 68`)
+      const tntLabel =
+        tntOpt === 'auto'
+          ? `🧨 TNT: TỰ ĐỘNG (${tntActive ? 'CÓ' : 'TẮT'})`
+          : tntOpt === 'on'
+            ? '🧨 TNT: LUÔN BẬT'
+            : '🧨 TNT: TẮT';
+      const tntBtn = createArcadeButton(this, {
+        x: cx - 123,
+        y: cy + 68,
+        width: 238,
+        height: 34,
+        lipHeight: 2.5,
+        label: tntLabel,
+        fontSize: 11.5,
+        fillColor: tntActive ? 0xfff3e0 : UI_COLORS.cardAltBg,
+        hoverColor: tntActive ? 0xffe0b2 : 0xdce2ea,
+        textColor: tntActive ? '#BF360C' : UI_COLORS.inkMutedHex,
+        onClick: () => {
+          settingsManager.cycleTntBarrelsOption();
+          peerMultiplayer.syncHostSettingsFromManager();
+        },
+      });
+
+      const hpBtn = createArcadeButton(this, {
+        x: cx + 123,
+        y: cy + 68,
+        width: 238,
+        height: 34,
+        lipHeight: 2.5,
+        label: bModeDesc.hasArmorHp ? `❤️ GIÁP XE: ${maxHp} HP (ĐỔI)` : '⚡ SÁT THƯƠNG: 1 VIÊN HẠ',
+        fontSize: 11.5,
+        fillColor: bModeDesc.hasArmorHp ? 0xe8f5e9 : UI_COLORS.cardAltBg,
+        hoverColor: bModeDesc.hasArmorHp ? 0xc8e6c9 : 0xdce2ea,
+        textColor: bModeDesc.hasArmorHp ? '#1B5E20' : UI_COLORS.inkDarkHex,
+        onClick: () => {
+          if (bModeDesc.hasArmorHp) {
+            settingsManager.cycleMaxArmorHp();
+          } else {
+            settingsManager.setBattleMode(
+              activeBattleMode === 'night_ops' ? 'night_armored' : 'armored_tnt',
+            );
+          }
+          peerMultiplayer.syncHostSettingsFromManager();
+        },
+      });
+
+      const rulesSummaryTxt = this.add
+        .text(
+          cx,
+          cy + 108,
+          `MAP: ${mapDesc.label.toUpperCase()}  •  ${formatWinningScoreLabel(
+            st.winningScore,
+            true,
+          )}  •  ${formatCrateSpawnIntervalLabel(st.powerUpSpawnIntervalSec, true)}  •  KỸ NĂNG: ${
+            st.enabledSkills.length
+          }/10`,
+          {
+            fontFamily: "'Segoe UI', 'Inter', sans-serif",
+            fontSize: '11.5px',
+            fontStyle: '800',
+            color: UI_COLORS.inkMutedHex,
+          },
+        )
+        .setOrigin(0.5, 0.5);
+
       const editRulesBtn = createArcadeButton(this, {
-        x: cx - 128,
+        x: cx - 130,
         y: cy + 162,
-        width: 196,
-        height: 52,
+        width: 204,
+        height: 50,
         label: '⚙ CHỈNH LUẬT & MAP',
         fontSize: 14,
         fillColor: 0xe3f2fd,
@@ -634,10 +726,10 @@ export class OnlineLobbyScene extends Phaser.Scene {
 
       const canStart = st.connected && st.guestReady;
       const startMatchBtn = createArcadeButton(this, {
-        x: cx + 108,
+        x: cx + 110,
         y: cy + 162,
-        width: 248,
-        height: 52,
+        width: 252,
+        height: 50,
         lipHeight: 4.5,
         label: canStart ? 'BẮT ĐẦU ĐẤU 1VS1 →' : st.connected ? 'CHỜ KHÁCH SẴN SÀNG…' : 'ĐANG CHỜ ĐỐI THỦ…',
         fontSize: 15.5,
@@ -657,13 +749,59 @@ export class OnlineLobbyScene extends Phaser.Scene {
         },
       });
 
-      this.roomPanelContainer.add([editRulesBtn.container, startMatchBtn.container]);
+      this.roomPanelContainer.add([
+        tntBtn.container,
+        hpBtn.container,
+        rulesSummaryTxt,
+        editRulesBtn.container,
+        startMatchBtn.container,
+      ]);
     } else {
+      // Guest view: clear live-synced Battle Mode + Rules Banner chosen by Host
+      const rulesSummaryBox = this.add.graphics();
+      rulesSummaryBox.fillStyle(bModeDesc.bgTint, 1);
+      rulesSummaryBox.fillRoundedRect(cx - 238, cy + 4, 476, 108, 10);
+      rulesSummaryBox.lineStyle(2.2, bModeDesc.accentColor, 0.9);
+      rulesSummaryBox.strokeRoundedRect(cx - 238, cy + 4, 476, 108, 10);
+
+      const guestModeTitle = this.add
+        .text(
+          cx,
+          cy + 28,
+          `CHẾ ĐỘ CHỦ PHÒNG CHỌN: ${bModeDesc.shortBadge}`,
+          {
+            fontFamily: "'Segoe UI', 'Inter', sans-serif",
+            fontSize: '14.5px',
+            fontStyle: '900',
+            color: bModeDesc.accentHex,
+          },
+        )
+        .setOrigin(0.5, 0.5);
+
+      const guestSubCopy =
+        `${bModeDesc.hasArmorHp ? `Giáp ${maxHp} HP` : '1 Viên Hạ Ngay'}  •  ` +
+        `${tntActive ? 'Có Thùng Nổ TNT' : 'Không TNT'}  •  MAP: ${mapDesc.label.toUpperCase()}\n` +
+        `${formatWinningScoreLabel(st.winningScore, true)}  •  ${formatCrateSpawnIntervalLabel(
+          st.powerUpSpawnIntervalSec,
+          true,
+        )}  •  KỸ NĂNG: ${st.enabledSkills.length}/10`;
+
+      const rulesSummaryTxt = this.add
+        .text(cx, cy + 72, guestSubCopy, {
+          fontFamily: "'Segoe UI', 'Inter', sans-serif",
+          fontSize: '12.5px',
+          fontStyle: '800',
+          color: UI_COLORS.inkDarkHex,
+          align: 'center',
+          lineSpacing: 5,
+        })
+        .setOrigin(0.5, 0.5);
+
       const readyBtn = createArcadeButton(this, {
         x: cx,
         y: cy + 162,
-        width: 360,
-        height: 54,
+        width: 368,
+        height: 52,
         lipHeight: 4.5,
         label: !st.connected
           ? 'KẾT NỐI PHÒNG ĐỂ SẴN SÀNG'
@@ -682,7 +820,12 @@ export class OnlineLobbyScene extends Phaser.Scene {
           peerMultiplayer.toggleGuestReady();
         },
       });
-      this.roomPanelContainer.add(readyBtn.container);
+      this.roomPanelContainer.add([
+        rulesSummaryBox,
+        guestModeTitle,
+        rulesSummaryTxt,
+        readyBtn.container,
+      ]);
     }
   }
 
@@ -693,7 +836,7 @@ export class OnlineLobbyScene extends Phaser.Scene {
     st: LobbySharedState,
   ): void {
     const bw = 204;
-    const bh = 228;
+    const bh = 194;
     const isHostSlot = slot === 'host';
     const joined = isHostSlot ? st.role === 'host' || st.connected : st.connected;
     const colorId = isHostSlot ? st.hostColorId : st.guestColorId;
@@ -703,14 +846,14 @@ export class OnlineLobbyScene extends Phaser.Scene {
     g.fillStyle(joined ? 0xffffff : 0xedeff2, 1);
     g.fillRoundedRect(sx - bw / 2, sy - bh / 2, bw, bh, 12);
     g.fillStyle(joined ? pal.primary : 0x90a4ae, 1);
-    g.fillRoundedRect(sx - bw / 2, sy - bh / 2, bw, 40, { tl: 12, tr: 12, bl: 0, br: 0 });
+    g.fillRoundedRect(sx - bw / 2, sy - bh / 2, bw, 36, { tl: 12, tr: 12, bl: 0, br: 0 });
     g.lineStyle(2.4, UI_COLORS.inkDark, 1);
     g.strokeRoundedRect(sx - bw / 2, sy - bh / 2, bw, bh, 12);
 
     const hdr = this.add
-      .text(sx, sy - bh / 2 + 20, isHostSlot ? 'XE 1 • CHỦ PHÒNG' : 'XE 2 • KHÁCH', {
+      .text(sx, sy - bh / 2 + 18, isHostSlot ? 'XE 1 • CHỦ PHÒNG' : 'XE 2 • KHÁCH', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
-        fontSize: '13.5px',
+        fontSize: '13px',
         fontStyle: '900',
         color: '#FFFFFF',
       })
@@ -720,11 +863,11 @@ export class OnlineLobbyScene extends Phaser.Scene {
 
     if (joined) {
       const ring = this.add
-        .circle(sx, sy - 16, 36, 0xf3f4f6, 1)
+        .circle(sx, sy - 16, 31, 0xf3f4f6, 1)
         .setStrokeStyle(2, pal.primary, 0.7);
       const sp = this.add
         .image(sx, sy - 16, `tank_${pal.id}_0`)
-        .setScale(1.08)
+        .setScale(0.98)
         .setRotation(isHostSlot ? -Math.PI / 4 : (Math.PI * 3) / 4);
       this.previewSprites.push(sp);
 
@@ -735,21 +878,21 @@ export class OnlineLobbyScene extends Phaser.Scene {
       if (canChangeMyColor) {
         const colBtn = createArcadeButton(this, {
           x: sx,
-          y: sy + 46,
+          y: sy + 38,
           width: 172,
-          height: 32,
+          height: 30,
           lipHeight: 2.5,
           label: `◀ ${pal.name.toUpperCase()} ▶`,
-          fontSize: 12,
+          fontSize: 11.5,
           fillColor: UI_COLORS.cardAltBg,
           onClick: () => peerMultiplayer.cycleLobbyTankColor(slot),
         });
         this.roomPanelContainer.add(colBtn.container);
       } else {
         const colLbl = this.add
-          .text(sx, sy + 46, `MÀU: ${pal.name.toUpperCase()}`, {
+          .text(sx, sy + 38, `MÀU: ${pal.name.toUpperCase()}`, {
             fontFamily: "'Segoe UI', 'Inter', sans-serif",
-            fontSize: '12.5px',
+            fontSize: '12px',
             fontStyle: '800',
             color: pal.primaryHex,
           })
@@ -764,9 +907,9 @@ export class OnlineLobbyScene extends Phaser.Scene {
           : '⏳ ĐANG CHUẨN BỊ';
       const badgeColor = isHostSlot ? '#0D47A1' : st.guestReady ? '#1B5E20' : '#E65100';
       const badge = this.add
-        .text(sx, sy + 86, badgeCopy, {
+        .text(sx, sy + 74, badgeCopy, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '12.5px',
+          fontSize: '12px',
           fontStyle: '900',
           color: badgeColor,
         })

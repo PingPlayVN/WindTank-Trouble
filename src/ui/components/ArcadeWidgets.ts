@@ -61,6 +61,9 @@ export function createArcadeButton(
   let pressed = false;
 
   const container = scene.add.container(x, y);
+  // Separate inner visual container for hover/press scale tweens so `killTweensOf(visual)`
+  // NEVER cancels scene entrance (`alpha` / `y`) tweens on `container` and `hitZone` never jitters!
+  const visual = scene.add.container(0, 0);
   const lip = scene.add.graphics();
   const face = scene.add.graphics();
 
@@ -95,7 +98,8 @@ export function createArcadeButton(
   };
 
   redraw();
-  container.add([lip, face, labelText]);
+  visual.add([lip, face, labelText]);
+  container.add(visual);
 
   const hitZone = scene.add
     .zone(0, 0, width, height + lipHeight)
@@ -106,9 +110,9 @@ export function createArcadeButton(
     if (!enabled) return;
     hovered = true;
     redraw();
-    scene.tweens.killTweensOf(container);
+    scene.tweens.killTweensOf(visual);
     scene.tweens.add({
-      targets: container,
+      targets: visual,
       scaleX: 1.035,
       scaleY: 1.035,
       duration: 110,
@@ -120,9 +124,9 @@ export function createArcadeButton(
     hovered = false;
     pressed = false;
     redraw();
-    scene.tweens.killTweensOf(container);
+    scene.tweens.killTweensOf(visual);
     scene.tweens.add({
-      targets: container,
+      targets: visual,
       scaleX: 1,
       scaleY: 1,
       duration: 120,
@@ -135,9 +139,9 @@ export function createArcadeButton(
     pressed = true;
     audioManager.unlock();
     redraw();
-    scene.tweens.killTweensOf(container);
+    scene.tweens.killTweensOf(visual);
     scene.tweens.add({
-      targets: container,
+      targets: visual,
       scaleX: 0.965,
       scaleY: 0.965,
       duration: 60,
@@ -150,9 +154,9 @@ export function createArcadeButton(
     const wasPressed = pressed;
     pressed = false;
     redraw();
-    scene.tweens.killTweensOf(container);
+    scene.tweens.killTweensOf(visual);
     scene.tweens.add({
-      targets: container,
+      targets: visual,
       scaleX: hovered ? 1.035 : 1,
       scaleY: hovered ? 1.035 : 1,
       duration: 95,
@@ -183,6 +187,12 @@ export function createArcadeButton(
     },
     setEnabled(val: boolean) {
       enabled = val;
+      if (!val) {
+        hovered = false;
+        pressed = false;
+        scene.tweens.killTweensOf(visual);
+        visual.setScale(1);
+      }
       if (hitZone.input) {
         hitZone.input.cursor = val ? 'pointer' : 'default';
       }
@@ -648,7 +658,9 @@ export function animateModalOpen(
 }
 
 /**
- * Staggered entrance slide + fade animation for scene UI elements, ending cleanly at their resting `(x, y)`.
+ * Staggered entrance slide + fade animation for scene UI elements, ending cleanly at their resting `(x, y, alpha: 1)`.
+ * Uses `addCounter` rather than `targets: item` so any `killTweensOf(item)` triggered by pointer hover/press
+ * during scene opening can NEVER leave a button half-faded or shifted downward!
  */
 export function animateStaggeredEntrance(
   scene: Phaser.Scene,
@@ -660,13 +672,23 @@ export function animateStaggeredEntrance(
     const restY = item.y;
     item.setY(restY + offsetY);
     item.setAlpha(0);
-    scene.tweens.add({
-      targets: item,
-      y: restY,
-      alpha: 1,
+    scene.tweens.addCounter({
+      from: 0,
+      to: 1,
       delay: idx * stepDelayMs,
       duration: 230,
       ease: 'Cubic.easeOut',
+      onUpdate: (tw) => {
+        if (!item.scene) return;
+        const v = tw.getValue() ?? 1;
+        item.setY(restY + offsetY * (1 - v));
+        item.setAlpha(Math.min(1, Math.max(0, v)));
+      },
+      onComplete: () => {
+        if (!item.scene) return;
+        item.setY(restY);
+        item.setAlpha(1);
+      },
     });
   });
 }

@@ -4,6 +4,12 @@ export type ControlAction = 'forward' | 'backward' | 'left' | 'right' | 'fire';
 
 export type AIDifficulty = 'easy' | 'normal' | 'hard' | 'super_hard';
 
+export type BattleModeId = 'classic' | 'armored_tnt' | 'night_ops' | 'night_armored';
+
+export type AITacticId = 'balanced' | 'rusher' | 'sniper' | 'camper';
+
+export type TntBarrelsOption = 'auto' | 'on' | 'off';
+
 export type TouchScheme = 'vector_stick' | 'dual_pad';
 
 export type NetworkRole = 'offline' | 'host' | 'guest';
@@ -144,6 +150,10 @@ export interface GameSettings {
   playerCount: 2 | 3 | 4;
   winningScore: number;
   mapMode: MapModeId;
+  battleMode: BattleModeId;
+  maxArmorHp: number; // 100 | 150 | 200
+  tntBarrelsOption: TntBarrelsOption;
+  aiTactic: AITacticId;
   powerUpSpawnIntervalSec: number; // 0 = OFF, 1..300 seconds
   maxCratesOnFloor: number; // 1..12
   enabledSkills: SkillId[];

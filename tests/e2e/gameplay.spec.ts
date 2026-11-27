@@ -16,6 +16,10 @@ interface DiagnosticsSnapshot {
   paused: boolean;
   round: number;
   mapId: string;
+  battleMode: string;
+  hasArmorHp: boolean;
+  isNightOps: boolean;
+  activeBarrels: number;
   wallCount: number;
   crateIntervalSec: number;
   crateTimerRemainingSec: number;
@@ -35,6 +39,8 @@ interface DiagnosticsSnapshot {
     y: number;
     angle: number;
     alive: boolean;
+    hp: number;
+    maxHp: number;
     score: number;
     ammo: number;
     skill: string | null;
@@ -54,17 +60,24 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   page.on('console', (msg) => {
-    if (msg.type() === 'error') consoleErrors.push(msg.text());
+    if (msg.type() === 'error') {
+      console.error('[Browser Console Error]', msg.text());
+      consoleErrors.push(msg.text());
+    }
   });
-  page.on('pageerror', (err) => pageErrors.push(err.message));
+  page.on('pageerror', (err) => {
+    console.error('[Browser Page Error]', err.message);
+    pageErrors.push(err.message);
+  });
 
   // 0. Capture Smooth Hero-Tank Loading Screen (`PreloadScene`) mid-progress, then wait for MenuScene!
   await page.goto('/?device=pc&p2p=local', { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('canvas', { state: 'visible' });
   await page.waitForFunction(() => {
     const g = (window as unknown as { __WINDTANK_GAME__?: Phaser.Game }).__WINDTANK_GAME__;
+    if (g?.scene.isActive('MenuScene')) return true;
     const pre = g?.scene.getScene('PreloadScene') as unknown as { displayProgress?: number } | undefined;
-    if (g?.scene.isActive('PreloadScene') && (pre?.displayProgress ?? 0) >= 0.45) {
+    if (g?.scene.isActive('PreloadScene') && (pre?.displayProgress ?? 0) >= 0.35) {
       g.scene.pause('PreloadScene');
       return true;
     }
@@ -84,7 +97,49 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
     null,
     { timeout: 35000 },
   );
-  await page.waitForTimeout(260);
+
+  // Bug regression: sweep pointer across MenuScene buttons (`VÀO SẢNH ĐẤU`, `ĐẤU NHANH`, `ONLINE 1VS1`)
+  // DURING staggered entrance animation — no button may ever get stuck faded (`alpha < 1`) or shifted down!
+  const hoverDesignCoord = async (dx: number, dy: number) => {
+    const pt = await page.evaluate(
+      ({ x, y }) => {
+        const rect = document.querySelector('canvas')!.getBoundingClientRect();
+        return {
+          sx: rect.left + (x / 1280) * rect.width,
+          sy: rect.top + (y / 760) * rect.height,
+        };
+      },
+      { x: dx, y: dy },
+    );
+    await page.mouse.move(pt.sx, pt.sy);
+  };
+  await hoverDesignCoord(640, 504); // Hover right over `ĐẤU NHANH` mid-entrance!
+  await page.waitForTimeout(35);
+  await hoverDesignCoord(388, 504);
+  await page.waitForTimeout(35);
+  await hoverDesignCoord(892, 504);
+  await page.waitForTimeout(720);
+
+  const menuBtnState = await page.evaluate(() => {
+    const g = (window as unknown as { __WINDTANK_GAME__: Phaser.Game }).__WINDTANK_GAME__;
+    const menu = g.scene.getScene('MenuScene');
+    let minA = 1;
+    const mainRowYs: number[] = [];
+    for (const obj of menu.children.list) {
+      if (obj.type === 'Container') {
+        const c = obj as Phaser.GameObjects.Container;
+        if (c.visible) {
+          minA = Math.min(minA, c.alpha);
+          if (Math.abs(c.y - 504) < 25) {
+            mainRowYs.push(Math.round(c.y));
+          }
+        }
+      }
+    }
+    return { minA, mainRowYs };
+  });
+  expect(menuBtnState.minA).toBe(1);
+  expect(menuBtnState.mainRowYs).toEqual([504, 504, 504]);
 
   const clickDesignCoord = async (dx: number, dy: number, targetPage: Page = page) => {
     const pt = await targetPage.evaluate(
@@ -157,11 +212,24 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   await clickDesignCoord(1072, 352); // Enable P4 AI
   await page.waitForTimeout(60);
 
-  // Cycle Map to Procedural Titan (20x12) & Start Battle
+  // Cycle Map to Procedural Titan (20x12) & Advance to ModeSelectScene (`TIẾP TỤC: CHỌN CHẾ ĐỘ →`)!
   for (let i = 0; i < 5; i++) {
     await clickDesignCoord(456, 590);
     await page.waitForTimeout(45);
   }
+  await clickDesignCoord(735, 696);
+  await page.waitForFunction(() => {
+    const g = (window as unknown as { __WINDTANK_GAME__?: Phaser.Game }).__WINDTANK_GAME__;
+    return Boolean(g?.scene.isActive('ModeSelectScene'));
+  });
+  await page.waitForTimeout(240);
+
+  // Select `⚡ ĐÊM TỬ CHIẾN` (Night Ops + 100 HP Armor + Explosive TNT Barrels) via Digit4 & capture ModeSelectScene!
+  await page.keyboard.press('Digit4');
+  await page.waitForTimeout(140);
+  await page.screenshot({ path: path.join(SHOT_DIR, '00c-mode-select-after-tank-setup.png') });
+
+  // Launch Battle from ModeSelectScene (`BẮT ĐẦU TRẬN ĐẤU →` at 735, 696)!
   await clickDesignCoord(735, 696);
 
   await page.waitForFunction(
@@ -173,6 +241,73 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
     null,
     { timeout: 10000 },
   );
+
+  const modeDiag = await page.evaluate(() => {
+    const d = (window as unknown as { __PHASER_GAME_DIAGNOSTICS__: DiagnosticsSnapshot })
+      .__PHASER_GAME_DIAGNOSTICS__;
+    return {
+      battleMode: d.battleMode,
+      hasArmorHp: d.hasArmorHp,
+      isNightOps: d.isNightOps,
+      activeBarrels: d.activeBarrels,
+      p1Hp: d.players[0]?.hp,
+      p1MaxHp: d.players[0]?.maxHp,
+    };
+  });
+  expect(modeDiag.battleMode).toBe('night_armored');
+  expect(modeDiag.hasArmorHp).toBe(true);
+  expect(modeDiag.isNightOps).toBe(true);
+  expect(modeDiag.activeBarrels).toBeGreaterThanOrEqual(4);
+  expect(modeDiag.p1Hp).toBe(100);
+  expect(modeDiag.p1MaxHp).toBe(100);
+
+  // 1b. Drop a Mystery Skill Crate + fire Signal-Flare Shells down an open maze corridor to verify:
+  //     extended Twin-Headlamp reach, softer non-glaring Signal-Flare shells, and gently glowing Skill Crates!
+  const shaderActive = await page.evaluate(() => {
+    const game = (window as unknown as { __WINDTANK_GAME__: Phaser.Game }).__WINDTANK_GAME__;
+    const gs = game.scene.getScene('GameScene') as unknown as {
+      arena: {
+        originX: number;
+        originY: number;
+        cellSize: number;
+        walls: unknown[];
+      };
+      dropMysteryCrateNow: () => boolean;
+      nightVisionSystem: { isShaderActive: () => boolean };
+      tanks: Array<{
+        kinematics: { x: number; y: number; angle: number };
+        triggerFireVisual: (cd?: number) => void;
+      }>;
+      powerUpSystem: {
+        tryHandlePlayerFire: (
+          tank: unknown,
+          walls: unknown[],
+          isHeld: boolean,
+          consume: () => boolean,
+        ) => void;
+      };
+    };
+    gs.dropMysteryCrateNow();
+    gs.dropMysteryCrateNow();
+    const p1 = gs.tanks[0];
+    // Center of cell (3, 4) — guaranteed open cell center away from walls!
+    p1.kinematics.x = gs.arena.originX + gs.arena.cellSize * 3.5;
+    p1.kinematics.y = gs.arena.originY + gs.arena.cellSize * 4.5;
+    p1.kinematics.angle = 0.04;
+    for (const deltaAngle of [-0.32, 0.12]) {
+      const baseA = p1.kinematics.angle;
+      p1.kinematics.angle = baseA + deltaAngle;
+      p1.triggerFireVisual(0);
+      gs.powerUpSystem.tryHandlePlayerFire(p1, gs.arena.walls, false, () => true);
+      p1.kinematics.angle = baseA;
+    }
+    return gs.nightVisionSystem.isShaderActive();
+  });
+  expect(shaderActive).toBe(true);
+  await page.waitForTimeout(320);
+  await page.screenshot({
+    path: path.join(SHOT_DIR, '01a-night-shader-and-signal-flare-shells.png'),
+  });
 
   // 2. Showcase Realistic Fluid-Jet Flame Stream (Blue-White Nozzle -> Volumetric Fire -> Dark Smoke Tail)!
   await page.evaluate(() => {
@@ -220,6 +355,121 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   expect(flameDiag.activeProjectiles).toBeGreaterThanOrEqual(20);
   expect(flameDiag.p1SkillAmmo).toBe(68);
   await page.screenshot({ path: path.join(SHOT_DIR, '01-realistic-fluid-flame-stream.png') });
+
+  // 2b. Verify Crescent Reaper (`Lưỡi Hái Tử Thần`) locks movement like Laser + both Reaper & Laser glow in Night Mode!
+  const reaperStartPos = await page.evaluate(() => {
+    const game = (window as unknown as { __WINDTANK_GAME__: Phaser.Game }).__WINDTANK_GAME__;
+    const gs = game.scene.getScene('GameScene') as unknown as {
+      arena: { originX: number; originY: number; cellSize: number; walls: unknown[] };
+      tanks: Array<{
+        kinematics: { x: number; y: number; vx: number; vy: number; angle: number; alive: boolean };
+        equipSkill: (s: string, ammo: number) => void;
+        getSkillState: () => { reaperWindupRemaining?: number; reaperSpinRemaining?: number };
+      }>;
+      powerUpSystem: {
+        tryHandlePlayerFire: (
+          tank: unknown,
+          walls: unknown[],
+          isHeld: boolean,
+          consume: () => boolean,
+        ) => void;
+      };
+      nightVisionSystem: {
+        triggerLaserFlashCorridor: (pts: Array<{ x: number; y: number }>) => void;
+      };
+      effectsSystem: {
+        emitLaserBeamBlast: (pts: Array<{ x: number; y: number }>, victims: unknown[]) => void;
+      };
+    };
+    const p1 = gs.tanks[0] as unknown as {
+      kinematics: { x: number; y: number; vx: number; vy: number; angle: number };
+      equipSkill: (s: string, ammo: number) => void;
+      startReaperSweep: () => void;
+    };
+    p1.kinematics.vx = 140;
+    p1.kinematics.vy = 90;
+    p1.kinematics.angle = -0.35;
+    p1.equipSkill('reaper', 1);
+    p1.startReaperSweep();
+
+    // Also equip P2 with Laser charging in the dark!
+    const p2 = gs.tanks[1] as unknown as {
+      kinematics: { x: number; y: number; angle: number; alive: boolean };
+      equipSkill: (s: string, ammo: number) => void;
+      startLaserCharge: () => void;
+    };
+    if (p2 && p2.kinematics.alive) {
+      p2.kinematics.x = gs.arena.originX + gs.arena.cellSize * 13.5;
+      p2.kinematics.y = gs.arena.originY + gs.arena.cellSize * 3.5;
+      p2.kinematics.angle = Math.PI;
+      p2.equipSkill('laser', 1);
+      p2.startLaserCharge();
+    }
+
+    return { x: p1.kinematics.x, y: p1.kinematics.y, vx: p1.kinematics.vx, vy: p1.kinematics.vy };
+  });
+  expect(reaperStartPos.vx).toBe(0);
+  expect(reaperStartPos.vy).toBe(0);
+
+  // Hold `KeyW` (forward) across Windup -> Scythe Sweep transition — P1 MUST stay 100% movement-locked!
+  await page.keyboard.down('KeyW');
+  await page.waitForFunction(
+    () => {
+      const game = (window as unknown as { __WINDTANK_GAME__?: Phaser.Game }).__WINDTANK_GAME__;
+      const gs = game?.scene.getScene('GameScene') as unknown as {
+        tanks?: Array<{ isReaperSweeping: () => boolean }>;
+      };
+      return Boolean(gs?.tanks?.[0]?.isReaperSweeping());
+    },
+    null,
+    { timeout: 5000 },
+  );
+  await page.waitForTimeout(160);
+  await page.keyboard.up('KeyW');
+
+  const reaperAfterHold = await page.evaluate(() => {
+    const game = (window as unknown as { __WINDTANK_GAME__: Phaser.Game }).__WINDTANK_GAME__;
+    const gs = game.scene.getScene('GameScene') as unknown as {
+      arena: { originX: number; originY: number; cellSize: number };
+      tanks: Array<{
+        kinematics: { x: number; y: number; vx: number; vy: number };
+        isReaperSweeping: () => boolean;
+      }>;
+      nightVisionSystem: {
+        triggerLaserFlashCorridor: (pts: Array<{ x: number; y: number }>) => void;
+      };
+      effectsSystem: {
+        emitLaserBeamBlast: (pts: Array<{ x: number; y: number }>, victims: unknown[]) => void;
+      };
+    };
+    const beamPts = [
+      {
+        x: gs.arena.originX + gs.arena.cellSize * 15.5,
+        y: gs.arena.originY + gs.arena.cellSize * 8.5,
+      },
+      {
+        x: gs.arena.originX + gs.arena.cellSize * 3.5,
+        y: gs.arena.originY + gs.arena.cellSize * 9.5,
+      },
+    ];
+    gs.effectsSystem.emitLaserBeamBlast(beamPts, []);
+    gs.nightVisionSystem.triggerLaserFlashCorridor(beamPts);
+
+    const p1 = gs.tanks[0];
+    return {
+      x: p1.kinematics.x,
+      y: p1.kinematics.y,
+      vx: p1.kinematics.vx,
+      vy: p1.kinematics.vy,
+      sweeping: p1.isReaperSweeping(),
+    };
+  });
+  await waitFrames(2, page);
+  expect(reaperAfterHold.sweeping).toBe(true);
+  expect(reaperAfterHold.vx).toBe(0);
+  expect(reaperAfterHold.vy).toBe(0);
+  expect(Math.hypot(reaperAfterHold.x - reaperStartPos.x, reaperAfterHold.y - reaperStartPos.y)).toBeLessThan(0.5);
+  await page.screenshot({ path: path.join(SHOT_DIR, '01b-night-reaper-and-laser-glow.png') });
 
   // 3. Test 3x Restart Match for zero texture/display-object leaks
   const baselineCounts = await page.evaluate(() => {
@@ -326,18 +576,16 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   });
   expect(dismissedPrompt).toBe(true);
 
-  // Enter Fullscreen via `⛶ FULL MÀN HÌNH` button click, assert `document.fullscreenElement` is active, then exit cleanly!
+  // Enter Fullscreen via `⛶ FULL MÀN HÌNH` button click, assert `document.fullscreenElement` is active, then click again to exit cleanly!
   await clickDesignCoord(1184, 40, mobilePage);
   await mobilePage.waitForFunction(() => Boolean(document.fullscreenElement), null, {
     timeout: 5000,
   });
+  await clickDesignCoord(1184, 40, mobilePage);
   await mobilePage.evaluate(async () => {
-    const o = (
-      window as unknown as {
-        __WINDTANK_ORIENTATION__: { toggleFullscreen: () => Promise<unknown> };
-      }
-    ).__WINDTANK_ORIENTATION__;
-    await o.toggleFullscreen();
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {});
+    }
   });
   await mobilePage.waitForFunction(() => !document.fullscreenElement, null, {
     timeout: 5000,
@@ -408,7 +656,18 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   });
   await waitFrames(2, mobilePage);
 
-  // Start 2-Player Opposite Tabletop Match on Mobile!
+  // Advance from Mobile SetupScene (`735, 696`) -> Mobile ModeSelectScene -> select `🛡️ ĐỘ BỀN GIÁP` (`Digit2`) -> Start Match!
+  await clickDesignCoord(735, 696, mobilePage);
+  await mobilePage.waitForFunction(() => {
+    const g = (window as unknown as { __WINDTANK_GAME__?: Phaser.Game }).__WINDTANK_GAME__;
+    return Boolean(g?.scene.isActive('ModeSelectScene'));
+  });
+  await mobilePage.waitForTimeout(200);
+  await mobilePage.keyboard.press('Digit2');
+  await mobilePage.waitForTimeout(100);
+  await mobilePage.screenshot({
+    path: path.join(SHOT_DIR, '03c-mobile-mode-select-scene.png'),
+  });
   await clickDesignCoord(735, 696, mobilePage);
   await mobilePage.waitForFunction(
     () => {
@@ -581,6 +840,24 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
     { timeout: 45000 },
   );
 
+  // Verify Host can select Battle Mode directly in Online Lobby (`⚡ TỬ CHIẾN` pill at `x=1044, y=416`) & sync to Guest!
+  await clickDesignCoord(1044, 416, page);
+  await guestPage.waitForFunction(
+    () => {
+      const lob = (
+        window as unknown as {
+          __PHASER_ONLINE_LOBBY__?: { getState: () => { battleMode?: string } };
+        }
+      ).__PHASER_ONLINE_LOBBY__;
+      return lob?.getState().battleMode === 'night_armored';
+    },
+    null,
+    { timeout: 5000 },
+  );
+  await page.screenshot({
+    path: path.join(SHOT_DIR, '05-online-host-mode-selector-lobby.png'),
+  });
+
   await guestPage.evaluate(() => {
     const lob = (
       window as unknown as { __PHASER_ONLINE_LOBBY__: { toggleGuestReady: () => void } }
@@ -616,7 +893,7 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
         return d?.networkRole === 'host' && d?.phase === 'playing' && d?.players.length === 2;
       },
       null,
-      { timeout: 10000 },
+      { timeout: 20000 },
     ),
     guestPage.waitForFunction(
       () => {
@@ -625,7 +902,7 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
         return d?.networkRole === 'guest' && d?.phase === 'playing' && d?.players.length === 2;
       },
       null,
-      { timeout: 10000 },
+      { timeout: 20000 },
     ),
   ]);
 

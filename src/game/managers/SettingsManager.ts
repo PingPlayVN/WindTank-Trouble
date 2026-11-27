@@ -1,6 +1,8 @@
 import {
   AI_DIFFICULTY_ORDER,
+  AI_TACTIC_ORDER,
   ALL_SKILL_IDS,
+  BATTLE_MODE_ORDER,
   DEFAULT_PLAYER_BINDINGS,
   DEFAULT_SETTINGS,
   isTouchDeviceDetected,
@@ -11,12 +13,15 @@ import {
 } from '../config/constants';
 import type {
   AIDifficulty,
+  AITacticId,
+  BattleModeId,
   ControlAction,
   GameSettings,
   MapModeId,
   PlayerIndex,
   PlayerKeyBindings,
   SkillId,
+  TntBarrelsOption,
   TouchScheme,
 } from '../types/gameTypes';
 
@@ -25,6 +30,8 @@ const STORAGE_KEY = 'windtank_settings_v1';
 const RESERVED_KEYS = new Set(['Escape', 'F5', 'F11', 'F12']);
 const VALID_AI_DIFFS = new Set<AIDifficulty>(AI_DIFFICULTY_ORDER);
 const VALID_SKILLS = new Set<SkillId>(ALL_SKILL_IDS);
+const VALID_BATTLE_MODES = new Set<BattleModeId>(BATTLE_MODE_ORDER);
+const VALID_AI_TACTICS = new Set<AITacticId>(AI_TACTIC_ORDER);
 
 export interface KeyConflictInfo {
   playerIndex: PlayerIndex;
@@ -57,6 +64,68 @@ export class SettingsManager {
   setMapMode(mode: MapModeId): void {
     this.settings.mapMode = mode;
     this.save();
+  }
+
+  setBattleMode(mode: BattleModeId): void {
+    if (!VALID_BATTLE_MODES.has(mode)) return;
+    this.settings.battleMode = mode;
+    this.save();
+  }
+
+  cycleBattleMode(direction: 1 | -1 = 1): BattleModeId {
+    const cur = this.settings.battleMode ?? 'classic';
+    const idx = Math.max(0, BATTLE_MODE_ORDER.indexOf(cur));
+    const next =
+      BATTLE_MODE_ORDER[(idx + direction + BATTLE_MODE_ORDER.length) % BATTLE_MODE_ORDER.length];
+    this.settings.battleMode = next;
+    this.save();
+    return next;
+  }
+
+  setMaxArmorHp(hp: number): void {
+    const allowed = [100, 150, 200];
+    const nearest = allowed.includes(hp) ? hp : 100;
+    this.settings.maxArmorHp = nearest;
+    this.save();
+  }
+
+  cycleMaxArmorHp(): number {
+    const steps = [100, 150, 200];
+    const idx = steps.indexOf(this.settings.maxArmorHp);
+    const next = steps[(idx + 1) % steps.length];
+    this.settings.maxArmorHp = next;
+    this.save();
+    return next;
+  }
+
+  setTntBarrelsOption(opt: TntBarrelsOption): void {
+    this.settings.tntBarrelsOption = opt;
+    this.save();
+  }
+
+  cycleTntBarrelsOption(): TntBarrelsOption {
+    const order: TntBarrelsOption[] = ['auto', 'on', 'off'];
+    const idx = order.indexOf(this.settings.tntBarrelsOption);
+    const next = order[(idx + 1) % order.length];
+    this.settings.tntBarrelsOption = next;
+    this.save();
+    return next;
+  }
+
+  setAITactic(tactic: AITacticId): void {
+    if (!VALID_AI_TACTICS.has(tactic)) return;
+    this.settings.aiTactic = tactic;
+    this.save();
+  }
+
+  cycleAITactic(direction: 1 | -1 = 1): AITacticId {
+    const cur = this.settings.aiTactic ?? 'balanced';
+    const idx = Math.max(0, AI_TACTIC_ORDER.indexOf(cur));
+    const next =
+      AI_TACTIC_ORDER[(idx + direction + AI_TACTIC_ORDER.length) % AI_TACTIC_ORDER.length];
+    this.settings.aiTactic = next;
+    this.save();
+    return next;
   }
 
   setPowerUpSpawnIntervalSec(sec: number): void {
@@ -340,6 +409,22 @@ export class SettingsManager {
       }
       if (typeof parsed.mapMode === 'string') {
         merged.mapMode = parsed.mapMode as MapModeId;
+      }
+      if (typeof parsed.battleMode === 'string' && VALID_BATTLE_MODES.has(parsed.battleMode as BattleModeId)) {
+        merged.battleMode = parsed.battleMode as BattleModeId;
+      }
+      if (parsed.maxArmorHp === 100 || parsed.maxArmorHp === 150 || parsed.maxArmorHp === 200) {
+        merged.maxArmorHp = parsed.maxArmorHp;
+      }
+      if (
+        parsed.tntBarrelsOption === 'auto' ||
+        parsed.tntBarrelsOption === 'on' ||
+        parsed.tntBarrelsOption === 'off'
+      ) {
+        merged.tntBarrelsOption = parsed.tntBarrelsOption;
+      }
+      if (typeof parsed.aiTactic === 'string' && VALID_AI_TACTICS.has(parsed.aiTactic as AITacticId)) {
+        merged.aiTactic = parsed.aiTactic as AITacticId;
       }
       if (typeof parsed.powerUpSpawnIntervalSec === 'number') {
         merged.powerUpSpawnIntervalSec = normalizeCrateSpawnInterval(parsed.powerUpSpawnIntervalSec);

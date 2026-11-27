@@ -1,3 +1,4 @@
+import { settingsManager } from '../managers/SettingsManager';
 import type { Tank } from '../entities/Tank';
 import { computeBotDecision, createAISlotMemory, type AISlotMemory } from './AISim';
 import { SeededRng } from './MazeSystem';
@@ -96,6 +97,7 @@ export class AISystem {
     const decision = computeBotDecision(
       {
         difficulty: slot.difficulty,
+        tactic: settingsManager.getSettings().aiTactic,
         dt,
         self: tank.kinematics,
         selfSkill: tank.getEquippedSkill(),

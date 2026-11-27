@@ -14,7 +14,17 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 760 } },
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1280, height: 760 },
+        launchOptions: {
+          args: [
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+          ],
+        },
+      },
     },
   ],
   webServer: {

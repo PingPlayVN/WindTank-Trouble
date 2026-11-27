@@ -59,6 +59,7 @@ export class AssetFactory {
     AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_2', 46, 36, 2);
     AssetFactory.createMineTexture(tex, 'pickup_mine', 26);
     AssetFactory.createWoodenCrateTexture(tex, 'pickup_wood_crate', 44);
+    AssetFactory.createTntBarrelTexture(tex, 'prop_tnt_barrel', 40);
     AssetFactory.createGroundSpikeTexture(tex, 'decal_ground_spike', 24);
 
     AssetFactory.createTreadDecalTexture(tex, 'decal_tread', 10, 26);
@@ -158,6 +159,7 @@ export class AssetFactory {
     if (!tex.exists('projectile_flame_2')) AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_2', 46, 36, 2);
     if (!tex.exists('pickup_mine')) AssetFactory.createMineTexture(tex, 'pickup_mine', 26);
     if (!tex.exists('pickup_wood_crate')) AssetFactory.createWoodenCrateTexture(tex, 'pickup_wood_crate', 44);
+    if (!tex.exists('prop_tnt_barrel')) AssetFactory.createTntBarrelTexture(tex, 'prop_tnt_barrel', 40);
     if (!tex.exists('decal_ground_spike')) AssetFactory.createGroundSpikeTexture(tex, 'decal_ground_spike', 24);
     report('Đang nạp hiệu ứng lửa nhiệt hạch & thùng gỗ bí ẩn…');
     await yieldFrame();
@@ -1551,6 +1553,71 @@ export class AssetFactory {
     ctx.lineWidth = 1.6;
     ctx.strokeStyle = UI_COLORS.inkDarkHex;
     ctx.stroke();
+    tex.addCanvas(key, canvas);
+  }
+
+  private static createTntBarrelTexture(
+    tex: Phaser.Textures.TextureManager,
+    key: string,
+    size: number,
+  ): void {
+    const { canvas, ctx } = AssetFactory.makeCanvas(size, size);
+    const pad = 4;
+    const w = size - pad * 2;
+    const h = size - pad * 2;
+
+    // Drop shadow
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+    AssetFactory.roundRectPath(ctx, pad + 1.5, pad + 2.5, w, h, 7);
+    ctx.fill();
+
+    // Crimson steel / hazard drum body
+    const bodyGrad = ctx.createLinearGradient(pad, pad, pad + w, pad + h);
+    bodyGrad.addColorStop(0, '#D32F2F');
+    bodyGrad.addColorStop(0.55, '#B71C1C');
+    bodyGrad.addColorStop(1, '#7F0000');
+    ctx.fillStyle = bodyGrad;
+    AssetFactory.roundRectPath(ctx, pad, pad, w, h, 7);
+    ctx.fill();
+
+    // Dark iron reinforcement bands
+    ctx.fillStyle = '#263238';
+    ctx.fillRect(pad + 1, pad + 5, w - 2, 4);
+    ctx.fillRect(pad + 1, pad + h - 9, w - 2, 4);
+
+    // Center high-contrast yellow/dark TNT band
+    ctx.fillStyle = '#212121';
+    ctx.fillRect(pad + 2, size / 2 - 7, w - 4, 14);
+    ctx.strokeStyle = '#FFB300';
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(pad + 2.5, size / 2 - 6.5, w - 5, 13);
+
+    // Corner rivets
+    ctx.fillStyle = '#ECEFF1';
+    for (const [rx, ry] of [
+      [pad + 5, pad + 5],
+      [pad + w - 5, pad + 5],
+      [pad + 5, pad + h - 5],
+      [pad + w - 5, pad + h - 5],
+    ]) {
+      ctx.beginPath();
+      ctx.arc(rx, ry, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Crisp "TNT" stencil
+    ctx.font = "900 9.5px 'Segoe UI', Arial, sans-serif";
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#FFEA00';
+    ctx.fillText('TNT', size / 2, size / 2 + 0.5);
+
+    // Outer outline
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = '#18191B';
+    AssetFactory.roundRectPath(ctx, pad, pad, w, h, 7);
+    ctx.stroke();
+
     tex.addCanvas(key, canvas);
   }
 

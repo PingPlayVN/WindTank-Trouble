@@ -835,7 +835,8 @@ export class PowerUpSystem {
     subDt: number,
     tanks: readonly Tank[],
     phase: RoundPhase,
-    onEliminateTank: (victim: Tank) => void,
+    onSkillHitTank: (victim: Tank, source: 'laser' | 'reaper') => void,
+    onLaserBeamFired?: (points: Array<{ x: number; y: number }>) => void,
   ): { hudDirty: boolean } {
     let hudDirty = false;
     const scale = this.arena.scaleRatio;
@@ -903,6 +904,7 @@ export class PowerUpSystem {
           .map((v) => ({ x: v.kinematics.x, y: v.kinematics.y }));
         audioManager.playLaserBlast();
         this.effectsSystem.emitLaserBeamBlast(beam.points, victimCoords);
+        onLaserBeamFired?.(beam.points);
         this.netEventSink?.({
           kind: 'laser_blast',
           points: beam.points,
@@ -920,7 +922,7 @@ export class PowerUpSystem {
             audioManager.playShieldDeflect();
             this.effectsSystem.emitShieldDeflect(victim.kinematics.x, victim.kinematics.y);
           } else {
-            onEliminateTank(victim);
+            onSkillHitTank(victim, 'laser');
           }
         }
       }
@@ -975,7 +977,7 @@ export class PowerUpSystem {
           audioManager.playShieldDeflect();
           this.effectsSystem.emitShieldDeflect(victim.kinematics.x, victim.kinematics.y);
         } else {
-          onEliminateTank(victim);
+          onSkillHitTank(victim, 'reaper');
         }
       }
     }
@@ -1079,7 +1081,7 @@ export class PowerUpSystem {
     subDt: number,
     tanks: readonly Tank[],
     hits: readonly ProjectileHitEvent[],
-    onEliminateTank: (victim: Tank) => void,
+    onHazardHitTank: (victim: Tank, source: 'ground_spike' | 'mine') => void,
   ): void {
     const tankKinematics = tanks.map((t) => t.kinematics);
     const shieldedIndices = new Set<PlayerIndex>(
@@ -1129,7 +1131,7 @@ export class PowerUpSystem {
         if (shieldedIndices.has(vIdx)) continue;
         const victim = tanks.find((t) => t.index === vIdx);
         if (victim && victim.kinematics.alive) {
-          onEliminateTank(victim);
+          onHazardHitTank(victim, 'ground_spike');
         }
       }
     }
@@ -1172,7 +1174,7 @@ export class PowerUpSystem {
               audioManager.playShieldDeflect();
               this.effectsSystem.emitShieldDeflect(victim.kinematics.x, victim.kinematics.y);
             } else {
-              onEliminateTank(victim);
+              onHazardHitTank(victim, 'mine');
             }
           }
         }

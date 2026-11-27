@@ -7,7 +7,9 @@ import {
   normalizeRoomCode,
   peerIdFromRoomCode,
 } from './roomCode';
+import type { NetBarrelSnapshot } from '../systems/TntBarrelSystem';
 import type {
+  BattleModeId,
   MapModeId,
   NetworkRole,
   PlayerIndex,
@@ -16,6 +18,7 @@ import type {
   RoundPhase,
   RoundResultSummary,
   SkillId,
+  TntBarrelsOption,
 } from '../types/gameTypes';
 
 const PUBLIC_ICE_SERVERS: RTCIceServer[] = [
@@ -40,6 +43,9 @@ export interface LobbySharedState {
   hostTouchActive: boolean;
   guestTouchActive: boolean;
   mapMode: MapModeId;
+  battleMode: BattleModeId;
+  maxArmorHp: number;
+  tntBarrelsOption: TntBarrelsOption;
   winningScore: number;
   powerUpSpawnIntervalSec: number;
   maxCratesOnFloor: number;
@@ -52,6 +58,9 @@ export interface OnlineMatchConfig {
   hostColorId: string;
   guestColorId: string;
   mapMode: MapModeId;
+  battleMode: BattleModeId;
+  maxArmorHp: number;
+  tntBarrelsOption: TntBarrelsOption;
   winningScore: number;
   powerUpSpawnIntervalSec: number;
   maxCratesOnFloor: number;
@@ -67,6 +76,9 @@ export interface NetTankSnapshot {
   angle: number;
   alive: boolean;
   ammo: number;
+  hp?: number;
+  maxHp?: number;
+  hasArmor?: boolean;
   skill: SkillId | null;
   skillAmmo: number;
   chargingLaserRemaining: number;
@@ -127,6 +139,7 @@ export interface WorldSnapshotPacket {
   crates: NetCrateSnapshot[];
   mines: NetMineSnapshot[];
   spikeZones: NetSpikeZoneSnapshot[];
+  barrels?: NetBarrelSnapshot[];
 }
 
 export type NetGameEvent =
@@ -154,6 +167,8 @@ export type NetGameEvent =
       x: number;
       y: number;
     }
+  | { kind: 'armor_hit'; victimIndex: PlayerIndex; x: number; y: number; hpRatio: number }
+  | { kind: 'barrel_blast'; x: number; y: number; blastRadius: number }
   | { kind: 'tank_eliminated'; victimIndex: PlayerIndex; x: number; y: number }
   | { kind: 'round_resolved'; summary: RoundResultSummary }
   | { kind: 'advance_round'; roundNumber: number; crateTimerSec: number }
@@ -171,6 +186,9 @@ type PeerPacket =
       guestReady: boolean;
       hostTouchActive: boolean;
       mapMode: MapModeId;
+      battleMode: BattleModeId;
+      maxArmorHp: number;
+      tntBarrelsOption: TntBarrelsOption;
       winningScore: number;
       powerUpSpawnIntervalSec: number;
       maxCratesOnFloor: number;
@@ -264,6 +282,9 @@ export class PeerMultiplayerManager {
       hostTouchActive: settingsManager.isTouchControlsActive(),
       guestTouchActive: false,
       mapMode: s.mapMode,
+      battleMode: s.battleMode,
+      maxArmorHp: s.maxArmorHp,
+      tntBarrelsOption: s.tntBarrelsOption,
       winningScore: s.winningScore,
       powerUpSpawnIntervalSec: s.powerUpSpawnIntervalSec,
       maxCratesOnFloor: s.maxCratesOnFloor,
@@ -363,6 +384,9 @@ export class PeerMultiplayerManager {
       guestColorId: guestCol,
       hostTouchActive: settingsManager.isTouchControlsActive(),
       mapMode: s.mapMode,
+      battleMode: s.battleMode,
+      maxArmorHp: s.maxArmorHp,
+      tntBarrelsOption: s.tntBarrelsOption,
       winningScore: s.winningScore,
       powerUpSpawnIntervalSec: s.powerUpSpawnIntervalSec,
       maxCratesOnFloor: s.maxCratesOnFloor,
@@ -654,6 +678,9 @@ export class PeerMultiplayerManager {
     if (this.state.role !== 'host') return;
     const s = settingsManager.getSettings();
     this.state.mapMode = s.mapMode;
+    this.state.battleMode = s.battleMode;
+    this.state.maxArmorHp = s.maxArmorHp;
+    this.state.tntBarrelsOption = s.tntBarrelsOption;
     this.state.winningScore = s.winningScore;
     this.state.powerUpSpawnIntervalSec = s.powerUpSpawnIntervalSec;
     this.state.maxCratesOnFloor = s.maxCratesOnFloor;
@@ -703,6 +730,9 @@ export class PeerMultiplayerManager {
       guestReady: this.state.guestReady,
       hostTouchActive: settingsManager.isTouchControlsActive(),
       mapMode: this.state.mapMode,
+      battleMode: this.state.battleMode,
+      maxArmorHp: this.state.maxArmorHp,
+      tntBarrelsOption: this.state.tntBarrelsOption,
       winningScore: this.state.winningScore,
       powerUpSpawnIntervalSec: this.state.powerUpSpawnIntervalSec,
       maxCratesOnFloor: this.state.maxCratesOnFloor,
@@ -733,6 +763,9 @@ export class PeerMultiplayerManager {
       hostColorId: this.state.hostColorId,
       guestColorId: this.state.guestColorId,
       mapMode: this.state.mapMode,
+      battleMode: this.state.battleMode,
+      maxArmorHp: this.state.maxArmorHp,
+      tntBarrelsOption: this.state.tntBarrelsOption,
       winningScore: this.state.winningScore,
       powerUpSpawnIntervalSec: this.state.powerUpSpawnIntervalSec,
       maxCratesOnFloor: this.state.maxCratesOnFloor,
@@ -757,6 +790,9 @@ export class PeerMultiplayerManager {
       hostColorId: this.state.hostColorId,
       guestColorId: this.state.guestColorId,
       mapMode: this.state.mapMode,
+      battleMode: this.state.battleMode,
+      maxArmorHp: this.state.maxArmorHp,
+      tntBarrelsOption: this.state.tntBarrelsOption,
       winningScore: this.state.winningScore,
       powerUpSpawnIntervalSec: this.state.powerUpSpawnIntervalSec,
       maxCratesOnFloor: this.state.maxCratesOnFloor,
@@ -873,6 +909,9 @@ export class PeerMultiplayerManager {
           this.state.guestReady = pkt.guestReady;
           this.state.hostTouchActive = pkt.hostTouchActive;
           this.state.mapMode = pkt.mapMode;
+          this.state.battleMode = pkt.battleMode ?? 'classic';
+          this.state.maxArmorHp = pkt.maxArmorHp ?? 100;
+          this.state.tntBarrelsOption = pkt.tntBarrelsOption ?? 'auto';
           this.state.winningScore = pkt.winningScore;
           this.state.powerUpSpawnIntervalSec = pkt.powerUpSpawnIntervalSec;
           this.state.maxCratesOnFloor = pkt.maxCratesOnFloor;

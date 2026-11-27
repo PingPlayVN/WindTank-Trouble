@@ -49,6 +49,16 @@ export class Tank {
   private exhaustTimer = 0;
   private recoilOffset = 0;
 
+  // Armor Durability (`Độ Bền Giáp HP`) state
+  private hasArmorBar = false;
+  private maxHp = 100;
+  private hp = 100;
+  private hitFlashTimer = 0;
+  private criticalVfxTimer = 0;
+  private flameHitCooldown = 0;
+  private reaperHitCooldown = 0;
+  private spikeHitCooldown = 0;
+
   constructor(
     scene: Phaser.Scene,
     config: PlayerConfig,
@@ -100,6 +110,66 @@ export class Tank {
     return this.skillState;
   }
 
+  configureArmorMode(enabled: boolean, maxHp = 100): void {
+    this.hasArmorBar = enabled;
+    this.maxHp = Math.max(20, maxHp);
+    this.hp = this.maxHp;
+    this.hitFlashTimer = 0;
+    this.criticalVfxTimer = 0;
+    this.flameHitCooldown = 0;
+    this.reaperHitCooldown = 0;
+    this.spikeHitCooldown = 0;
+  }
+
+  hasArmorHpEnabled(): boolean {
+    return this.hasArmorBar;
+  }
+
+  getHp(): number {
+    return this.hp;
+  }
+
+  getMaxHp(): number {
+    return this.maxHp;
+  }
+
+  getHpRatio(): number {
+    return this.maxHp > 0 ? Math.max(0, Math.min(1, this.hp / this.maxHp)) : 1;
+  }
+
+  applyArmorDamage(
+    damage: number,
+    continuousKind?: 'flame' | 'reaper' | 'ground_spike',
+  ): { applied: boolean; lethal: boolean } {
+    if (!this.kinematics.alive || this.isShielded()) {
+      return { applied: false, lethal: false };
+    }
+    if (continuousKind === 'flame') {
+      if (this.flameHitCooldown > 0) return { applied: false, lethal: false };
+      this.flameHitCooldown = 0.068;
+    } else if (continuousKind === 'reaper') {
+      if (this.reaperHitCooldown > 0) return { applied: false, lethal: false };
+      this.reaperHitCooldown = 0.26;
+    } else if (continuousKind === 'ground_spike') {
+      if (this.spikeHitCooldown > 0) return { applied: false, lethal: false };
+      this.spikeHitCooldown = 0.42;
+    }
+
+    if (!this.hasArmorBar) {
+      this.hp = 0;
+      return { applied: true, lethal: true };
+    }
+
+    this.hp = Math.max(0, this.hp - Math.max(1, Math.round(damage)));
+    if (this.hp <= 0) {
+      return { applied: true, lethal: true };
+    }
+
+    this.hitFlashTimer = 0.09;
+    this.bodySprite.setTintFill(0xfff59d);
+    return { applied: true, lethal: false };
+  }
+
   getEquippedSkill(): SkillId | null {
     return this.skillState.skill;
   }
@@ -142,6 +212,8 @@ export class Tank {
     this.skillState.reaperWindupRemaining = POWERUP_CONFIG.reaperWindupSec;
     this.skillState.reaperSpinRemaining = POWERUP_CONFIG.reaperSpinDurationSec;
     this.reaperJustUnfurled = false;
+    this.kinematics.vx = 0;
+    this.kinematics.vy = 0;
 
     // Dramatic levitation squash-and-stretch windup animation on hull!
     this.scene.tweens.killTweensOf(this.bodySprite);
@@ -299,11 +371,13 @@ export class Tank {
     dt: number,
     onTreadMark: (x: number, y: number, angle: number) => void,
     onExhaust: (x: number, y: number) => void,
-  ): { shieldJustExpired: boolean; reaperJustEnded: boolean } {
+  ): { shieldJustExpired: boolean; reaperJustEnded: boolean; emitCriticalDamage: boolean } {
     let shieldJustExpired = false;
     let reaperJustEnded = false;
 
-    if (!this.kinematics.alive) return { shieldJustExpired, reaperJustEnded };
+    if (!this.kinematics.alive) {
+      return { shieldJustExpired, reaperJustEnded, emitCriticalDamage: false };
+    }
 
     this.auraPulseClock += dt;
 
@@ -333,35 +407,59 @@ export class Tank {
         this.skillState.chargingLaserRemaining = 0;
         this.laserReadyToDischarge = true;
       }
-      return { shieldJustExpired, reaperJustEnded };
+      return { shieldJustExpired, reaperJustEnded, emitCriticalDamage: false };
     }
 
-    // Reaper Overlord Windup + 360-deg Vortex Spin
-    let speedFactor = 1.0;
+    // Reaper Overlord Windup + 360-deg Vortex Spin:
+    // Locks linear movement & manual steering completely on the spot (just like Laser charge)!
     const windup = this.skillState.reaperWindupRemaining ?? 0;
     const spinning = this.skillState.reaperSpinRemaining ?? 0;
 
-    if (windup > 0) {
-      const nextWindup = Math.max(0, windup - dt);
-      this.skillState.reaperWindupRemaining = nextWindup;
-      if (nextWindup <= 0) {
-        this.reaperJustUnfurled = true;
+    if (windup > 0 || spinning > 0) {
+      this.kinematics.vx = 0;
+      this.kinematics.vy = 0;
+
+      if (windup > 0) {
+        const nextWindup = Math.max(0, windup - dt);
+        this.skillState.reaperWindupRemaining = nextWindup;
+        if (nextWindup <= 0) {
+          this.reaperJustUnfurled = true;
+        }
+      } else {
+        this.kinematics.angle = Phaser.Math.Angle.Wrap(
+          this.kinematics.angle + POWERUP_CONFIG.reaperSpinSpeedRad * dt,
+        );
+        this.skillState.reaperSpinRemaining = Math.max(0, spinning - dt);
+        if (this.skillState.reaperSpinRemaining <= 0) {
+          this.clearSkill();
+          reaperJustEnded = true;
+        }
       }
-      speedFactor = 0.42;
-    } else if (spinning > 0) {
-      this.kinematics.angle = Phaser.Math.Angle.Wrap(
-        this.kinematics.angle + POWERUP_CONFIG.reaperSpinSpeedRad * dt,
-      );
-      this.skillState.reaperSpinRemaining = Math.max(0, spinning - dt);
-      speedFactor = 0.72;
-      if (this.skillState.reaperSpinRemaining <= 0) {
-        this.clearSkill();
-        reaperJustEnded = true;
+
+      if (this.flameHitCooldown > 0) this.flameHitCooldown = Math.max(0, this.flameHitCooldown - dt);
+      if (this.reaperHitCooldown > 0) this.reaperHitCooldown = Math.max(0, this.reaperHitCooldown - dt);
+      if (this.spikeHitCooldown > 0) this.spikeHitCooldown = Math.max(0, this.spikeHitCooldown - dt);
+      if (this.hitFlashTimer > 0) {
+        this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
+        if (this.hitFlashTimer <= 0 && this.kinematics.alive) {
+          this.bodySprite.clearTint();
+        }
       }
+      let emitCriticalDamage = false;
+      if (this.hasArmorBar && this.kinematics.alive && this.hp < this.maxHp * 0.62) {
+        this.criticalVfxTimer += dt;
+        const ratio = this.getHpRatio();
+        const interval = ratio <= 0.25 ? 0.075 : ratio <= 0.45 ? 0.13 : 0.22;
+        if (this.criticalVfxTimer >= interval) {
+          this.criticalVfxTimer = 0;
+          emitCriticalDamage = true;
+        }
+      }
+      return { shieldJustExpired, reaperJustEnded, emitCriticalDamage };
     }
 
     const turnDir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-    if (turnDir !== 0 && !this.isReaperSweeping()) {
+    if (turnDir !== 0) {
       this.kinematics.angle = Phaser.Math.Angle.Wrap(
         this.kinematics.angle + turnDir * BASE_GAMEPLAY.tankTurnSpeedRad * dt,
       );
@@ -370,9 +468,9 @@ export class Tank {
     const moveIntent = (input.forward ? 1 : 0) - (input.backward ? 1 : 0);
     let targetSpeed = 0;
     if (moveIntent > 0) {
-      targetSpeed = BASE_GAMEPLAY.tankForwardSpeed * this.scaleRatio * speedFactor;
+      targetSpeed = BASE_GAMEPLAY.tankForwardSpeed * this.scaleRatio;
     } else if (moveIntent < 0) {
-      targetSpeed = -BASE_GAMEPLAY.tankBackwardSpeed * this.scaleRatio * speedFactor;
+      targetSpeed = -BASE_GAMEPLAY.tankBackwardSpeed * this.scaleRatio;
     }
 
     const targetVx = Math.cos(this.kinematics.angle) * targetSpeed;
@@ -413,7 +511,29 @@ export class Tank {
       }
     }
 
-    return { shieldJustExpired, reaperJustEnded };
+    if (this.flameHitCooldown > 0) this.flameHitCooldown = Math.max(0, this.flameHitCooldown - dt);
+    if (this.reaperHitCooldown > 0) this.reaperHitCooldown = Math.max(0, this.reaperHitCooldown - dt);
+    if (this.spikeHitCooldown > 0) this.spikeHitCooldown = Math.max(0, this.spikeHitCooldown - dt);
+
+    if (this.hitFlashTimer > 0) {
+      this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
+      if (this.hitFlashTimer <= 0 && this.kinematics.alive) {
+        this.bodySprite.clearTint();
+      }
+    }
+
+    let emitCriticalDamage = false;
+    if (this.hasArmorBar && this.kinematics.alive && this.hp < this.maxHp * 0.62) {
+      this.criticalVfxTimer += dt;
+      const ratio = this.getHpRatio();
+      const interval = ratio <= 0.25 ? 0.075 : ratio <= 0.45 ? 0.13 : 0.22;
+      if (this.criticalVfxTimer >= interval) {
+        this.criticalVfxTimer = 0;
+        emitCriticalDamage = true;
+      }
+    }
+
+    return { shieldJustExpired, reaperJustEnded, emitCriticalDamage };
   }
 
   /**
@@ -450,6 +570,15 @@ export class Tank {
       reaperSpinRemaining: snap.reaperSpinRemaining,
     };
     this.shieldRemainingSec = snap.shieldRemaining;
+    if (typeof snap.maxHp === 'number' && snap.maxHp > 0) {
+      this.maxHp = snap.maxHp;
+    }
+    if (typeof snap.hp === 'number') {
+      this.hp = snap.hp;
+    }
+    if (typeof snap.hasArmor === 'boolean') {
+      this.hasArmorBar = snap.hasArmor;
+    }
 
     if (snap.alive && !wasAlive) {
       this.kinematics.alive = true;
@@ -519,6 +648,26 @@ export class Tank {
     this.shadowSprite.setRotation(this.kinematics.angle);
 
     this.auraGraphics.clear();
+
+    // 0. Floating World-Space Armor Durability Bar (`Độ Bền Giáp HP`)
+    if (this.hasArmorBar && this.kinematics.alive) {
+      const ratio = this.getHpRatio();
+      const bw = 34 * this.scaleRatio;
+      const bh = 5.2 * this.scaleRatio;
+      const bx = this.kinematics.x - bw / 2;
+      const by = this.kinematics.y - this.kinematics.radius - 13 * this.scaleRatio;
+      const barColor =
+        ratio > 0.6 ? 0x00c853 : ratio > 0.3 ? 0xffb300 : Math.floor(this.auraPulseClock * 12) % 2 === 0 ? 0xff1744 : 0xd50000;
+
+      this.auraGraphics.fillStyle(0x111318, 0.86);
+      this.auraGraphics.fillRoundedRect(bx - 1, by - 1, bw + 2, bh + 2, 2.5);
+      if (ratio > 0) {
+        this.auraGraphics.fillStyle(barColor, 0.98);
+        this.auraGraphics.fillRoundedRect(bx, by, Math.max(2, bw * ratio), bh, 2);
+      }
+      this.auraGraphics.lineStyle(1, 0xffffff, 0.35);
+      this.auraGraphics.strokeRoundedRect(bx - 1, by - 1, bw + 2, bh + 2, 2.5);
+    }
 
     // 1. Active 5.5s Hexagonal Aegis Forcefield Dome!
     if (this.shieldRemainingSec > 0) {
@@ -734,6 +883,7 @@ export class Tank {
   eliminate(): void {
     if (!this.kinematics.alive) return;
     this.kinematics.alive = false;
+    this.hp = 0;
     this.kinematics.vx = 0;
     this.kinematics.vy = 0;
     this.shieldRemainingSec = 0;

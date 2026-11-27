@@ -9,6 +9,7 @@ import {
 } from './PowerUpSim';
 import type {
   AIDifficulty,
+  AITacticId,
   BuiltArenaLayout,
   GridCell,
   PlayerIndex,
@@ -653,6 +654,7 @@ export function computeMazeNavigationPoint(
 
 export interface AIWorldContext {
   difficulty: AIDifficulty;
+  tactic?: AITacticId;
   dt: number;
   self: TankKinematics;
   selfSkill: SkillId | null;
@@ -1023,17 +1025,43 @@ export function computeBotDecision(
   let moveVecX = navWp.x - self.x + danger.dodgeX * 42;
   let moveVecY = navWp.y - self.y + danger.dodgeY * 42;
 
-  // Keep comfortable combat spacing unless rushing with Reaper / Flame / chasing crate
+  // Keep tactical spacing shaped by AI Tactic (`balanced`, `rusher`, `sniper`, `camper`)!
+  const tactic = ctx.tactic ?? 'balanced';
+  const chasingCrate = navGoalX !== primaryEnemy.x || navGoalY !== primaryEnemy.y;
   const rushingClose =
+    tactic === 'rusher' ||
     ctx.selfSkill === 'reaper' ||
     ctx.selfSkill === 'flame' ||
-    (navGoalX !== primaryEnemy.x && navGoalY !== primaryEnemy.y);
-  if (!rushingClose && navWp.cellSteps === 0 && distToEnemy < arena.cellSize * 1.15) {
-    // Strafe / back off slightly instead of ramming head-on into point-blank mutual KO
+    chasingCrate;
+
+  const preferredStandoff =
+    tactic === 'sniper'
+      ? arena.cellSize * 2.75
+      : tactic === 'camper'
+        ? arena.cellSize * 2.15
+        : arena.cellSize * 1.15;
+
+  if (!rushingClose && navWp.cellSteps <= (tactic === 'sniper' ? 1 : 0) && distToEnemy < preferredStandoff) {
+    // Strafe / kite away to maintain preferred tactical distance!
     const awayX = self.x - primaryEnemy.x;
     const awayY = self.y - primaryEnemy.y;
-    moveVecX = awayX - awayY * 0.75 + danger.dodgeX * 42;
-    moveVecY = awayY + awayX * 0.75 + danger.dodgeY * 42;
+    const kiteStrafe = tactic === 'sniper' ? 0.45 : 0.75;
+    moveVecX = awayX - awayY * kiteStrafe + danger.dodgeX * 42;
+    moveVecY = awayY + awayX * kiteStrafe + danger.dodgeY * 42;
+  } else if (tactic === 'camper' && !chasingCrate && distToEnemy < arena.cellSize * 3.4 && danger.threatLevel < 0.2) {
+    // Camper holds advantageous corridor intersections & angles hull toward approaching enemy!
+    const toEnemyX = primaryEnemy.x - self.x;
+    const toEnemyY = primaryEnemy.y - self.y;
+    const aimDiff = wrapAngleRad(Math.atan2(toEnemyY, toEnemyX) - self.angle);
+    return {
+      forward: false,
+      backward: false,
+      left: aimDiff < -profile.turnDeadbandRad,
+      right: aimDiff > profile.turnDeadbandRad,
+      firePressed: wantFirePressed,
+      fireHeld: wantFireHeld,
+      fireBufferedUntil: wantFirePressed ? mem.clock + 0.12 : 0,
+    };
   }
 
   const move = driveTankTowardVector(

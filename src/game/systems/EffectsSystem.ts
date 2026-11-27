@@ -1044,6 +1044,91 @@ export class EffectsSystem {
     this.addTrauma(0.86);
   }
 
+  emitArmorHitImpact(worldX: number, worldY: number, accentColor: number, remainingRatio: number): void {
+    this.sparkEmitter.setParticleTint([0xffffff, 0xffea00, accentColor]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 7);
+    this.shardEmitter.setParticleTint([accentColor, 0x455a64]);
+    this.shardEmitter.emitParticleAt(worldX, worldY, 3);
+    if (remainingRatio < 0.5) {
+      this.smokeEmitter.emitParticleAt(worldX, worldY, 3);
+    }
+
+    const ring = this.scene.add
+      .circle(worldX, worldY, 8 * this.scaleRatio)
+      .setStrokeStyle(2.4 * this.scaleRatio, 0xffca28, 0.9)
+      .setDepth(21);
+    this.scene.tweens.add({
+      targets: ring,
+      scale: 2.3,
+      alpha: 0,
+      duration: 150,
+      ease: 'Quad.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+    this.addTrauma(0.24);
+  }
+
+  emitCriticalHullDamageTick(worldX: number, worldY: number, hpRatio: number): void {
+    const ox = (Math.random() - 0.5) * 14 * this.scaleRatio;
+    const oy = (Math.random() - 0.5) * 14 * this.scaleRatio;
+    this.smokeEmitter.emitParticleAt(worldX + ox, worldY + oy, 1);
+
+    if (hpRatio <= 0.32) {
+      this.flameEmitter.emitParticleAt(worldX + ox * 0.6, worldY + oy * 0.6, 2);
+    }
+    if (hpRatio <= 0.16) {
+      this.sparkEmitter.setParticleTint([0xffff00, 0x80d8ff, 0xffffff]);
+      this.sparkEmitter.emitParticleAt(worldX - ox * 0.5, worldY - oy * 0.5, 2);
+    }
+  }
+
+  emitTntBarrelExplosion(worldX: number, worldY: number, blastRadius: number): void {
+    this.scorchStamp.setRotation(Math.random() * Math.PI * 2);
+    this.scorchStamp.setScale(this.scaleRatio * 1.25);
+    this.floorDecalRT.draw(
+      this.scorchStamp,
+      worldX - this.arenaOriginX,
+      worldY - this.arenaOriginY,
+    );
+    this.scorchStamp.setScale(this.scaleRatio);
+
+    this.flameEmitter.emitParticleAt(worldX, worldY, 22);
+    this.smokeEmitter.emitParticleAt(worldX, worldY, 16);
+    this.sparkEmitter.setParticleTint([0xffffff, 0xffea00, 0xff6d00, 0xd50000]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 20);
+    this.woodEmitter.emitParticleAt(worldX, worldY, 10);
+    this.shardEmitter.setParticleTint([0xb71c1c, 0x263238, 0xffb300]);
+    this.shardEmitter.emitParticleAt(worldX, worldY, 10);
+
+    const flash = this.scene.add
+      .circle(worldX, worldY, blastRadius * 0.42, 0xfff59d, 0.95)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(22);
+    const wave = this.scene.add
+      .circle(worldX, worldY, blastRadius * 0.25)
+      .setStrokeStyle(4.2 * this.scaleRatio, 0xff5722, 0.95)
+      .setDepth(22);
+
+    this.scene.tweens.add({
+      targets: flash,
+      scale: 2.2,
+      alpha: 0,
+      duration: 180,
+      ease: 'Quad.easeOut',
+      onComplete: () => flash.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: wave,
+      radius: blastRadius,
+      alpha: 0,
+      duration: 300,
+      ease: 'Cubic.easeOut',
+      onComplete: () => wave.destroy(),
+    });
+
+    this.addTrauma(0.82);
+  }
+
   addTrauma(amount: number): void {
     if (!settingsManager.getSettings().screenShake) return;
     this.trauma = Math.min(1, this.trauma + amount);
