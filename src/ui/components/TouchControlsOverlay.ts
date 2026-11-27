@@ -24,10 +24,10 @@ export interface LocalTouchHudStatus {
   reaperActive: boolean;
 }
 
-// --- 1-Player Ergonomic Landscape Geometry ---
-const SOLO_STICK_X = 110;
-const SOLO_STICK_Y = 578;
-const SOLO_STICK_R = 62;
+// --- 1-Player Ergonomic Landscape Geometry (Joystick default enlarged 1.25x: 62 -> 78) ---
+const SOLO_STICK_X = 108;
+const SOLO_STICK_Y = 568;
+const SOLO_STICK_R = 78;
 
 const SOLO_FIRE_X = 1188;
 const SOLO_FIRE_Y = 574;
@@ -46,12 +46,12 @@ const SOLO_DPAD_FWD_X = 1100;
 const SOLO_DPAD_FWD_Y = 500;
 const SOLO_DPAD_FWD_R = 34;
 
-// --- 2-Player Face-to-Face Tabletop Opposite Geometry ---
+// --- 2-Player Face-to-Face Tabletop Opposite Geometry (Joystick default enlarged 1.25x: 54 -> 68) ---
 // Player 1 sits at the LEFT short edge (`x <= 222`, looking right `+X`):
 //   Left thumb (Top-Left) = Stick | Right thumb (Bottom-Left) = Fire + Reverse
 const P1_OPP_STICK_X = 106;
 const P1_OPP_STICK_Y = 214;
-const P1_OPP_STICK_R = 54;
+const P1_OPP_STICK_R = 68;
 const P1_OPP_FIRE_X = 102;
 const P1_OPP_FIRE_Y = 562;
 const P1_OPP_FIRE_R = 46;
@@ -67,7 +67,7 @@ const P1_OPP_DPAD_R = { x: 106, y: 244 };
 //   Left thumb (Bottom-Right) = Stick | Right thumb (Top-Right) = Fire + Reverse (180° symmetric!)
 const P2_OPP_STICK_X = 1174;
 const P2_OPP_STICK_Y = 562;
-const P2_OPP_STICK_R = 54;
+const P2_OPP_STICK_R = 68;
 const P2_OPP_FIRE_X = 1178;
 const P2_OPP_FIRE_Y = 214;
 const P2_OPP_FIRE_R = 46;
@@ -226,7 +226,7 @@ export class TouchControlsOverlay {
 
   private getSlotGeometry(slotIdx: 0 | 1) {
     const s = settingsManager.getSettings();
-    const scale = Phaser.Math.Clamp(s.touchButtonScale ?? 1.0, 0.85, 1.25);
+    const scale = Phaser.Math.Clamp(s.touchButtonScale ?? 1.0, 0.8, 1.35);
 
     if (!this.dualOppositeMode) {
       const swap = Boolean(s.touchSwapHands);
@@ -481,17 +481,20 @@ export class TouchControlsOverlay {
 
     if (!this.dualOppositeMode) {
       const swap = Boolean(s.touchSwapHands);
-      const inSoloZone = swap ? x >= DESIGN_WIDTH - 256 && y >= 140 : x <= 256 && y >= 140;
+      const inSoloZone = swap ? x >= DESIGN_WIDTH - 268 && y >= 120 : x <= 268 && y >= 120;
       if (inSoloZone) {
         slot.stickPointerId = p.id;
-        if (!floating || Math.hypot(x - geo.stickRestX, y - geo.stickRestY) <= geo.stickMaxR * 1.15) {
+        if (!floating) {
+          // Fixed mode (`Cần điều khiển cố định`): anchor stays locked at rest position!
           slot.stickBaseX = geo.stickRestX;
           slot.stickBaseY = geo.stickRestY;
         } else {
+          // Follow-touch mode (`Di chuyển theo điểm đặt tay`): center spawns right where thumb touches!
+          const padX = Math.min(92, geo.stickMaxR + 6);
           slot.stickBaseX = swap
-            ? Phaser.Math.Clamp(x, DESIGN_WIDTH - 162, DESIGN_WIDTH - 76)
-            : Phaser.Math.Clamp(x, 76, 162);
-          slot.stickBaseY = Phaser.Math.Clamp(y, 240, DESIGN_HEIGHT - 86);
+            ? Phaser.Math.Clamp(x, DESIGN_WIDTH - 208, DESIGN_WIDTH - padX)
+            : Phaser.Math.Clamp(x, padX, 208);
+          slot.stickBaseY = Phaser.Math.Clamp(y, 156, DESIGN_HEIGHT - geo.stickMaxR - 12);
         }
         this.updateSlotStickKnob(slotIdx, x, y);
         return true;
@@ -500,27 +503,27 @@ export class TouchControlsOverlay {
     }
 
     // 2P Opposite Stick Zones:
-    if (slotIdx === 0 && x <= 224 && y >= 78 && y <= 388) {
+    if (slotIdx === 0 && x <= 228 && y >= 78 && y <= 400) {
       slot.stickPointerId = p.id;
-      if (!floating || Math.hypot(x - geo.stickRestX, y - geo.stickRestY) <= geo.stickMaxR * 1.15) {
+      if (!floating) {
         slot.stickBaseX = geo.stickRestX;
         slot.stickBaseY = geo.stickRestY;
       } else {
-        slot.stickBaseX = Phaser.Math.Clamp(x, 68, 162);
-        slot.stickBaseY = Phaser.Math.Clamp(y, 140, 326);
+        slot.stickBaseX = Phaser.Math.Clamp(x, 74, 178);
+        slot.stickBaseY = Phaser.Math.Clamp(y, 146, 332);
       }
       this.updateSlotStickKnob(0, x, y);
       return true;
     }
 
-    if (slotIdx === 1 && x >= 1056 && y >= 372 && y <= 748) {
+    if (slotIdx === 1 && x >= 1052 && y >= 360 && y <= 748) {
       slot.stickPointerId = p.id;
-      if (!floating || Math.hypot(x - geo.stickRestX, y - geo.stickRestY) <= geo.stickMaxR * 1.15) {
+      if (!floating) {
         slot.stickBaseX = geo.stickRestX;
         slot.stickBaseY = geo.stickRestY;
       } else {
-        slot.stickBaseX = Phaser.Math.Clamp(x, 1118, 1212);
-        slot.stickBaseY = Phaser.Math.Clamp(y, 434, 686);
+        slot.stickBaseX = Phaser.Math.Clamp(x, 1102, 1206);
+        slot.stickBaseY = Phaser.Math.Clamp(y, 428, 678);
       }
       this.updateSlotStickKnob(1, x, y);
       return true;
@@ -680,15 +683,16 @@ export class TouchControlsOverlay {
         }
       }
 
-      const knobR = this.dualOppositeMode ? 21 : 24;
+      const btnScale = Phaser.Math.Clamp(cfg.touchButtonScale ?? 1.0, 0.8, 1.35);
+      const knobR = Math.round((this.dualOppositeMode ? 26 : 30) * btnScale);
       g.fillStyle(0x1d1f22, 0.22);
       g.fillCircle(kx + 2, ky + 3, knobR);
       g.fillStyle(knobFill, 0.95);
       g.fillCircle(kx, ky, knobR);
-      g.lineStyle(2.5, knobStroke, 0.95);
+      g.lineStyle(2.6, knobStroke, 0.95);
       g.strokeCircle(kx, ky, knobR);
       g.fillStyle(knobStroke, 0.25);
-      g.fillCircle(kx, ky, 7);
+      g.fillCircle(kx, ky, Math.round(8.5 * btnScale));
     } else {
       const drawPad = (cx: number, cy: number, r: number, pressed: boolean, accent = 0xe3f2fd) => {
         g.fillStyle(0x1d1f22, 0.18);
@@ -717,10 +721,11 @@ export class TouchControlsOverlay {
         .setRotation(geo.labelRot)
         .setVisible(true);
     } else {
+      const floating = Boolean(settingsManager.getSettings().touchFloatingStick);
       sideTag
-        .setText('KÉO NHẸ: NGẮM • KÉO HẾT: LÁI')
+        .setText(floating ? '🎯 THEO ĐIỂM CHẠM • NGẮM & LÁI' : '📌 CỐ ĐỊNH • NGẮM & LÁI')
         .setColor(UI_COLORS.inkMutedHex)
-        .setPosition(geo.stickRestX, geo.stickRestY + geo.stickMaxR + 18)
+        .setPosition(geo.stickRestX, Math.min(DESIGN_HEIGHT - 12, geo.stickRestY + geo.stickMaxR + 14))
         .setRotation(0)
         .setVisible(isVector);
     }
@@ -862,7 +867,9 @@ export class TouchControlsOverlay {
             visible: boolean;
             scheme: TouchScheme;
             dualOppositeMode: boolean;
+            floatingStick: boolean;
             stickRest: { x: number; y: number; maxRadius: number };
+            stickActiveBase: { x: number; y: number; active: boolean };
             fireBtn: { x: number; y: number; radius: number };
             revBtn: { x: number; y: number; radius: number };
             p2StickRest: { x: number; y: number; maxRadius: number };
@@ -870,6 +877,9 @@ export class TouchControlsOverlay {
           };
           setVirtualStick: (dx: number, dy: number, slot?: 0 | 1) => void;
           releaseVirtualStick: (slot?: 0 | 1) => void;
+          simulateTouchDown: (x: number, y: number, pointerId?: number) => void;
+          simulateTouchUp: (pointerId?: number) => void;
+          setFloatingStick: (enabled: boolean) => void;
           tapFire: (slot?: 0 | 1) => void;
         };
       }
@@ -877,11 +887,18 @@ export class TouchControlsOverlay {
       getGeometry: () => {
         const g1 = this.getSlotGeometry(0);
         const g2 = this.getSlotGeometry(1);
+        const s0 = this.slots[0];
         return {
           visible: this.root.visible,
           scheme: this.getScheme(),
           dualOppositeMode: this.dualOppositeMode,
+          floatingStick: Boolean(settingsManager.getSettings().touchFloatingStick),
           stickRest: { x: g1.stickRestX, y: g1.stickRestY, maxRadius: g1.stickMaxR },
+          stickActiveBase: {
+            x: s0.stickBaseX,
+            y: s0.stickBaseY,
+            active: s0.stickPointerId !== null,
+          },
           fireBtn: { x: g1.fireX, y: g1.fireY, radius: g1.fireR },
           revBtn: { x: g1.revX, y: g1.revY, radius: g1.revR },
           p2StickRest: { x: g2.stickRestX, y: g2.stickRestY, maxRadius: g2.stickMaxR },
@@ -901,8 +918,20 @@ export class TouchControlsOverlay {
         const g = this.getSlotGeometry(slot);
         const s = this.slots[slot];
         s.stickPointerId = null;
+        s.stickBaseX = g.stickRestX;
+        s.stickBaseY = g.stickRestY;
         s.stickKnobX = g.stickRestX;
         s.stickKnobY = g.stickRestY;
+        this.redraw();
+      },
+      simulateTouchDown: (x: number, y: number, pointerId = 950) => {
+        this.handlePointerDown({ id: pointerId, x, y } as Phaser.Input.Pointer);
+      },
+      simulateTouchUp: (pointerId = 950) => {
+        this.handlePointerUp({ id: pointerId, x: 0, y: 0 } as Phaser.Input.Pointer);
+      },
+      setFloatingStick: (enabled: boolean) => {
+        settingsManager.setTouchFloatingStick(enabled);
         this.redraw();
       },
       tapFire: (slot: 0 | 1 = 0) => {

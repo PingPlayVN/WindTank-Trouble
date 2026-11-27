@@ -325,16 +325,16 @@ export class SettingsModal {
   private buildMobileTouchTuningPanel(centerX: number, topY: number): void {
     const panelBg = this.scene.add.graphics();
     panelBg.fillStyle(0xf5f7fa, 1);
-    panelBg.fillRoundedRect(centerX - 446, topY - 12, 892, 336, 12);
+    panelBg.fillRoundedRect(centerX - 446, topY - 12, 892, 358, 12);
     panelBg.lineStyle(2, 0xd4dae3, 1);
-    panelBg.strokeRoundedRect(centerX - 446, topY - 12, 892, 336, 12);
+    panelBg.strokeRoundedRect(centerX - 446, topY - 12, 892, 358, 12);
     this.contentRoot.add(panelBg);
 
-    // 1. Driving Style Row (`topY + 30`)
+    // 1. Driving Style Row (`topY + 24`)
     const schemeHdr = this.scene.add
-      .text(centerX - 420, topY + 28, 'KIỂU LÁI XE:', {
+      .text(centerX - 420, topY + 24, 'KIỂU LÁI XE:', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
-        fontSize: '14.5px',
+        fontSize: '14px',
         fontStyle: '900',
         color: UI_COLORS.inkDarkHex,
       })
@@ -342,9 +342,10 @@ export class SettingsModal {
 
     const vectorSchemeBtn = createArcadeButton(this.scene, {
       x: centerX - 118,
-      y: topY + 28,
+      y: topY + 24,
       width: 332,
-      height: 44,
+      height: 40,
+      lipHeight: 2.5,
       label: '🕹 CẦN GẠT THÔNG MINH (NGẮM + LÁI)',
       fontSize: 13.5,
       onClick: () => {
@@ -356,9 +357,10 @@ export class SettingsModal {
 
     const dpadSchemeBtn = createArcadeButton(this.scene, {
       x: centerX + 238,
-      y: topY + 28,
+      y: topY + 24,
       width: 352,
-      height: 44,
+      height: 40,
+      lipHeight: 2.5,
       label: '🎮 CỤM PHÍM CỔ ĐIỂN (TRÁI/PHẢI + TIẾN)',
       fontSize: 13,
       onClick: () => {
@@ -379,21 +381,21 @@ export class SettingsModal {
     ) => {
       const rowCard = this.scene.add.graphics();
       rowCard.fillStyle(0xffffff, 1);
-      rowCard.fillRoundedRect(centerX - 426, ry - 26, 852, 52, 9);
+      rowCard.fillRoundedRect(centerX - 426, ry - 24, 852, 48, 9);
       rowCard.lineStyle(1.5, 0xdcdfe6, 1);
-      rowCard.strokeRoundedRect(centerX - 426, ry - 26, 852, 52, 9);
+      rowCard.strokeRoundedRect(centerX - 426, ry - 24, 852, 48, 9);
 
       const tLbl = this.scene.add
         .text(centerX - 406, ry - 8, titleCopy, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '14px',
+          fontSize: '13.5px',
           fontStyle: '900',
           color: UI_COLORS.inkDarkHex,
         })
         .setOrigin(0, 0.5);
 
       const sLbl = this.scene.add
-        .text(centerX - 406, ry + 11, subCopy, {
+        .text(centerX - 406, ry + 10, subCopy, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
           fontSize: '11.5px',
           fontStyle: '600',
@@ -405,7 +407,7 @@ export class SettingsModal {
         x: centerX + 76,
         y: ry,
         width: 44,
-        height: 36,
+        height: 34,
         lipHeight: 2.5,
         label: '−',
         fontSize: 19,
@@ -417,7 +419,7 @@ export class SettingsModal {
       const valTxt = this.scene.add
         .text(centerX + 236, ry, '', {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '13.5px',
+          fontSize: '13px',
           fontStyle: '900',
           color: '#0D47A1',
         })
@@ -427,7 +429,7 @@ export class SettingsModal {
         x: centerX + 394,
         y: ry,
         width: 44,
-        height: 36,
+        height: 34,
         lipHeight: 2.5,
         label: '+',
         fontSize: 18,
@@ -448,9 +450,9 @@ export class SettingsModal {
       return { gaugeGfx, valTxt, ry };
     };
 
-    // 2. Sensitivity Row (`topY + 98`)
+    // 2. Sensitivity Row (`topY + 88`)
     const sensRow = createTuningRow(
-      topY + 98,
+      topY + 88,
       'ĐỘ NHẠY CẦN GẠT',
       'Tăng độ nhạy giúp xoay nòng và vọt xe nhanh hơn với quãng kéo ngón cái ngắn',
       (dir) => {
@@ -460,9 +462,9 @@ export class SettingsModal {
       },
     );
 
-    // 3. Precision Aim Zone Row (`topY + 162`)
+    // 3. Precision Aim Zone Row (`topY + 144`)
     const aimRow = createTuningRow(
-      topY + 162,
+      topY + 144,
       'VÙNG XOAY NGẮM TẠI CHỖ',
       'Độ rộng vòng trong để xoay nòng căn góc đạn nảy tường mà xe không trôi về trước',
       (dir) => {
@@ -472,11 +474,11 @@ export class SettingsModal {
       },
     );
 
-    // 4. Button Size Scale Row (`topY + 226`)
+    // 4. Button Size Scale Row (`topY + 200`)
     const scaleRow = createTuningRow(
-      topY + 226,
-      'KÍCH CỠ NÚT ĐIỀU KHIỂN',
-      'Phóng to hoặc thu gọn kích thước Cần Gạt, nút BẮN! và nút LÙI trên màn hình',
+      topY + 200,
+      'KÍCH CỠ CẦN GẠT & NÚT ĐIỀU KHIỂN',
+      'Tùy chỉnh to/nhỏ quanh kích cỡ Cần Gạt chuẩn (đã phóng lớn 1.25× dễ bám tay)',
       (dir) => {
         settingsManager.stepTouchButtonScale(dir * 0.1);
         refreshUI();
@@ -484,40 +486,94 @@ export class SettingsModal {
       },
     );
 
-    // 5. Floating Stick & Handedness Toggles (`topY + 290`)
-    const floatStickBtn = createArcadeButton(this.scene, {
-      x: centerX - 216,
-      y: topY + 290,
-      width: 412,
-      height: 40,
+    // 5. Explicit 2-Choice Selector: Follow Touch Point vs Fixed Position (`topY + 262`)
+    const anchorHdr = this.scene.add
+      .text(centerX - 420, topY + 262, 'VỊ TRÍ CẦN:', {
+        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontSize: '13.5px',
+        fontStyle: '900',
+        color: UI_COLORS.inkDarkHex,
+      })
+      .setOrigin(0, 0.5);
+
+    const floatingModeBtn = createArcadeButton(this.scene, {
+      x: centerX - 118,
+      y: topY + 262,
+      width: 332,
+      height: 38,
       lipHeight: 2.5,
-      label: '',
+      label: '🎯 THEO ĐIỂM ĐẶT TAY',
       fontSize: 13,
       onClick: () => {
-        const next = !settingsManager.getSettings().touchFloatingStick;
-        settingsManager.setTouchFloatingStick(next);
+        settingsManager.setTouchFloatingStick(true);
         refreshUI();
         this.onBindingsUpdated?.();
       },
     });
 
-    const swapHandsBtn = createArcadeButton(this.scene, {
-      x: centerX + 216,
-      y: topY + 290,
-      width: 412,
-      height: 40,
+    const fixedModeBtn = createArcadeButton(this.scene, {
+      x: centerX + 238,
+      y: topY + 262,
+      width: 352,
+      height: 38,
       lipHeight: 2.5,
-      label: '',
+      label: '📌 CỐ ĐỊNH VỊ TRÍ',
       fontSize: 13,
       onClick: () => {
-        const next = !settingsManager.getSettings().touchSwapHands;
-        settingsManager.setTouchSwapHands(next);
+        settingsManager.setTouchFloatingStick(false);
         refreshUI();
         this.onBindingsUpdated?.();
       },
     });
 
-    this.contentRoot.add([floatStickBtn.container, swapHandsBtn.container]);
+    // 6. Solo Left / Right Hand Layout Selector (`topY + 312`)
+    const handHdr = this.scene.add
+      .text(centerX - 420, topY + 312, 'BỐ CỤC 1P:', {
+        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontSize: '13.5px',
+        fontStyle: '900',
+        color: UI_COLORS.inkDarkHex,
+      })
+      .setOrigin(0, 0.5);
+
+    const leftHandBtn = createArcadeButton(this.scene, {
+      x: centerX - 118,
+      y: topY + 312,
+      width: 332,
+      height: 38,
+      lipHeight: 2.5,
+      label: '✋ LÁI TRÁI • BẮN PHẢI',
+      fontSize: 13,
+      onClick: () => {
+        settingsManager.setTouchSwapHands(false);
+        refreshUI();
+        this.onBindingsUpdated?.();
+      },
+    });
+
+    const rightHandBtn = createArcadeButton(this.scene, {
+      x: centerX + 238,
+      y: topY + 312,
+      width: 352,
+      height: 38,
+      lipHeight: 2.5,
+      label: '🤚 BẮN TRÁI • LÁI PHẢI',
+      fontSize: 13,
+      onClick: () => {
+        settingsManager.setTouchSwapHands(true);
+        refreshUI();
+        this.onBindingsUpdated?.();
+      },
+    });
+
+    this.contentRoot.add([
+      anchorHdr,
+      floatingModeBtn.container,
+      fixedModeBtn.container,
+      handHdr,
+      leftHandBtn.container,
+      rightHandBtn.container,
+    ]);
 
     const drawGauge = (
       gfx: Phaser.GameObjects.Graphics,
@@ -527,7 +583,7 @@ export class SettingsModal {
     ) => {
       const gx = centerX + 110;
       const gw = 252;
-      const gh = 30;
+      const gh = 28;
       gfx.clear();
       gfx.fillStyle(0xe8ecf2, 1);
       gfx.fillRoundedRect(gx, ry - gh / 2, gw, gh, 7);
@@ -570,21 +626,31 @@ export class SettingsModal {
 
       const scalePct = Math.round(cfg.touchButtonScale * 100);
       scaleRow.valTxt.setText(`${scalePct}% KÍCH CỠ`);
-      drawGauge(scaleRow.gaugeGfx, scaleRow.ry, (cfg.touchButtonScale - 0.85) / 0.4, 0x2e7d32);
+      drawGauge(scaleRow.gaugeGfx, scaleRow.ry, (cfg.touchButtonScale - 0.8) / 0.55, 0x2e7d32);
 
-      floatStickBtn.setLabel(
-        cfg.touchFloatingStick
-          ? '🎯 TÂM CẦN GẠT: LINH HOẠT THEO NGÓN CHẠM'
-          : '📌 TÂM CẦN GẠT: KHÓA VỊ TRÍ CỐ ĐỊNH',
+      const isFloating = Boolean(cfg.touchFloatingStick);
+      floatingModeBtn.setFill(
+        isFloating ? 0x1565c0 : UI_COLORS.cardBg,
+        isFloating ? 0x1976d2 : 0xf0f4f8,
+        isFloating ? '#FFFFFF' : UI_COLORS.inkDarkHex,
       );
-      floatStickBtn.setFill(cfg.touchFloatingStick ? 0xe8f5e9 : UI_COLORS.cardBg);
+      fixedModeBtn.setFill(
+        !isFloating ? 0x1565c0 : UI_COLORS.cardBg,
+        !isFloating ? 0x1976d2 : 0xf0f4f8,
+        !isFloating ? '#FFFFFF' : UI_COLORS.inkDarkHex,
+      );
 
-      swapHandsBtn.setLabel(
-        cfg.touchSwapHands
-          ? '🤚 BỐ CỤC 1 NGƯỜI: BẮN TRÁI • LÁI PHẢI'
-          : '✋ BỐ CỤC 1 NGƯỜI: LÁI TRÁI • BẮN PHẢI',
+      const isSwapped = Boolean(cfg.touchSwapHands);
+      leftHandBtn.setFill(
+        !isSwapped ? 0x00695c : UI_COLORS.cardBg,
+        !isSwapped ? 0x00796b : 0xf0f4f8,
+        !isSwapped ? '#FFFFFF' : UI_COLORS.inkDarkHex,
       );
-      swapHandsBtn.setFill(cfg.touchSwapHands ? 0xfff8e1 : UI_COLORS.cardBg);
+      rightHandBtn.setFill(
+        isSwapped ? 0x00695c : UI_COLORS.cardBg,
+        isSwapped ? 0x00796b : 0xf0f4f8,
+        isSwapped ? '#FFFFFF' : UI_COLORS.inkDarkHex,
+      );
     };
 
     this.refreshMobileControlsUI = refreshUI;

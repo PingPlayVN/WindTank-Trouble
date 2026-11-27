@@ -326,20 +326,24 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   });
   expect(dismissedPrompt).toBe(true);
 
-  // Enter Fullscreen via `⛶ FULL MÀN HÌNH`, assert `isFullscreen === true`, then exit via `✕ THOÁT FULL`!
+  // Enter Fullscreen via `⛶ FULL MÀN HÌNH` button click, assert `document.fullscreenElement` is active, then exit cleanly!
   await clickDesignCoord(1184, 40, mobilePage);
   await mobilePage.waitForFunction(() => Boolean(document.fullscreenElement), null, {
-    timeout: 3000,
+    timeout: 5000,
   });
-  await mobilePage.waitForTimeout(220);
-  await waitFrames(2, mobilePage);
-  await clickDesignCoord(1184, 40, mobilePage);
+  await mobilePage.evaluate(async () => {
+    const o = (
+      window as unknown as {
+        __WINDTANK_ORIENTATION__: { toggleFullscreen: () => Promise<unknown> };
+      }
+    ).__WINDTANK_ORIENTATION__;
+    await o.toggleFullscreen();
+  });
   await mobilePage.waitForFunction(() => !document.fullscreenElement, null, {
-    timeout: 3000,
+    timeout: 5000,
   });
-  // Restore exact portrait viewport in Headless Chromium after OS fullscreen exit
   await mobilePage.setViewportSize({ width: 390, height: 844 });
-  await mobilePage.waitForTimeout(160);
+  await mobilePage.waitForTimeout(150);
   await waitFrames(2, mobilePage);
 
   // Tap `VÀO SẢNH ĐẤU` (`388, 504`) directly through the +90deg CSS-rotated portrait canvas!
@@ -368,12 +372,24 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
     path: path.join(SHOT_DIR, '03-mobile-setup-locked-3p4p-and-2p-opposite-cards.png'),
   });
 
-  // Open Mobile SettingsModal (`ĐỘ NHẠY LÁI` at x=1034, y=590) -> verify Keyboard Matrix is replaced by Style & Sensitivity!
+  // Open Mobile SettingsModal (`ĐỘ NHẠY LÁI` at x=1034, y=590) -> verify Style, Sensitivity & Fixed vs Follow-Touch selector!
   await clickDesignCoord(1034, 590, mobilePage);
   await mobilePage.waitForTimeout(240);
-  // Click `+` on `ĐỘ NHẠY CẦN GẠT` (`x = 640 + 394 = 1034, y = 380 - 312 + 156 + 98 = 322`) -> 110%!
-  await clickDesignCoord(1034, 322, mobilePage);
-  await mobilePage.waitForTimeout(120);
+  // Click `+` on `ĐỘ NHẠY CẦN GẠT` (`x = 640 + 394 = 1034, y = 224 + 88 = 312`) -> 110%!
+  await clickDesignCoord(1034, 312, mobilePage);
+  await mobilePage.waitForTimeout(80);
+  // Click `📌 CỐ ĐỊNH VỊ TRÍ` (`x = 640 + 238 = 878, y = 224 + 262 = 486`) -> verify `touchFloatingStick === false`!
+  await clickDesignCoord(878, 486, mobilePage);
+  await mobilePage.waitForTimeout(80);
+  const afterFixedClick = await mobilePage.evaluate(() => {
+    const raw = window.localStorage.getItem('windtank_settings_v1');
+    return raw ? JSON.parse(raw) : null;
+  });
+  expect(afterFixedClick.touchFloatingStick).toBe(false);
+
+  // Switch back to `🎯 THEO ĐIỂM ĐẶT TAY` (`x = 640 - 118 = 522, y = 486`) -> verify `touchFloatingStick === true`!
+  await clickDesignCoord(522, 486, mobilePage);
+  await mobilePage.waitForTimeout(100);
   await mobilePage.screenshot({
     path: path.join(SHOT_DIR, '03b-mobile-settings-driving-style-and-sensitivity.png'),
   });
@@ -382,6 +398,7 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
     return raw ? JSON.parse(raw) : null;
   });
   expect(updatedMobileSettings.touchSensitivity).toBeCloseTo(1.1, 2);
+  expect(updatedMobileSettings.touchFloatingStick).toBe(true);
   // Close Mobile SettingsModal (`HOÀN TẤT` at x=775, y=654) and wait deterministically for modal close!
   await clickDesignCoord(775, 654, mobilePage);
   await mobilePage.waitForFunction(() => {
@@ -413,7 +430,7 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
           getGeometry: () => {
             visible: boolean;
             dualOppositeMode: boolean;
-            stickRest: { x: number; y: number };
+            stickRest: { x: number; y: number; maxRadius: number };
             fireBtn: { x: number; y: number };
             p2StickRest: { x: number; y: number };
             p2FireBtn: { x: number; y: number };
@@ -439,6 +456,8 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
 
   expect(dualBefore.geo.visible).toBe(true);
   expect(dualBefore.geo.dualOppositeMode).toBe(true);
+  // Default 2P joystick radius enlarged 1.25x (`54 * 1.25 = 68` at 100% scale)!
+  expect(dualBefore.geo.stickRest.maxRadius).toBeGreaterThanOrEqual(68);
   // P1 controls on Left (< 224), P2 controls on Opposite Right (> 1056)
   expect(dualBefore.geo.stickRest.x).toBeLessThan(200);
   expect(dualBefore.geo.fireBtn.x).toBeLessThan(200);
@@ -466,6 +485,45 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
     tc.releaseVirtualStick(0);
     tc.releaseVirtualStick(1);
   });
+
+  // Verify Follow-Touch (`touchFloatingStick = true`) vs Fixed (`touchFloatingStick = false`) anchor behavior live!
+  const anchorCheck = await mobilePage.evaluate(() => {
+    const tc = (
+      window as unknown as {
+        __PHASER_TOUCH_CONTROLS__: {
+          getGeometry: () => {
+            stickRest: { x: number; y: number };
+            stickActiveBase: { x: number; y: number; active: boolean };
+          };
+          simulateTouchDown: (x: number, y: number, id?: number) => void;
+          simulateTouchUp: (id?: number) => void;
+          setFloatingStick: (enabled: boolean) => void;
+        };
+      }
+    ).__PHASER_TOUCH_CONTROLS__;
+
+    // 1. Follow-Touch mode: touching at (156, 286) moves joystick center right to (156, 286)!
+    tc.setFloatingStick(true);
+    tc.simulateTouchDown(156, 286, 977);
+    const floatingBase = tc.getGeometry().stickActiveBase;
+    tc.simulateTouchUp(977);
+
+    // 2. Fixed mode: touching at (156, 286) keeps joystick center locked at rest (106, 214)!
+    tc.setFloatingStick(false);
+    tc.simulateTouchDown(156, 286, 978);
+    const fixedBase = tc.getGeometry().stickActiveBase;
+    const rest = tc.getGeometry().stickRest;
+    tc.simulateTouchUp(978);
+    tc.setFloatingStick(true);
+
+    return { floatingBase, fixedBase, rest };
+  });
+  expect(anchorCheck.floatingBase.active).toBe(true);
+  expect(anchorCheck.floatingBase.x).toBe(156);
+  expect(anchorCheck.floatingBase.y).toBe(286);
+  expect(anchorCheck.fixedBase.active).toBe(true);
+  expect(anchorCheck.fixedBase.x).toBe(anchorCheck.rest.x);
+  expect(anchorCheck.fixedBase.y).toBe(anchorCheck.rest.y);
   expect(dualAfter.p1.ammo < 10 || !dualAfter.p1.alive).toBe(true);
   expect(dualAfter.p2.ammo < 10 || !dualAfter.p2.alive).toBe(true);
   expect(

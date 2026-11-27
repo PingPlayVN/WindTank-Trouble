@@ -171,13 +171,13 @@ export class SettingsManager {
   }
 
   setTouchButtonScale(val: number): void {
-    const clamped = Math.round(Math.max(0.85, Math.min(1.25, val)) * 100) / 100;
+    const clamped = Math.round(Math.max(0.8, Math.min(1.35, val)) * 100) / 100;
     this.settings.touchButtonScale = clamped;
     this.save();
   }
 
   stepTouchButtonScale(delta: number): number {
-    const next = Math.round(Math.max(0.85, Math.min(1.25, this.settings.touchButtonScale + delta)) * 100) / 100;
+    const next = Math.round(Math.max(0.8, Math.min(1.35, this.settings.touchButtonScale + delta)) * 100) / 100;
     this.settings.touchButtonScale = next;
     this.save();
     return next;
