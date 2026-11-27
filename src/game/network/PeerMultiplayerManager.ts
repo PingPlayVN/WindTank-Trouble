@@ -1,6 +1,13 @@
 import Peer, { type DataConnection } from 'peerjs';
-import { ALL_SKILL_IDS, TANK_PALETTES } from '../config/constants';
+import {
+  ALL_SKILL_IDS,
+  resolveOnlineArenaViewport,
+  TANK_PALETTES,
+} from '../config/constants';
 import { settingsManager } from '../managers/SettingsManager';
+import { resolveMazeForRound } from '../maps/mapDefinitions';
+import type { ArenaViewportSpec } from '../maps/MazeBuilder';
+import { isMazeValidAndConnected } from '../systems/MazeSystem';
 import {
   formatRoomCode,
   generateRoomCode,
@@ -11,6 +18,7 @@ import type { NetBarrelSnapshot } from '../systems/TntBarrelSystem';
 import type {
   BattleModeId,
   MapModeId,
+  MazeGridData,
   NetworkRole,
   PlayerIndex,
   PlayerInputState,
@@ -55,6 +63,11 @@ export interface LobbySharedState {
 export interface OnlineMatchConfig {
   matchSeed: number;
   useMobileViewport: boolean;
+  hostTouchActive?: boolean;
+  guestTouchActive?: boolean;
+  authoritativeViewport?: ArenaViewportSpec;
+  authoritativeRound?: number;
+  authoritativeGrid?: MazeGridData;
   hostColorId: string;
   guestColorId: string;
   mapMode: MapModeId;
@@ -131,6 +144,7 @@ export interface WorldSnapshotPacket {
   t: 'world_snapshot';
   seq: number;
   roundNumber: number;
+  arenaKey?: string;
   phase: RoundPhase;
   scores: [number, number];
   ties: number;
@@ -172,7 +186,19 @@ export type NetGameEvent =
   | { kind: 'barrel_blast'; x: number; y: number; blastRadius: number }
   | { kind: 'tank_eliminated'; victimIndex: PlayerIndex; x: number; y: number }
   | { kind: 'round_resolved'; summary: RoundResultSummary }
-  | { kind: 'advance_round'; roundNumber: number; crateTimerSec: number }
+  | {
+      kind: 'advance_round';
+      roundNumber: number;
+      crateTimerSec: number;
+      grid?: MazeGridData;
+      viewport?: ArenaViewportSpec;
+    }
+  | {
+      kind: 'arena_resync';
+      roundNumber: number;
+      grid: MazeGridData;
+      viewport: ArenaViewportSpec;
+    }
   | { kind: 'match_victory'; summary: RoundResultSummary }
   | { kind: 'rematch_start'; config: OnlineMatchConfig };
 
@@ -186,6 +212,7 @@ type PeerPacket =
       guestColorId: string;
       guestReady: boolean;
       hostTouchActive: boolean;
+      guestTouchActive?: boolean;
       mapMode: MapModeId;
       battleMode: BattleModeId;
       maxArmorHp: number;
@@ -202,6 +229,7 @@ type PeerPacket =
       guestTouchActive: boolean;
     }
   | { t: 'match_start'; config: OnlineMatchConfig }
+  | { t: 'request_arena_sync'; roundNumber: number }
   | {
       t: 'guest_input';
       seq: number;
@@ -260,6 +288,25 @@ export class PeerMultiplayerManager {
 
   private readonly lobbyListeners = new Set<LobbyListener>();
   private readonly matchStartListeners = new Set<MatchStartListener>();
+  private hostArenaSyncResponder: ((roundNumber: number) => void) | null = null;
+
+  setHostArenaSyncResponder(fn: ((roundNumber: number) => void) | null): void {
+    this.hostArenaSyncResponder = fn;
+  }
+
+  requestArenaSyncFromHost(roundNumber: number): void {
+    if (this.state.role !== 'guest' || !this.state.connected) return;
+    this.sendRaw({ t: 'request_arena_sync', roundNumber });
+  }
+
+  buildAuthoritativeRoundGrid(mapMode: MapModeId, roundNumber: number, matchSeed: number): MazeGridData {
+    const roundSeed = (matchSeed + Math.imul(roundNumber, 0x85ebca6b)) >>> 0;
+    let grid = resolveMazeForRound(mapMode, roundNumber, 2, roundSeed);
+    if (!isMazeValidAndConnected(grid)) {
+      grid = resolveMazeForRound('procedural_large', roundNumber, 2, roundSeed ^ 7);
+    }
+    return grid;
+  }
 
   private createDefaultState(): LobbySharedState {
     const s = settingsManager.getSettings();
@@ -723,13 +770,15 @@ export class PeerMultiplayerManager {
 
   private broadcastHostLobbyState(): void {
     if (this.state.role !== 'host' || !this.state.connected) return;
+    this.state.hostTouchActive = settingsManager.isTouchControlsActive();
     this.sendRaw({
       t: 'lobby_state',
       roomCode: this.state.roomCode,
       hostColorId: this.state.hostColorId,
       guestColorId: this.state.guestColorId,
       guestReady: this.state.guestReady,
-      hostTouchActive: settingsManager.isTouchControlsActive(),
+      hostTouchActive: this.state.hostTouchActive,
+      guestTouchActive: this.state.guestTouchActive,
       mapMode: this.state.mapMode,
       battleMode: this.state.battleMode,
       maxArmorHp: this.state.maxArmorHp,
@@ -743,24 +792,36 @@ export class PeerMultiplayerManager {
 
   private sendGuestLobbyUpdate(ready: boolean, preferredColorId?: string): void {
     if (this.state.role !== 'guest' || !this.state.connected) return;
+    this.state.guestTouchActive = settingsManager.isTouchControlsActive();
     this.sendRaw({
       t: 'guest_lobby_update',
       preferredColorId,
       ready,
-      guestTouchActive: settingsManager.isTouchControlsActive(),
+      guestTouchActive: this.state.guestTouchActive,
     });
   }
 
   /**
-   * Host launches the synchronized 1vs1 match!
+   * Host launches the synchronized 1vs1 match with an authoritative Round 1 MazeGridData & Viewport!
    */
   hostStartMatch(overrideSeed?: number): OnlineMatchConfig | null {
     if (this.state.role !== 'host' || !this.state.connected) return null;
     this.syncHostSettingsFromManager();
 
+    const matchSeed = overrideSeed ?? (((Date.now() ^ 0x9e3779b9) >>> 0) || 4829);
+    const hostTouch = Boolean(this.state.hostTouchActive);
+    const guestTouch = Boolean(this.state.guestTouchActive);
+    const authoritativeViewport = resolveOnlineArenaViewport(hostTouch, guestTouch);
+    const authoritativeGrid = this.buildAuthoritativeRoundGrid(this.state.mapMode, 1, matchSeed);
+
     const config: OnlineMatchConfig = {
-      matchSeed: overrideSeed ?? (((Date.now() ^ 0x9e3779b9) >>> 0) || 4829),
-      useMobileViewport: Boolean(this.state.hostTouchActive || this.state.guestTouchActive),
+      matchSeed,
+      useMobileViewport: Boolean(hostTouch || guestTouch),
+      hostTouchActive: hostTouch,
+      guestTouchActive: guestTouch,
+      authoritativeViewport: { ...authoritativeViewport },
+      authoritativeRound: 1,
+      authoritativeGrid,
       hostColorId: this.state.hostColorId,
       guestColorId: this.state.guestColorId,
       mapMode: this.state.mapMode,
@@ -784,10 +845,21 @@ export class PeerMultiplayerManager {
 
   hostTriggerRematch(): OnlineMatchConfig | null {
     if (this.state.role !== 'host' || !this.state.connected) return null;
-    const prev = this.activeMatchConfig;
+    this.syncHostSettingsFromManager();
+    const matchSeed = ((Date.now() ^ 0x517cc1b7) >>> 0) || 7777;
+    const hostTouch = Boolean(this.state.hostTouchActive);
+    const guestTouch = Boolean(this.state.guestTouchActive);
+    const authoritativeViewport = resolveOnlineArenaViewport(hostTouch, guestTouch);
+    const authoritativeGrid = this.buildAuthoritativeRoundGrid(this.state.mapMode, 1, matchSeed);
+
     const config: OnlineMatchConfig = {
-      matchSeed: ((Date.now() ^ 0x517cc1b7) >>> 0) || 7777,
-      useMobileViewport: prev?.useMobileViewport ?? Boolean(this.state.hostTouchActive || this.state.guestTouchActive),
+      matchSeed,
+      useMobileViewport: Boolean(hostTouch || guestTouch),
+      hostTouchActive: hostTouch,
+      guestTouchActive: guestTouch,
+      authoritativeViewport: { ...authoritativeViewport },
+      authoritativeRound: 1,
+      authoritativeGrid,
       hostColorId: this.state.hostColorId,
       guestColorId: this.state.guestColorId,
       mapMode: this.state.mapMode,
@@ -909,6 +981,9 @@ export class PeerMultiplayerManager {
           this.state.guestColorId = pkt.guestColorId;
           this.state.guestReady = pkt.guestReady;
           this.state.hostTouchActive = pkt.hostTouchActive;
+          if (typeof pkt.guestTouchActive === 'boolean') {
+            this.state.guestTouchActive = pkt.guestTouchActive;
+          }
           this.state.mapMode = pkt.mapMode;
           this.state.battleMode = pkt.battleMode ?? 'classic';
           this.state.maxArmorHp = pkt.maxArmorHp ?? 100;
@@ -946,6 +1021,12 @@ export class PeerMultiplayerManager {
           for (const fn of this.matchStartListeners) {
             fn(pkt.config);
           }
+        }
+        return;
+
+      case 'request_arena_sync':
+        if (this.state.role === 'host') {
+          this.hostArenaSyncResponder?.(pkt.roundNumber);
         }
         return;
 

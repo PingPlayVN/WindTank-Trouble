@@ -1,4 +1,5 @@
 import { BASE_GAMEPLAY, POWERUP_CONFIG } from '../config/constants';
+import type { TntBarrelState } from './BattleModeSim';
 import { sweepCircleAgainstWall } from './CollisionSystem';
 import { getAccessibleNeighbors, type SeededRng } from './MazeSystem';
 import {
@@ -31,6 +32,7 @@ export interface AIDifficultyProfile {
   throttleDutyCycle: number;
   predictiveLead: boolean;
   predictBounceThreats: boolean;
+  detonateTntTraps: boolean;
 }
 
 export const AI_DIFFICULTY_PROFILES: Record<AIDifficulty, AIDifficultyProfile> = {
@@ -45,10 +47,11 @@ export const AI_DIFFICULTY_PROFILES: Record<AIDifficulty, AIDifficultyProfile> =
     throttleDutyCycle: 0.72,
     predictiveLead: false,
     predictBounceThreats: false,
+    detonateTntTraps: false,
   },
   normal: {
     maxBounces: 1,
-    rayScanAngles: 20,
+    rayScanAngles: 22,
     aimJitterRad: 0.055,
     fireIntervalSec: 0.44,
     dodgeWeight: 0.85,
@@ -57,10 +60,11 @@ export const AI_DIFFICULTY_PROFILES: Record<AIDifficulty, AIDifficultyProfile> =
     throttleDutyCycle: 1.0,
     predictiveLead: false,
     predictBounceThreats: false,
+    detonateTntTraps: false,
   },
   hard: {
     maxBounces: 2,
-    rayScanAngles: 36,
+    rayScanAngles: 38,
     aimJitterRad: 0.015,
     fireIntervalSec: 0.22,
     dodgeWeight: 1.35,
@@ -69,6 +73,7 @@ export const AI_DIFFICULTY_PROFILES: Record<AIDifficulty, AIDifficultyProfile> =
     throttleDutyCycle: 1.0,
     predictiveLead: false,
     predictBounceThreats: true,
+    detonateTntTraps: true,
   },
   super_hard: {
     maxBounces: 3,
@@ -81,6 +86,7 @@ export const AI_DIFFICULTY_PROFILES: Record<AIDifficulty, AIDifficultyProfile> =
     throttleDutyCycle: 1.0,
     predictiveLead: true,
     predictBounceThreats: true,
+    detonateTntTraps: true,
   },
 };
 
@@ -152,8 +158,9 @@ function rayCircleFirstHitDist(
 
 /**
  * Sweeps a physical shell ray across up to `maxBounces` maze wall reflections:
- * - Flags `selfHitRisk: true` if the shell bounces back into `shooterIndex` or hits a shielded tank!
- * - Returns `hitsEnemy: true` when an unshielded enemy tank is struck first.
+ * - Flags `selfHitRisk: true` if the shell bounces back into `shooterIndex`, hits a shielded tank,
+ *   or detonates a nearby TNT barrel whose blast wave would hit `shooterIndex`!
+ * - Returns `hitsEnemy: true` when an unshielded enemy tank (or a TNT barrel trapping an enemy) is struck first.
  */
 export function traceBallisticShot(
   muzzleX: number,
@@ -167,6 +174,8 @@ export function traceBallisticShot(
   maxDist: number,
   bulletRadius: number,
   predictiveSpeedPxPerSec = 0,
+  barrels: readonly TntBarrelState[] = [],
+  allowBarrelTrapDetonation = false,
 ): BallisticTraceResult {
   let curX = muzzleX;
   let curY = muzzleY;
@@ -175,7 +184,8 @@ export function traceBallisticShot(
   let remainingDist = maxDist;
   let traveled = 0;
 
-  // Immediate muzzle-inside-wall check: if muzzle is pressed right into a wall, reflect on bounce 0
+  const shooterTank = tanks.find((t) => t.index === shooterIndex) ?? null;
+
   for (let w = 0; w < walls.length; w++) {
     const wall = walls[w];
     if (
@@ -208,7 +218,7 @@ export function traceBallisticShot(
 
     const segLen = earliestWall ? earliestWall.t * remainingDist : remainingDist;
 
-    let bestHit: { s: number; tank: TankKinematics; isShielded: boolean } | null = null;
+    let bestTankHit: { s: number; tank: TankKinematics; isShielded: boolean } | null = null;
 
     for (let i = 0; i < tanks.length; i++) {
       const t = tanks[i];
@@ -246,27 +256,90 @@ export function traceBallisticShot(
         hitR,
         isSelf && b === 0 ? t.radius * 1.5 : 0,
       );
-      if (sHit !== null && (!bestHit || sHit < bestHit.s)) {
-        bestHit = { s: sHit, tank: t, isShielded };
+      if (sHit !== null && (!bestTankHit || sHit < bestTankHit.s)) {
+        bestTankHit = { s: sHit, tank: t, isShielded };
       }
     }
 
-    if (bestHit) {
-      if (bestHit.tank.index === shooterIndex || bestHit.isShielded) {
+    // Check TNT barrel hits along this segment before any tank/wall hit
+    let bestBarrelHit: { s: number; barrel: TntBarrelState } | null = null;
+    for (let k = 0; k < barrels.length; k++) {
+      const br = barrels[k];
+      if (!br.active) continue;
+      const sBr = rayCircleFirstHitDist(
+        curX,
+        curY,
+        ux,
+        uy,
+        segLen,
+        br.x,
+        br.y,
+        br.radius + bulletRadius,
+        0,
+      );
+      if (sBr !== null && (!bestBarrelHit || sBr < bestBarrelHit.s)) {
+        bestBarrelHit = { s: sBr, barrel: br };
+      }
+    }
+
+    if (bestBarrelHit && (!bestTankHit || bestBarrelHit.s <= bestTankHit.s)) {
+      const br = bestBarrelHit.barrel;
+      const selfInBlast =
+        shooterTank !== null &&
+        Math.hypot(shooterTank.x - br.x, shooterTank.y - br.y) <=
+          br.blastRadius + shooterTank.radius * 1.35;
+      if (selfInBlast) {
         return {
           hitsEnemy: false,
           selfHitRisk: true,
           targetIndex: null,
           bouncesUsed: b,
-          travelDist: traveled + bestHit.s,
+          travelDist: traveled + bestBarrelHit.s,
+        };
+      }
+
+      if (allowBarrelTrapDetonation) {
+        for (let i = 0; i < tanks.length; i++) {
+          const t = tanks[i];
+          if (!t.alive || t.index === shooterIndex || shieldedIndices.has(t.index)) continue;
+          if (Math.hypot(t.x - br.x, t.y - br.y) <= br.blastRadius * 0.92 + t.radius) {
+            return {
+              hitsEnemy: true,
+              selfHitRisk: false,
+              targetIndex: t.index,
+              bouncesUsed: b,
+              travelDist: traveled + bestBarrelHit.s,
+            };
+          }
+        }
+      }
+
+      // Shell terminates on barrel without hitting an enemy
+      return {
+        hitsEnemy: false,
+        selfHitRisk: false,
+        targetIndex: null,
+        bouncesUsed: b,
+        travelDist: traveled + bestBarrelHit.s,
+      };
+    }
+
+    if (bestTankHit) {
+      if (bestTankHit.tank.index === shooterIndex || bestTankHit.isShielded) {
+        return {
+          hitsEnemy: false,
+          selfHitRisk: true,
+          targetIndex: null,
+          bouncesUsed: b,
+          travelDist: traveled + bestTankHit.s,
         };
       }
       return {
         hitsEnemy: true,
         selfHitRisk: false,
-        targetIndex: bestHit.tank.index,
+        targetIndex: bestTankHit.tank.index,
         bouncesUsed: b,
-        travelDist: traveled + bestHit.s,
+        travelDist: traveled + bestTankHit.s,
       };
     }
 
@@ -315,6 +388,26 @@ function hasWallOcclusion(
   return false;
 }
 
+function countWallIntersections(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  radius: number,
+  walls: readonly WallRect[],
+): number {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  let count = 0;
+  for (let i = 0; i < walls.length; i++) {
+    const hit = sweepCircleAgainstWall(x0, y0, dx, dy, radius, walls[i]);
+    if (hit && hit.t < 0.995) {
+      count++;
+    }
+  }
+  return count;
+}
+
 function wallClearanceInDirection(
   x: number,
   y: number,
@@ -353,6 +446,7 @@ export function evaluateDangerVector(
   reaperIndices: ReadonlySet<PlayerIndex>,
   arena: BuiltArenaLayout,
   difficulty: AIDifficulty,
+  barrels: readonly TntBarrelState[] = [],
 ): DangerAssessment {
   const profile = AI_DIFFICULTY_PROFILES[difficulty];
   if (profile.dodgeWeight <= 0) {
@@ -405,7 +499,6 @@ export function evaluateDangerVector(
 
     if (perpDist > safeDist) return;
 
-    // Verify no maze wall blocks the bullet before reaching `self`
     if (along > 4 && hasWallOcclusion(px, py, closestX, closestY, pRadius * 0.8, arena.walls)) {
       return;
     }
@@ -413,21 +506,36 @@ export function evaluateDangerVector(
     if (tti < imminentBulletTimeSec && perpDist <= self.radius + pRadius + 8 * scale) {
       imminentBulletTimeSec = tti;
       const toBulletDist = Math.hypot(px - self.x, py - self.y) || 1;
-      const dotFront = ((px - self.x) / toBulletDist) * selfFwdX + ((py - self.y) / toBulletDist) * selfFwdY;
+      const dotFront =
+        ((px - self.x) / toBulletDist) * selfFwdX + ((py - self.y) / toBulletDist) * selfFwdY;
       if (dotFront > 0.75 && toBulletDist < 120 * scale) {
         bulletInFrontCone = true;
       }
     }
 
-    // Choose perpendicular sidestep direction (`leftNormal` vs `rightNormal`), preferring whichever side
-    // we're already offset toward AND has open wall clearance!
     const n1x = -uy;
     const n1y = ux;
     const n2x = uy;
     const n2y = -ux;
 
-    const clear1 = wallClearanceInDirection(self.x, self.y, n1x, n1y, self.radius * 0.9, 54 * scale, arena.walls);
-    const clear2 = wallClearanceInDirection(self.x, self.y, n2x, n2y, self.radius * 0.9, 54 * scale, arena.walls);
+    const clear1 = wallClearanceInDirection(
+      self.x,
+      self.y,
+      n1x,
+      n1y,
+      self.radius * 0.9,
+      54 * scale,
+      arena.walls,
+    );
+    const clear2 = wallClearanceInDirection(
+      self.x,
+      self.y,
+      n2x,
+      n2y,
+      self.radius * 0.9,
+      54 * scale,
+      arena.walls,
+    );
     const sideBias1 = perpX * n1x + perpY * n1y;
     const score1 = clear1 + sideBias1 * 1.6;
     const score2 = clear2 - sideBias1 * 1.6;
@@ -448,7 +556,6 @@ export function evaluateDangerVector(
 
     considerProjectileSegment(p.x, p.y, p.vx, p.vy, p.radius, 1.0);
 
-    // Hard & Super Hard also anticipate 1-wall-ricochet threats!
     if (profile.predictBounceThreats && p.variant !== 'flame') {
       const speed = Math.hypot(p.vx, p.vy);
       if (speed > 20) {
@@ -487,7 +594,7 @@ export function evaluateDangerVector(
     }
   }
 
-  // Proximity Mines repulsion (visible arming mines, own mines, or Super Hard mine glint awareness)
+  // Proximity Mines repulsion
   for (const m of mines) {
     if (m.age >= m.duration) continue;
     const detectable =
@@ -505,7 +612,52 @@ export function evaluateDangerVector(
     }
   }
 
-  // Enemy Reaper 360° Scythe repulsion
+  // Fusing or Bullet-Threatened TNT Barrels repulsion!
+  for (const br of barrels) {
+    if (!br.active) continue;
+    const dx = self.x - br.x;
+    const dy = self.y - br.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const avoidR = br.blastRadius + self.radius * 1.3;
+    if (dist >= avoidR) continue;
+
+    let incomingShellTowardBarrel = false;
+    if (br.fuseRemainingSec === null) {
+      for (let i = 0; i < projectiles.length; i++) {
+        const p = projectiles[i];
+        if (!p.active) continue;
+        const spd = Math.hypot(p.vx, p.vy);
+        if (spd < 10) continue;
+        const hitS = rayCircleFirstHitDist(
+          p.x,
+          p.y,
+          p.vx / spd,
+          p.vy / spd,
+          spd * 0.65,
+          br.x,
+          br.y,
+          br.radius + p.radius + 4,
+          0,
+        );
+        if (hitS !== null) {
+          incomingShellTowardBarrel = true;
+          break;
+        }
+      }
+    }
+
+    if (br.fuseRemainingSec !== null || incomingShellTowardBarrel) {
+      const push = ((avoidR - dist) / avoidR) * 3.2;
+      dodgeX += (dx / dist) * push;
+      dodgeY += (dy / dist) * push;
+      threatLevel = Math.max(threatLevel, push);
+      if (br.fuseRemainingSec !== null) {
+        imminentBulletTimeSec = Math.min(imminentBulletTimeSec, Math.max(0.05, br.fuseRemainingSec));
+      }
+    }
+  }
+
+  // Enemy Reaper 180° Scythe repulsion
   const reaperDangerR = arena.cellSize * (POWERUP_CONFIG.reaperBladeCellsLength + 0.45);
   for (const t of tanks) {
     if (!t.alive || t.index === self.index || !reaperIndices.has(t.index)) continue;
@@ -541,19 +693,100 @@ function worldToGridCell(x: number, y: number, arena: BuiltArenaLayout): GridCel
   return { col, row };
 }
 
-function doorwayWorldPoint(a: GridCell, b: GridCell, arena: BuiltArenaLayout): { x: number; y: number } {
+function doorwayWorldPoint(
+  a: GridCell,
+  b: GridCell,
+  arena: BuiltArenaLayout,
+): { x: number; y: number } {
   return {
     x: arena.originX + ((a.col + b.col) * 0.5 + 0.5) * arena.cellSize,
     y: arena.originY + ((a.row + b.row) * 0.5 + 0.5) * arena.cellSize,
   };
 }
 
-export function computeMazeNavigationPoint(
+export interface MazeDistanceField {
+  cols: number;
+  rows: number;
+  startIdx: number;
+  dist: Int16Array;
+  parent: Int16Array;
+}
+
+/**
+ * Fast flat-array BFS from `startCell` across the entire maze (including 24×14 = 336 cells).
+ * Computes exact corridor step distance & shortest path tree to ALL enemies and ALL crates in one pass!
+ */
+export function computeMazeDistanceField(
+  startCell: GridCell,
+  spikeZones: readonly GroundSpikeZone[],
+  mines: readonly ProximityMineState[],
+  arena: BuiltArenaLayout,
+  barrels: readonly TntBarrelState[] = [],
+  avoidHazards = true,
+): MazeDistanceField {
+  const { cols, rows } = arena.grid;
+  const total = cols * rows;
+  const startIdx = startCell.row * cols + startCell.col;
+
+  const blocked = new Uint8Array(total);
+  if (avoidHazards) {
+    for (const z of spikeZones) {
+      if (z.age < z.duration) {
+        const hc = worldToGridCell(z.x, z.y, arena);
+        const idx = hc.row * cols + hc.col;
+        if (idx !== startIdx) blocked[idx] = 1;
+      }
+    }
+    for (const m of mines) {
+      if (m.age < m.duration) {
+        const hc = worldToGridCell(m.x, m.y, arena);
+        const idx = hc.row * cols + hc.col;
+        if (idx !== startIdx) blocked[idx] = 1;
+      }
+    }
+    for (const br of barrels) {
+      if (br.active && br.fuseRemainingSec !== null) {
+        const hc = worldToGridCell(br.x, br.y, arena);
+        const idx = hc.row * cols + hc.col;
+        if (idx !== startIdx) blocked[idx] = 1;
+      }
+    }
+  }
+
+  const dist = new Int16Array(total).fill(-1);
+  const parent = new Int16Array(total).fill(-1);
+  const queue = new Int16Array(total);
+  let head = 0;
+  let tail = 0;
+
+  dist[startIdx] = 0;
+  queue[tail++] = startIdx;
+
+  while (head < tail) {
+    const curIdx = queue[head++];
+    const r = Math.floor(curIdx / cols);
+    const c = curIdx - r * cols;
+    const nextD = dist[curIdx] + 1;
+
+    for (const nb of getAccessibleNeighbors(arena.grid, { col: c, row: r })) {
+      const nbIdx = nb.row * cols + nb.col;
+      if (dist[nbIdx] !== -1) continue;
+      if (avoidHazards && blocked[nbIdx] === 1) continue;
+      dist[nbIdx] = nextD;
+      parent[nbIdx] = curIdx;
+      queue[tail++] = nbIdx;
+    }
+  }
+
+  return { cols, rows, startIdx, dist, parent };
+}
+
+function resolveWaypointFromField(
   self: TankKinematics,
   goalX: number,
   goalY: number,
-  spikeZones: readonly GroundSpikeZone[],
-  mines: readonly ProximityMineState[],
+  field: MazeDistanceField,
+  fallbackField: MazeDistanceField | null,
   arena: BuiltArenaLayout,
 ): { x: number; y: number; cellSteps: number } {
   const startCell = worldToGridCell(self.x, self.y, arena);
@@ -567,69 +800,29 @@ export function computeMazeNavigationPoint(
     return { x: goalX, y: goalY, cellSteps: 0 };
   }
 
-  const { cols, rows } = arena.grid;
-  const blockedHazard = Array.from({ length: rows }, () => Array<boolean>(cols).fill(false));
-  for (const z of spikeZones) {
-    if (z.age < z.duration) {
-      const hc = worldToGridCell(z.x, z.y, arena);
-      if (
-        (hc.col !== startCell.col || hc.row !== startCell.row) &&
-        (hc.col !== goalCell.col || hc.row !== goalCell.row)
-      ) {
-        blockedHazard[hc.row][hc.col] = true;
-      }
-    }
+  const goalIdx = goalCell.row * field.cols + goalCell.col;
+  let activeField = field;
+  if (activeField.dist[goalIdx] < 0 && fallbackField && fallbackField.dist[goalIdx] >= 0) {
+    activeField = fallbackField;
   }
-  for (const m of mines) {
-    if (m.age < m.duration) {
-      const hc = worldToGridCell(m.x, m.y, arena);
-      if (
-        (hc.col !== startCell.col || hc.row !== startCell.row) &&
-        (hc.col !== goalCell.col || hc.row !== goalCell.row)
-      ) {
-        blockedHazard[hc.row][hc.col] = true;
-      }
-    }
-  }
-
-  const runBfs = (avoidHazards: boolean) => {
-    const distGrid = Array.from({ length: rows }, () => Array<number>(cols).fill(Infinity));
-    const parentGrid = Array.from({ length: rows }, () => Array<GridCell | null>(cols).fill(null));
-    distGrid[startCell.row][startCell.col] = 0;
-    const queue: GridCell[] = [startCell];
-    let head = 0;
-    while (head < queue.length) {
-      const cur = queue[head++];
-      if (cur.col === goalCell.col && cur.row === goalCell.row) break;
-      const nextDist = distGrid[cur.row][cur.col] + 1;
-      for (const nb of getAccessibleNeighbors(arena.grid, cur)) {
-        if (avoidHazards && blockedHazard[nb.row][nb.col]) continue;
-        if (distGrid[nb.row][nb.col] === Infinity) {
-          distGrid[nb.row][nb.col] = nextDist;
-          parentGrid[nb.row][nb.col] = cur;
-          queue.push(nb);
-        }
-      }
-    }
-    return { distGrid, parentGrid };
-  };
-
-  let bfs = runBfs(true);
-  if (!Number.isFinite(bfs.distGrid[goalCell.row][goalCell.col])) {
-    bfs = runBfs(false);
-  }
-
-  if (!Number.isFinite(bfs.distGrid[goalCell.row][goalCell.col])) {
+  if (activeField.dist[goalIdx] < 0) {
     return { x: goalX, y: goalY, cellSteps: 99 };
   }
 
-  const cells: GridCell[] = [];
-  let cursor: GridCell | null = goalCell;
-  while (cursor) {
-    cells.push(cursor);
-    cursor = bfs.parentGrid[cursor.row][cursor.col];
+  const pathIndices: number[] = [];
+  let cursor = goalIdx;
+  let guard = field.cols * field.rows + 2;
+  while (cursor >= 0 && guard-- > 0) {
+    pathIndices.push(cursor);
+    if (cursor === activeField.startIdx) break;
+    cursor = activeField.parent[cursor];
   }
-  cells.reverse();
+  pathIndices.reverse();
+
+  const cells: GridCell[] = pathIndices.map((idx) => {
+    const row = Math.floor(idx / activeField.cols);
+    return { col: idx - row * activeField.cols, row };
+  });
 
   const waypoints: Array<{ x: number; y: number }> = [];
   for (let i = 1; i < cells.length; i++) {
@@ -642,14 +835,35 @@ export function computeMazeNavigationPoint(
   waypoints.push({ x: goalX, y: goalY });
 
   let aim = waypoints[0];
-  for (let i = Math.min(waypoints.length - 1, 5); i >= 0; i--) {
+  for (let i = Math.min(waypoints.length - 1, 7); i >= 0; i--) {
     if (!hasWallOcclusion(self.x, self.y, waypoints[i].x, waypoints[i].y, clearance, arena.walls)) {
       aim = waypoints[i];
       break;
     }
   }
 
-  return { x: aim.x, y: aim.y, cellSteps: cells.length - 1 };
+  return { x: aim.x, y: aim.y, cellSteps: Math.max(0, cells.length - 1) };
+}
+
+export function computeMazeNavigationPoint(
+  self: TankKinematics,
+  goalX: number,
+  goalY: number,
+  spikeZones: readonly GroundSpikeZone[],
+  mines: readonly ProximityMineState[],
+  arena: BuiltArenaLayout,
+  barrels: readonly TntBarrelState[] = [],
+): { x: number; y: number; cellSteps: number } {
+  const startCell = worldToGridCell(self.x, self.y, arena);
+  const safeField = computeMazeDistanceField(startCell, spikeZones, mines, arena, barrels, true);
+  const goalCell = worldToGridCell(goalX, goalY, arena);
+  const goalIdx = goalCell.row * safeField.cols + goalCell.col;
+  const fallbackField =
+    safeField.dist[goalIdx] < 0
+      ? computeMazeDistanceField(startCell, spikeZones, mines, arena, barrels, false)
+      : null;
+
+  return resolveWaypointFromField(self, goalX, goalY, safeField, fallbackField, arena);
 }
 
 export interface AIWorldContext {
@@ -671,6 +885,7 @@ export interface AIWorldContext {
   crates: readonly MysteryCrateState[];
   spikeZones: readonly GroundSpikeZone[];
   mines: readonly ProximityMineState[];
+  barrels?: readonly TntBarrelState[];
   arena: BuiltArenaLayout;
 }
 
@@ -690,7 +905,6 @@ function driveTankTowardVector(
   const fwdDiff = wrapAngleRad(targetAngle - self.angle);
 
   if (allowReverseDodge && Math.abs(fwdDiff) > (Math.PI * 2) / 3) {
-    // Reverse Escape: faster to back up immediately out of danger than spin 180 degrees!
     const revAngle = wrapAngleRad(targetAngle + Math.PI);
     const revDiff = wrapAngleRad(revAngle - self.angle);
     return {
@@ -710,7 +924,13 @@ function driveTankTowardVector(
 }
 
 /**
- * Pure 4-tier AI tactical decision brain producing standard `PlayerInputState` commands.
+ * Prioritized 6-branch tactical AI Behavior Tree producing standard `PlayerInputState` commands:
+ * 1. Unified Grid BFS Sensor (true corridor distances across large 22×13 & 24×14 mazes)
+ * 2. Emergency Survival Reflex (Aegis Shield + Urgent Bullet/Hazard/TNT Evasion)
+ * 3. Maze-Path Target & Crate Objective Selector
+ * 4. Weapon Mastery & Opportunistic TNT Trap Detonation
+ * 5. Clearance-Guided Corner Unstuck Recovery
+ * 6. Tactic Spacing & Corridor Navigation (`balanced`, `rusher`, `sniper`, `camper`)
  */
 export function computeBotDecision(
   ctx: AIWorldContext,
@@ -718,6 +938,7 @@ export function computeBotDecision(
   rng: SeededRng,
 ): PlayerInputState {
   const { self, arena, difficulty, dt } = ctx;
+  const barrels = ctx.barrels ?? [];
   const idle: PlayerInputState = {
     forward: false,
     backward: false,
@@ -754,7 +975,39 @@ export function computeBotDecision(
     return idle;
   }
 
-  // 1. Evaluate incoming bullet / hazard threats!
+  // Branch 1: Unified Maze Distance Field + Hazard/Projectile Danger Evaluation
+  const selfCell = worldToGridCell(self.x, self.y, arena);
+  const safeField = computeMazeDistanceField(
+    selfCell,
+    ctx.spikeZones,
+    ctx.mines,
+    arena,
+    barrels,
+    true,
+  );
+  let rawField: MazeDistanceField | null = null;
+  const getRawField = () => {
+    if (!rawField) {
+      rawField = computeMazeDistanceField(
+        selfCell,
+        ctx.spikeZones,
+        ctx.mines,
+        arena,
+        barrels,
+        false,
+      );
+    }
+    return rawField;
+  };
+
+  const cellStepDistanceTo = (wx: number, wy: number): number => {
+    const gc = worldToGridCell(wx, wy, arena);
+    const idx = gc.row * safeField.cols + gc.col;
+    if (safeField.dist[idx] >= 0) return safeField.dist[idx];
+    const fb = getRawField();
+    return fb.dist[idx] >= 0 ? fb.dist[idx] + 4 : 99;
+  };
+
   const danger = evaluateDangerVector(
     self,
     ctx.projectiles,
@@ -764,16 +1017,25 @@ export function computeBotDecision(
     ctx.reaperTankIndices,
     arena,
     difficulty,
+    barrels,
   );
 
-  // Instant defensive Aegis Shield reflex against imminent bullets!
+  // Branch 2: Defensive Aegis Shield Reflex (only pops on imminent projectile/blast OR unoccluded close enemy!)
   if (ctx.selfSkill === 'shield' && ctx.canFire) {
-    const closestEnemyDist = Math.min(...enemies.map((e) => Math.hypot(e.x - self.x, e.y - self.y)));
-    if (
-      danger.imminentBulletTimeSec < 0.48 ||
-      (difficulty !== 'easy' && closestEnemyDist < arena.cellSize * 1.65) ||
-      (difficulty === 'easy' && closestEnemyDist < arena.cellSize * 1.2)
-    ) {
+    let closeUnoccludedEnemy = false;
+    const proxThreshold = arena.cellSize * (difficulty === 'easy' ? 1.2 : 1.65);
+    for (const e of enemies) {
+      const d = Math.hypot(e.x - self.x, e.y - self.y);
+      if (
+        d < proxThreshold &&
+        !hasWallOcclusion(self.x, self.y, e.x, e.y, bulletRadius, arena.walls)
+      ) {
+        closeUnoccludedEnemy = true;
+        break;
+      }
+    }
+
+    if (danger.imminentBulletTimeSec < 0.48 || closeUnoccludedEnemy) {
       return {
         ...idle,
         firePressed: true,
@@ -783,20 +1045,28 @@ export function computeBotDecision(
     }
   }
 
-  // Nearest enemy selection (Euclidean & tactical preference for unshielded targets)
+  // Branch 3: Maze-Path Aware Target Selection (prevents fixating on enemies behind long solid walls!)
   let primaryEnemy = enemies[0];
+  let primaryEnemySteps = 99;
   let bestEnemyScore = Infinity;
   for (const e of enemies) {
-    const d = Math.hypot(e.x - self.x, e.y - self.y);
-    const shieldPenalty = ctx.shieldedTankIndices.has(e.index) ? arena.cellSize * 4 : 0;
-    if (d + shieldPenalty < bestEnemyScore) {
-      bestEnemyScore = d + shieldPenalty;
+    const euclid = Math.hypot(e.x - self.x, e.y - self.y);
+    const steps = cellStepDistanceTo(e.x, e.y);
+    const pathMetric =
+      ctx.selfSkill === 'laser' || ctx.selfSkill === 'reaper'
+        ? euclid
+        : steps * arena.cellSize * 0.78 + euclid * 0.22;
+    const shieldPenalty = ctx.shieldedTankIndices.has(e.index) ? arena.cellSize * 5 : 0;
+    const score = pathMetric + shieldPenalty;
+    if (score < bestEnemyScore) {
+      bestEnemyScore = score;
       primaryEnemy = e;
+      primaryEnemySteps = steps;
     }
   }
   const distToEnemy = Math.hypot(primaryEnemy.x - self.x, primaryEnemy.y - self.y);
 
-  // 2. Specialized Superhero Skill Firing Logic!
+  // Branch 4: Specialized Weapon Mastery & Opportunistic TNT Detonation
   let wantFirePressed = false;
   let wantFireHeld = false;
   let desiredAimAngle: number | null = null;
@@ -807,19 +1077,32 @@ export function computeBotDecision(
     const coneLimit = ((POWERUP_CONFIG.laserAutoAimConeDeg - 2) * Math.PI) / 180;
     const diff = Math.abs(wrapAngleRad(angleToEnemy - self.angle));
     const safeToFreeze = danger.imminentBulletTimeSec > 0.9;
-    if (ctx.canFire && diff <= coneLimit && safeToFreeze && !ctx.shieldedTankIndices.has(primaryEnemy.index)) {
+    if (
+      ctx.canFire &&
+      diff <= coneLimit &&
+      safeToFreeze &&
+      !ctx.shieldedTankIndices.has(primaryEnemy.index)
+    ) {
       wantFirePressed = true;
     }
   } else if (ctx.selfSkill === 'reaper') {
     const triggerRange = arena.cellSize * (POWERUP_CONFIG.reaperBladeCellsLength * 0.92);
-    if (ctx.canFire && distToEnemy <= triggerRange && !ctx.shieldedTankIndices.has(primaryEnemy.index)) {
+    if (
+      ctx.canFire &&
+      distToEnemy <= triggerRange &&
+      !ctx.shieldedTankIndices.has(primaryEnemy.index)
+    ) {
       wantFirePressed = true;
     }
   } else if (ctx.selfSkill === 'mine') {
+    const alreadyMinedHere = ctx.mines.some(
+      (m) => m.age < m.duration && Math.hypot(m.x - self.x, m.y - self.y) < arena.cellSize * 1.15,
+    );
     if (
       ctx.canFire &&
+      !alreadyMinedHere &&
       mem.fireCooldownTimer <= 0 &&
-      (distToEnemy < arena.cellSize * 2.8 || rng.nextFloat() < 0.02)
+      (primaryEnemySteps <= 3 || rng.nextFloat() < 0.025)
     ) {
       wantFirePressed = true;
       mem.fireCooldownTimer = 0.95;
@@ -836,8 +1119,15 @@ export function computeBotDecision(
       bulletRadius,
       arena.walls,
     );
+    const selfNearBarrelInCone = barrels.some(
+      (br) =>
+        br.active &&
+        Math.hypot(br.x - self.x, br.y - self.y) < br.blastRadius + self.radius * 1.25 &&
+        Math.abs(wrapAngleRad(Math.atan2(br.y - self.y, br.x - self.x) - self.angle)) < 0.5,
+    );
     if (
       ctx.canFire &&
+      !selfNearBarrelInCone &&
       ((distToEnemy <= flameRange && diff < 0.42 && clearSight) ||
         (difficulty !== 'easy' && danger.bulletInFrontCone))
     ) {
@@ -846,19 +1136,33 @@ export function computeBotDecision(
     }
   } else if (ctx.selfSkill === 'drill') {
     const angleToEnemy = Math.atan2(primaryEnemy.y - self.y, primaryEnemy.x - self.x);
-    desiredAimAngle = angleToEnemy;
-    const diff = Math.abs(wrapAngleRad(angleToEnemy - self.angle));
-    if (ctx.canFire && mem.fireCooldownTimer <= 0 && diff < 0.14 && distToEnemy < arena.cellSize * 4.5) {
-      wantFirePressed = true;
-      mem.fireCooldownTimer = profile.fireIntervalSec;
+    const wallsBetween = countWallIntersections(
+      muzzleX,
+      muzzleY,
+      primaryEnemy.x,
+      primaryEnemy.y,
+      bulletRadius,
+      arena.walls,
+    );
+    if (wallsBetween <= POWERUP_CONFIG.drillWallsPerShot && distToEnemy < arena.cellSize * 6.0) {
+      desiredAimAngle = angleToEnemy;
+      const diff = Math.abs(wrapAngleRad(angleToEnemy - self.angle));
+      if (
+        ctx.canFire &&
+        mem.fireCooldownTimer <= 0 &&
+        diff < 0.14 &&
+        !ctx.shieldedTankIndices.has(primaryEnemy.index)
+      ) {
+        wantFirePressed = true;
+        mem.fireCooldownTimer = profile.fireIntervalSec;
+      }
     }
   } else if (!ctx.selfReaperSweeping) {
-    // Standard Cannon / Gatling / Scatter / Spike / Homing ballistic + multi-bounce solver!
+    // Standard Cannon / Gatling / Scatter / Spike / Homing ballistic + multi-bounce + TNT trap solver!
     const hasAmmo = ctx.selfSkill ? ctx.selfSkillAmmo > 0 : ctx.selfAmmo > 0;
     const maxRayDist = Math.hypot(arena.width, arena.height) * (1 + profile.maxBounces * 0.55);
 
     if (hasAmmo) {
-      // Check current barrel angle first!
       const currentCheck = traceBallisticShot(
         muzzleX,
         muzzleY,
@@ -871,11 +1175,12 @@ export function computeBotDecision(
         maxRayDist,
         bulletRadius,
         profile.predictiveLead ? bulletSpeed : 0,
+        barrels,
+        profile.detonateTntTraps,
       );
 
       if (currentCheck.hitsEnemy && !currentCheck.selfHitRisk) {
         if (ctx.canFire && mem.fireCooldownTimer <= 0) {
-          // On Easy, occasional slight aim error prevents laser-perfect sniping
           if (difficulty !== 'easy' || rng.nextFloat() < 0.72) {
             wantFirePressed = true;
             wantFireHeld = ctx.selfSkill === 'gatling';
@@ -886,7 +1191,6 @@ export function computeBotDecision(
           }
         }
       } else {
-        // Search candidate angles (direct enemy angles + 360° ricochet fan)
         const candidates: number[] = [];
         for (const e of enemies) {
           let tx = e.x;
@@ -897,6 +1201,21 @@ export function computeBotDecision(
             ty += e.vy * leadT;
           }
           candidates.push(Math.atan2(ty - self.y, tx - self.x));
+        }
+
+        // Also include direct angles toward TNT barrels that trap an enemy!
+        if (profile.detonateTntTraps) {
+          for (const br of barrels) {
+            if (!br.active) continue;
+            const trapsEnemy = enemies.some(
+              (e) =>
+                !ctx.shieldedTankIndices.has(e.index) &&
+                Math.hypot(e.x - br.x, e.y - br.y) <= br.blastRadius * 0.92 + e.radius,
+            );
+            if (trapsEnemy) {
+              candidates.push(Math.atan2(br.y - self.y, br.x - self.x));
+            }
+          }
         }
 
         if (profile.rayScanAngles > 0) {
@@ -922,6 +1241,8 @@ export function computeBotDecision(
             maxRayDist,
             bulletRadius,
             profile.predictiveLead ? bulletSpeed : 0,
+            barrels,
+            profile.detonateTntTraps,
           );
           if (tr.hitsEnemy && !tr.selfHitRisk) {
             const turnCost = Math.abs(wrapAngleRad(ang - self.angle)) * 65;
@@ -939,6 +1260,26 @@ export function computeBotDecision(
           mem.cachedAimAngle = wrapAngleRad(bestShot.angle + jitter);
           mem.aimHoldTimer = 0.22;
           desiredAimAngle = mem.cachedAimAngle;
+        } else if (
+          ctx.selfSkill === 'homing' &&
+          difficulty !== 'easy' &&
+          ctx.canFire &&
+          mem.fireCooldownTimer <= 0
+        ) {
+          // On large maps, launch Homing Missile down an open safe corridor so its seeker hunts the enemy!
+          const fwdClear = wallClearanceInDirection(
+            muzzleX,
+            muzzleY,
+            Math.cos(self.angle),
+            Math.sin(self.angle),
+            bulletRadius,
+            arena.cellSize * 2.2,
+            arena.walls,
+          );
+          if (fwdClear >= arena.cellSize * 1.4 && !currentCheck.selfHitRisk) {
+            wantFirePressed = true;
+            mem.fireCooldownTimer = profile.fireIntervalSec;
+          }
         } else if (mem.cachedAimAngle !== null) {
           desiredAimAngle = mem.cachedAimAngle;
         }
@@ -946,7 +1287,7 @@ export function computeBotDecision(
     }
   }
 
-  // 3. Urgent Evasion Override: if threatLevel is high, dodge immediately!
+  // Urgent Evasion Override: if threatLevel is high, dodge immediately!
   if (danger.threatLevel >= 0.65) {
     const move = driveTankTowardVector(
       self,
@@ -963,7 +1304,7 @@ export function computeBotDecision(
     };
   }
 
-  // 4. Anti-stuck corner recovery check
+  // Branch 5: Clearance-Guided Corner Recovery
   if (mem.unstuckTimer > 0) {
     mem.unstuckTimer = Math.max(0, mem.unstuckTimer - dt);
     return {
@@ -977,27 +1318,28 @@ export function computeBotDecision(
     };
   }
 
-  // 5. Choose Navigation Goal: Mystery Wooden Crate vs Enemy Flanking!
+  // Branch 6: Maze-Path Crate vs Enemy Navigation & Tactic Spacing
   let navGoalX = primaryEnemy.x;
   let navGoalY = primaryEnemy.y;
 
   if (!ctx.selfSkill && ctx.crates.length > 0 && profile.cratePriority > 0) {
     let bestCrate: MysteryCrateState | null = null;
-    let bestCrateDist = Infinity;
+    let bestCratePathDist = Infinity;
     for (const c of ctx.crates) {
-      const d = Math.hypot(c.x - self.x, c.y - self.y);
-      if (d < bestCrateDist) {
-        bestCrateDist = d;
+      const cSteps = cellStepDistanceTo(c.x, c.y);
+      const cMetric = cSteps * arena.cellSize * 0.8 + Math.hypot(c.x - self.x, c.y - self.y) * 0.2;
+      if (cMetric < bestCratePathDist) {
+        bestCratePathDist = cMetric;
         bestCrate = c;
       }
     }
-    if (bestCrate && bestCrateDist * (1 / profile.cratePriority) < distToEnemy * 1.25) {
+    const enemyPathDist = primaryEnemySteps * arena.cellSize * 0.8 + distToEnemy * 0.2;
+    if (bestCrate && bestCratePathDist * (1 / profile.cratePriority) < enemyPathDist * 1.25) {
       navGoalX = bestCrate.x;
       navGoalY = bestCrate.y;
     }
   }
 
-  // If we already have a locked bank-shot / Laser aim angle and no urgent threat, pivot cleanly onto the shot!
   if (desiredAimAngle !== null && danger.threatLevel < 0.25) {
     const aimDiff = wrapAngleRad(desiredAimAngle - self.angle);
     if (Math.abs(aimDiff) > profile.turnDeadbandRad * 0.7) {
@@ -1013,19 +1355,18 @@ export function computeBotDecision(
     }
   }
 
-  const navWp = computeMazeNavigationPoint(
+  const navWp = resolveWaypointFromField(
     self,
     navGoalX,
     navGoalY,
-    ctx.spikeZones,
-    ctx.mines,
+    safeField,
+    rawField,
     arena,
   );
 
   let moveVecX = navWp.x - self.x + danger.dodgeX * 42;
   let moveVecY = navWp.y - self.y + danger.dodgeY * 42;
 
-  // Keep tactical spacing shaped by AI Tactic (`balanced`, `rusher`, `sniper`, `camper`)!
   const tactic = ctx.tactic ?? 'balanced';
   const chasingCrate = navGoalX !== primaryEnemy.x || navGoalY !== primaryEnemy.y;
   const rushingClose =
@@ -1041,18 +1382,26 @@ export function computeBotDecision(
         ? arena.cellSize * 2.15
         : arena.cellSize * 1.15;
 
-  if (!rushingClose && navWp.cellSteps <= (tactic === 'sniper' ? 1 : 0) && distToEnemy < preferredStandoff) {
-    // Strafe / kite away to maintain preferred tactical distance!
+  if (
+    !rushingClose &&
+    navWp.cellSteps <= (tactic === 'sniper' ? 1 : 0) &&
+    distToEnemy < preferredStandoff
+  ) {
     const awayX = self.x - primaryEnemy.x;
     const awayY = self.y - primaryEnemy.y;
     const kiteStrafe = tactic === 'sniper' ? 0.45 : 0.75;
     moveVecX = awayX - awayY * kiteStrafe + danger.dodgeX * 42;
     moveVecY = awayY + awayX * kiteStrafe + danger.dodgeY * 42;
-  } else if (tactic === 'camper' && !chasingCrate && distToEnemy < arena.cellSize * 3.4 && danger.threatLevel < 0.2) {
-    // Camper holds advantageous corridor intersections & angles hull toward approaching enemy!
-    const toEnemyX = primaryEnemy.x - self.x;
-    const toEnemyY = primaryEnemy.y - self.y;
-    const aimDiff = wrapAngleRad(Math.atan2(toEnemyY, toEnemyX) - self.angle);
+  } else if (
+    tactic === 'camper' &&
+    !chasingCrate &&
+    primaryEnemySteps <= 4 &&
+    distToEnemy < arena.cellSize * 3.6 &&
+    danger.threatLevel < 0.2
+  ) {
+    const aimTargetX = navWp.cellSteps > 0 ? navWp.x : primaryEnemy.x;
+    const aimTargetY = navWp.cellSteps > 0 ? navWp.y : primaryEnemy.y;
+    const aimDiff = wrapAngleRad(Math.atan2(aimTargetY - self.y, aimTargetX - self.x) - self.angle);
     return {
       forward: false,
       backward: false,
@@ -1072,12 +1421,10 @@ export function computeBotDecision(
     difficulty === 'hard' || difficulty === 'super_hard',
   );
 
-  // Easy mode gentle throttle cadence so newcomers can outmaneuver it comfortably
   if (profile.throttleDutyCycle < 1 && Math.sin(mem.clock * 5.2 + self.index) > 0.65) {
     move.forward = false;
   }
 
-  // Track forward progress to auto-recover if wedged on a wall corner or tank
   if (move.forward) {
     const moved = Math.hypot(self.x - mem.lastProgressX, self.y - mem.lastProgressY);
     if (moved > 3.5 * scale) {
@@ -1086,10 +1433,35 @@ export function computeBotDecision(
       mem.stuckTimer = 0;
     } else {
       mem.stuckTimer += dt;
-      if (mem.stuckTimer >= 0.55) {
+      if (mem.stuckTimer >= 0.52) {
         mem.stuckTimer = 0;
         mem.unstuckTimer = 0.36;
-        mem.unstuckTurnSign = rng.nextFloat() < 0.5 ? 1 : -1;
+        // Turn rear toward whichever perpendicular side has more open maze clearance!
+        const leftAng = self.angle - Math.PI * 0.5;
+        const rightAng = self.angle + Math.PI * 0.5;
+        const leftClear = wallClearanceInDirection(
+          self.x,
+          self.y,
+          Math.cos(leftAng),
+          Math.sin(leftAng),
+          self.radius * 0.85,
+          arena.cellSize * 1.4,
+          arena.walls,
+        );
+        const rightClear = wallClearanceInDirection(
+          self.x,
+          self.y,
+          Math.cos(rightAng),
+          Math.sin(rightAng),
+          self.radius * 0.85,
+          arena.cellSize * 1.4,
+          arena.walls,
+        );
+        if (Math.abs(leftClear - rightClear) > 4 * scale) {
+          mem.unstuckTurnSign = leftClear > rightClear ? -1 : 1;
+        } else {
+          mem.unstuckTurnSign = rng.nextFloat() < 0.5 ? 1 : -1;
+        }
       }
     }
   } else {

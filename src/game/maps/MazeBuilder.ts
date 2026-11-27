@@ -107,9 +107,9 @@ export function buildArenaLayout(
 
   const rawCellW = Math.floor((viewport.maxWidth - 24) / cols);
   const rawCellH = Math.floor((viewport.maxHeight - 20) / rows);
-  const cellSize = Math.max(32, Math.min(92, rawCellW, rawCellH));
+  const cellSize = Math.max(24, Math.min(92, rawCellW, rawCellH));
   const scaleRatio = cellSize / BASE_GAMEPLAY.referenceCellSize;
-  const wallThickness = Math.max(4, Math.round(BASE_GAMEPLAY.wallThickness * scaleRatio));
+  const wallThickness = Math.max(3, Math.round(BASE_GAMEPLAY.wallThickness * scaleRatio));
 
   const width = cols * cellSize;
   const height = rows * cellSize;

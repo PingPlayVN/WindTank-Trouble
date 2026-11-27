@@ -1,6 +1,7 @@
 import { settingsManager } from '../managers/SettingsManager';
 import type { Tank } from '../entities/Tank';
 import { computeBotDecision, createAISlotMemory, type AISlotMemory } from './AISim';
+import type { TntBarrelState } from './BattleModeSim';
 import { SeededRng } from './MazeSystem';
 import type { PowerUpSystem } from './PowerUpSystem';
 import type { ProjectileSystem } from './ProjectileSystem';
@@ -51,6 +52,13 @@ export class AISystem {
     return this.slots.has(index);
   }
 
+  resetRoundMemory(): void {
+    for (const [idx, slot] of this.slots.entries()) {
+      slot.memory = createAISlotMemory(idx);
+      slot.pendingFirePress = false;
+    }
+  }
+
   updateSlotConfigs(activePlayers: readonly PlayerConfig[], roundSeed: number): void {
     for (const p of activePlayers) {
       if (p.isAI) {
@@ -79,6 +87,7 @@ export class AISystem {
     arena: BuiltArenaLayout,
     projectileSystem: ProjectileSystem,
     powerUpSystem: PowerUpSystem,
+    barrels: readonly TntBarrelState[] = [],
   ): PlayerInputState {
     const slot = this.slots.get(tank.index);
     if (!slot || phase !== 'playing' || !tank.kinematics.alive) {
@@ -114,6 +123,7 @@ export class AISystem {
         crates: powerUpSystem.getCrateStates(),
         spikeZones: powerUpSystem.getSpikeZoneStates(),
         mines: powerUpSystem.getMineStates(),
+        barrels,
         arena,
       },
       slot.memory,

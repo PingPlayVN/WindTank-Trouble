@@ -3,12 +3,17 @@ import test from 'node:test';
 import {
   ARENA_VIEWPORT,
   BASE_GAMEPLAY,
+  CROSS_PLATFORM_ARENA_VIEWPORT,
+  DESIGN_HEIGHT,
+  DESIGN_WIDTH,
   getSkillDescriptor,
   isTouchDeviceDetected,
+  MOBILE_ARENA_VIEWPORT,
   normalizeCrateSpawnInterval,
   parseCustomIntervalInput,
   parseCustomScoreInput,
   POWERUP_CONFIG,
+  resolveOnlineArenaViewport,
   stepCrateSpawnInterval,
   stepWinningScore,
 } from '../src/game/config/constants';
@@ -19,7 +24,7 @@ import {
   peerIdFromRoomCode,
 } from '../src/game/network/roomCode';
 import { computeVectorStickInput } from '../src/game/systems/TouchSim';
-import { PRESET_MAZE_MAP, resolveMazeForRound } from '../src/game/maps/mapDefinitions';
+import { MAP_MODES, PRESET_MAZE_MAP, resolveMazeForRound } from '../src/game/maps/mapDefinitions';
 import { buildArenaLayout } from '../src/game/maps/MazeBuilder';
 import { PlayerManager } from '../src/game/managers/PlayerManager';
 import { SettingsManager } from '../src/game/managers/SettingsManager';
@@ -1820,6 +1825,304 @@ test('Crescent Reaper 4-Stage Simulation: Laser-Shaft stage (crescentScale=0) vs
     false,
   );
 });
+
+test('Removed 8x5 & 9x6 maps and added 22x13 Imperial Bastion + 24x14 Leviathan super-maps fitting PC & Mobile', () => {
+  const removedIds = ['classic_duel', 'crossfire_chambers', 'four_corners', 'procedural_classic'];
+  const allModeIds = MAP_MODES.map((m) => m.id as string);
+  for (const oldId of removedIds) {
+    assert.equal(allModeIds.includes(oldId), false, `Removed map ${oldId} should not remain in MAP_MODES`);
+    assert.equal(oldId in PRESET_MAZE_MAP, false, `Removed map ${oldId} should not remain in PRESET_MAZE_MAP`);
+  }
+
+  for (const m of MAP_MODES) {
+    if (m.id === 'mix') continue;
+    const g = resolveMazeForRound(m.id, 1, 4, 2027);
+    assert.ok(
+      g.cols * g.rows >= 60,
+      `Map ${m.id} (${g.cols}x${g.rows}) must be larger than removed 8x5 (40) & 9x6 (54) maps`,
+    );
+  }
+
+  // Verify the 2 new maps larger than the old 20x12 (240-cell) maximum
+  const bastion = resolveMazeForRound('imperial_bastion', 1, 4, 777);
+  assert.equal(bastion.cols, 22);
+  assert.equal(bastion.rows, 13);
+  assert.ok(bastion.cols * bastion.rows > 240, 'imperial_bastion (286 cells) must exceed 20x12 (240 cells)');
+  assert.equal(isMazeValidAndConnected(bastion), true);
+
+  const leviathan = resolveMazeForRound('procedural_leviathan', 1, 4, 777);
+  assert.equal(leviathan.cols, 24);
+  assert.equal(leviathan.rows, 14);
+  assert.ok(leviathan.cols * leviathan.rows > 240, 'procedural_leviathan (336 cells) must exceed 20x12 (240 cells)');
+  assert.equal(isMazeValidAndConnected(leviathan), true);
+
+  for (const superGrid of [bastion, leviathan]) {
+    for (const vp of [ARENA_VIEWPORT, MOBILE_ARENA_VIEWPORT]) {
+      const layout = buildArenaLayout(superGrid, 4, 777, vp);
+      assert.ok(layout.width <= vp.maxWidth, `${superGrid.id} width ${layout.width} > ${vp.maxWidth}`);
+      assert.ok(layout.height <= vp.maxHeight, `${superGrid.id} height ${layout.height} > ${vp.maxHeight}`);
+      assert.equal(layout.spawns.length, 4);
+    }
+  }
+});
+
+test('AI Behavior Tree upgrades: maze-path target selection, Shield wall discipline, TNT trap detonation, and Camper anti-freeze', () => {
+  // Build a 6x2 maze where row 0 and row 1 are separated by a long horizontal wall (cols 0..4), connected only at col 5!
+  const g = createEmptySolidGrid('ai_bt_maze', 'AI BT Maze', 6, 2, 1);
+  for (let r = 0; r < 2; r++) {
+    for (let c = 1; c < 6; c++) {
+      g.vWalls[r][c] = false; // Open horizontal corridors on row 0 and row 1
+    }
+  }
+  g.hWalls[1][5] = false; // Only doorway between row 0 and row 1 is at far-East col 5!
+  const arena = buildArenaLayout(g, 3, 1);
+
+  const cellCenter = (col: number, row: number) => ({
+    x: arena.originX + (col + 0.5) * arena.cellSize,
+    y: arena.originY + (row + 0.5) * arena.cellSize,
+  });
+
+  // Bot at (0, 0) facing East (angle 0)
+  const botPos = cellCenter(0, 0);
+  const bot: TankKinematics = {
+    index: 0,
+    x: botPos.x,
+    y: botPos.y,
+    vx: 0,
+    vy: 0,
+    angle: 0,
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+
+  // Enemy 1 at (0, 1): Euclidean distance is tiny (1 cell South), but separated by solid wall (11 maze steps around col 5)!
+  const walledPos = cellCenter(0, 1);
+  const walledEnemy: TankKinematics = {
+    index: 1,
+    x: walledPos.x,
+    y: walledPos.y,
+    vx: 0,
+    vy: 0,
+    angle: 0,
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+
+  // Enemy 2 at (2, 0): 2 cells East in open corridor!
+  const openPos = cellCenter(2, 0);
+  const openEnemy: TankKinematics = {
+    index: 2,
+    x: openPos.x,
+    y: openPos.y,
+    vx: 0,
+    vy: 0,
+    angle: Math.PI,
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+
+  // 1. Shield wall-occlusion discipline: Walled enemy 1 cell away across a solid wall must NOT waste Aegis Shield!
+  const shieldThroughWall = computeBotDecision(
+    {
+      difficulty: 'super_hard',
+      dt: 1 / 60,
+      self: bot,
+      selfSkill: 'shield',
+      selfSkillAmmo: 1,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [bot, walledEnemy],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(11),
+  );
+  assert.equal(
+    shieldThroughWall.firePressed,
+    false,
+    'AI must NOT waste Aegis Shield when close enemy is completely blocked by a solid wall',
+  );
+
+  // 2. Maze-path target selection: Bot fires straight East at reachable openEnemy (col 2, row 0) instead of turning South toward walledEnemy!
+  const pathTargetDecision = computeBotDecision(
+    {
+      difficulty: 'hard',
+      dt: 1 / 60,
+      self: bot,
+      selfSkill: null,
+      selfSkillAmmo: 0,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [bot, walledEnemy, openEnemy],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(12),
+  );
+  assert.equal(pathTargetDecision.firePressed, true, 'Bot should fire immediately at reachable corridor enemy');
+
+  // 3. Camper anti-freeze: When only walledEnemy (11 steps away around col 5) exists, camper MUST drive East along row 0 instead of freezing!
+  const camperMove = computeBotDecision(
+    {
+      difficulty: 'hard',
+      tactic: 'camper',
+      dt: 1 / 60,
+      self: bot,
+      selfSkill: null,
+      selfSkillAmmo: 0,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: false,
+      tanks: [bot, walledEnemy],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(13),
+  );
+  assert.equal(
+    camperMove.forward,
+    true,
+    'Camper AI must navigate around long wall (>4 steps) instead of freezing behind solid wall',
+  );
+
+  // 4. TNT Barrel intelligence: Avoids self-blast & detonates TNT barrel trapping an enemy!
+  const barrelNearSelf = {
+    id: 1,
+    x: bot.x + arena.cellSize * 0.55,
+    y: bot.y,
+    radius: 12 * arena.scaleRatio,
+    blastRadius: arena.cellSize * 1.4,
+    active: true,
+    fuseRemainingSec: null,
+  };
+  const selfBlastTrace = traceBallisticShot(
+    bot.x + 20 * arena.scaleRatio,
+    bot.y,
+    0,
+    0,
+    [bot, openEnemy],
+    new Set(),
+    arena.walls,
+    1,
+    800,
+    4.5 * arena.scaleRatio,
+    0,
+    [barrelNearSelf],
+    true,
+  );
+  assert.equal(selfBlastTrace.selfHitRisk, true, 'Shooting a TNT barrel within own blast radius must flag selfHitRisk');
+
+  const farEnemyPos = cellCenter(4, 0);
+  const farEnemy: TankKinematics = {
+    ...openEnemy,
+    x: farEnemyPos.x,
+    y: farEnemyPos.y + arena.cellSize * 0.3, // Slightly off-axis from straight shot, but inside TNT blast radius!
+  };
+  const trapBarrel = {
+    id: 2,
+    x: farEnemyPos.x - arena.cellSize * 0.25,
+    y: bot.y,
+    radius: 12 * arena.scaleRatio,
+    blastRadius: arena.cellSize * 1.4,
+    active: true,
+    fuseRemainingSec: null,
+  };
+  const trapShotTrace = traceBallisticShot(
+    bot.x + 20 * arena.scaleRatio,
+    bot.y,
+    0,
+    0,
+    [bot, farEnemy],
+    new Set(),
+    arena.walls,
+    1,
+    900,
+    4.5 * arena.scaleRatio,
+    0,
+    [trapBarrel],
+    true,
+  );
+  assert.equal(trapShotTrace.hitsEnemy, true, 'Hard/Super Hard AI should recognize TNT barrel blast trapping nearby enemy');
+  assert.equal(trapShotTrace.selfHitRisk, false);
+});
+
+test('Online PC vs Mobile cross-platform sync: authoritative viewport clears BOTH Mobile joysticks/pills AND PC scoreboard with identical walls', () => {
+  assert.deepEqual(resolveOnlineArenaViewport(false, false), ARENA_VIEWPORT);
+  assert.deepEqual(resolveOnlineArenaViewport(true, true), MOBILE_ARENA_VIEWPORT);
+  assert.deepEqual(resolveOnlineArenaViewport(true, false), CROSS_PLATFORM_ARENA_VIEWPORT);
+  assert.deepEqual(resolveOnlineArenaViewport(false, true), CROSS_PLATFORM_ARENA_VIEWPORT);
+
+  for (const mode of MAP_MODES) {
+    const hostGrid = resolveMazeForRound(mode.id, 2, 2, 98765);
+    const crossVp = resolveOnlineArenaViewport(true, false);
+
+    // Host (Mobile) and Guest (PC) build layout from Host's authoritative grid & viewport
+    const mobileHostLayout = buildArenaLayout(hostGrid, 2, 98765, crossVp);
+    const pcGuestLayout = buildArenaLayout(
+      JSON.parse(JSON.stringify(hostGrid)),
+      2,
+      98765,
+      { ...crossVp },
+    );
+
+    // 1. Pixel-for-pixel identical origin, cellSize, walls, and spawns between Mobile and PC!
+    assert.equal(mobileHostLayout.originX, pcGuestLayout.originX);
+    assert.equal(mobileHostLayout.originY, pcGuestLayout.originY);
+    assert.equal(mobileHostLayout.cellSize, pcGuestLayout.cellSize);
+    assert.deepEqual(mobileHostLayout.walls, pcGuestLayout.walls);
+    assert.deepEqual(mobileHostLayout.spawns, pcGuestLayout.spawns);
+
+    // 2. Clears Mobile top compact score pills (`y >= 76`) AND Mobile left/right thumb gutters (`x: 212..1068`)
+    assert.ok(
+      mobileHostLayout.originX >= (DESIGN_WIDTH - MOBILE_ARENA_VIEWPORT.maxWidth) / 2,
+      `${mode.id} intruded into Mobile left thumb gutter: originX=${mobileHostLayout.originX}`,
+    );
+    assert.ok(
+      mobileHostLayout.originX + mobileHostLayout.width <=
+        DESIGN_WIDTH - (DESIGN_WIDTH - MOBILE_ARENA_VIEWPORT.maxWidth) / 2,
+      `${mode.id} intruded into Mobile right thumb gutter`,
+    );
+    assert.ok(
+      mobileHostLayout.originY >= MOBILE_ARENA_VIEWPORT.topBarHeight,
+      `${mode.id} overlapped Mobile top score pills: originY=${mobileHostLayout.originY}`,
+    );
+
+    // 3. Clears PC bottom scoreboard plaques (`y <= DESIGN_HEIGHT - ARENA_VIEWPORT.bottomBarHeight = 648`)!
+    const pcScoreboardTopY = DESIGN_HEIGHT - ARENA_VIEWPORT.bottomBarHeight;
+    assert.ok(
+      pcGuestLayout.originY + pcGuestLayout.height <= pcScoreboardTopY,
+      `${mode.id} bottom (${pcGuestLayout.originY + pcGuestLayout.height}) overlapped PC scoreboard (${pcScoreboardTopY})`,
+    );
+  }
+});
+
+
 
 
 

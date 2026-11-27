@@ -11,6 +11,7 @@ import {
   normalizeWinningScore,
   TANK_PALETTES,
 } from '../config/constants';
+import { VALID_MAP_MODE_IDS } from '../maps/mapDefinitions';
 import type {
   AIDifficulty,
   AITacticId,
@@ -407,7 +408,7 @@ export class SettingsManager {
       if (typeof parsed.winningScore === 'number' && parsed.winningScore >= 0 && parsed.winningScore <= 999) {
         merged.winningScore = normalizeWinningScore(parsed.winningScore);
       }
-      if (typeof parsed.mapMode === 'string') {
+      if (typeof parsed.mapMode === 'string' && VALID_MAP_MODE_IDS.has(parsed.mapMode as MapModeId)) {
         merged.mapMode = parsed.mapMode as MapModeId;
       }
       if (typeof parsed.battleMode === 'string' && VALID_BATTLE_MODES.has(parsed.battleMode as BattleModeId)) {

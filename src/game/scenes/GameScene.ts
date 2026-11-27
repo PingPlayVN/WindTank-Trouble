@@ -5,6 +5,7 @@ import {
   getSkillDescriptor,
   MOBILE_ARENA_VIEWPORT,
   POWERUP_CONFIG,
+  resolveOnlineArenaViewport,
   UI_COLORS,
 } from '../config/constants';
 import { Tank } from '../entities/Tank';
@@ -213,15 +214,41 @@ export class GameScene extends Phaser.Scene {
     const mapMode = this.onlineConfig ? this.onlineConfig.mapMode : s.mapMode;
     const effectiveCount = (this.onlineConfig ? 2 : s.playerCount) as 2 | 3 | 4;
 
-    let mazeGrid = resolveMazeForRound(mapMode, roundNumber, effectiveCount, roundSeed);
-    if (!isMazeValidAndConnected(mazeGrid)) {
-      mazeGrid = resolveMazeForRound('procedural_classic', roundNumber, effectiveCount, roundSeed ^ 7);
+    let mazeGrid: ReturnType<typeof resolveMazeForRound>;
+    if (
+      this.onlineConfig &&
+      this.onlineConfig.authoritativeGrid &&
+      this.onlineConfig.authoritativeRound === roundNumber
+    ) {
+      mazeGrid = {
+        ...this.onlineConfig.authoritativeGrid,
+        hWalls: this.onlineConfig.authoritativeGrid.hWalls.map((row) => row.slice()),
+        vWalls: this.onlineConfig.authoritativeGrid.vWalls.map((row) => row.slice()),
+      };
+    } else {
+      mazeGrid = resolveMazeForRound(mapMode, roundNumber, effectiveCount, roundSeed);
+      if (!isMazeValidAndConnected(mazeGrid)) {
+        mazeGrid = resolveMazeForRound('procedural_large', roundNumber, effectiveCount, roundSeed ^ 7);
+      }
+      if (this.onlineConfig && this.networkRole === 'host') {
+        this.onlineConfig.authoritativeRound = roundNumber;
+        this.onlineConfig.authoritativeGrid = {
+          ...mazeGrid,
+          hWalls: mazeGrid.hWalls.map((row) => row.slice()),
+          vWalls: mazeGrid.vWalls.map((row) => row.slice()),
+        };
+      }
     }
 
-    const useMobileViewport = this.onlineConfig
-      ? this.onlineConfig.useMobileViewport
-      : settingsManager.isTouchControlsActive();
-    const viewport = useMobileViewport ? MOBILE_ARENA_VIEWPORT : ARENA_VIEWPORT;
+    const viewport = this.onlineConfig
+      ? (this.onlineConfig.authoritativeViewport ??
+        resolveOnlineArenaViewport(
+          Boolean(this.onlineConfig.hostTouchActive ?? this.onlineConfig.useMobileViewport),
+          Boolean(this.onlineConfig.guestTouchActive ?? this.onlineConfig.useMobileViewport),
+        ))
+      : settingsManager.isTouchControlsActive()
+        ? MOBILE_ARENA_VIEWPORT
+        : ARENA_VIEWPORT;
 
     this.arena = buildArenaLayout(mazeGrid, this.activePlayers.length, roundSeed, viewport);
     this.drawArenaEnvironment();
@@ -338,11 +365,28 @@ export class GameScene extends Phaser.Scene {
           ? this.onlineConfig.powerUpSpawnIntervalSec
           : settingsManager.getSettings().powerUpSpawnIntervalSec;
         this.matchCrateTimerSec = rem > 0 ? rem : Math.max(1, fallbackSec || 20);
-        if (this.networkRole === 'host') {
+        if (this.networkRole === 'host' && this.onlineConfig) {
+          const nextRound = this.scoreManager.getRoundNumber();
+          const nextGrid = peerMultiplayer.buildAuthoritativeRoundGrid(
+            this.onlineConfig.mapMode,
+            nextRound,
+            this.matchBaseSeed,
+          );
+          const nextViewport =
+            this.onlineConfig.authoritativeViewport ??
+            resolveOnlineArenaViewport(
+              Boolean(this.onlineConfig.hostTouchActive),
+              Boolean(this.onlineConfig.guestTouchActive),
+            );
+          this.onlineConfig.authoritativeRound = nextRound;
+          this.onlineConfig.authoritativeGrid = nextGrid;
+          this.onlineConfig.authoritativeViewport = { ...nextViewport };
           peerMultiplayer.sendEvent({
             kind: 'advance_round',
-            roundNumber: this.scoreManager.getRoundNumber(),
+            roundNumber: nextRound,
             crateTimerSec: this.matchCrateTimerSec,
+            grid: nextGrid,
+            viewport: { ...nextViewport },
           });
         }
         this.scene.restart({
@@ -381,7 +425,28 @@ export class GameScene extends Phaser.Scene {
 
     this.registerDiagnostics();
 
+    if (this.networkRole === 'host') {
+      peerMultiplayer.setHostArenaSyncResponder((requestedRound) => {
+        if (requestedRound !== this.scoreManager.getRoundNumber() || !this.arena) return;
+        const vp = this.onlineConfig?.authoritativeViewport ?? {
+          maxWidth: this.arena.width + 24,
+          maxHeight: this.arena.height + 20,
+          centerX: Math.round(this.arena.originX + this.arena.width / 2),
+          centerY: Math.round(this.arena.originY + this.arena.height / 2),
+        };
+        peerMultiplayer.sendEvent({
+          kind: 'arena_resync',
+          roundNumber: this.scoreManager.getRoundNumber(),
+          grid: this.arena.grid,
+          viewport: vp,
+        });
+      });
+    }
+
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      if (this.networkRole === 'host') {
+        peerMultiplayer.setHostArenaSyncResponder(null);
+      }
       this.cleanupSceneResources();
     });
   }
@@ -589,6 +654,7 @@ export class GameScene extends Phaser.Scene {
             this.arena,
             this.projectileSystem,
             this.powerUpSystem,
+            this.tntBarrelSystem.getBarrelStates(),
           );
         }
         if (dualOppositeTouch && (t.index === 0 || t.index === 1)) {
@@ -860,6 +926,7 @@ export class GameScene extends Phaser.Scene {
 
     peerMultiplayer.sendWorldSnapshot({
       roundNumber: this.scoreManager.getRoundNumber(),
+      arenaKey: `${this.arena.grid.cols}x${this.arena.grid.rows}@${this.arena.originX},${this.arena.originY},${this.arena.cellSize}`,
       phase: this.matchSystem.getPhase(),
       scores: [this.scoreManager.getScore(0), this.scoreManager.getScore(1)],
       ties: this.scoreManager.getTies(),
@@ -932,6 +999,13 @@ export class GameScene extends Phaser.Scene {
           onlineMatch: this.onlineConfig ?? undefined,
         });
         return;
+      }
+
+      if (snap.arenaKey) {
+        const localKey = `${this.arena.grid.cols}x${this.arena.grid.rows}@${this.arena.originX},${this.arena.originY},${this.arena.cellSize}`;
+        if (snap.arenaKey !== localKey) {
+          peerMultiplayer.requestArenaSyncFromHost(snap.roundNumber);
+        }
       }
 
       this.guestRoundPhase = snap.phase;
@@ -1125,11 +1199,40 @@ export class GameScene extends Phaser.Scene {
           this.scoreManager.advanceToNextRound();
         }
         this.matchCrateTimerSec = ev.crateTimerSec;
+        if (this.onlineConfig) {
+          if (ev.grid) {
+            this.onlineConfig.authoritativeRound = ev.roundNumber;
+            this.onlineConfig.authoritativeGrid = ev.grid;
+          }
+          if (ev.viewport) {
+            this.onlineConfig.authoritativeViewport = ev.viewport;
+          }
+        }
         this.scene.restart({
           freshMatch: false,
           onlineMatch: this.onlineConfig ?? undefined,
         });
         return true;
+
+      case 'arena_resync': {
+        const curLocalKey = `${this.arena.grid.cols}x${this.arena.grid.rows}@${this.arena.originX},${this.arena.originY},${this.arena.cellSize}`;
+        const syncedLayout = buildArenaLayout(ev.grid, 2, this.currentRoundSeed, ev.viewport);
+        const syncedKey = `${syncedLayout.grid.cols}x${syncedLayout.grid.rows}@${syncedLayout.originX},${syncedLayout.originY},${syncedLayout.cellSize}`;
+        if (curLocalKey === syncedKey) return false;
+        while (this.scoreManager.getRoundNumber() < ev.roundNumber) {
+          this.scoreManager.advanceToNextRound();
+        }
+        if (this.onlineConfig) {
+          this.onlineConfig.authoritativeRound = ev.roundNumber;
+          this.onlineConfig.authoritativeGrid = ev.grid;
+          this.onlineConfig.authoritativeViewport = ev.viewport;
+        }
+        this.scene.restart({
+          freshMatch: false,
+          onlineMatch: this.onlineConfig ?? undefined,
+        });
+        return true;
+      }
 
       case 'match_victory':
         this.guestRoundPhase = 'match_over';
@@ -1189,6 +1292,10 @@ export class GameScene extends Phaser.Scene {
     if (this.networkRole === 'host') {
       peerMultiplayer.syncHostSettingsFromManager();
       if (this.onlineConfig) {
+        this.onlineConfig.mapMode = s.mapMode;
+        this.onlineConfig.battleMode = s.battleMode;
+        this.onlineConfig.maxArmorHp = s.maxArmorHp;
+        this.onlineConfig.tntBarrelsOption = s.tntBarrelsOption;
         this.onlineConfig.winningScore = s.winningScore;
         this.onlineConfig.powerUpSpawnIntervalSec = s.powerUpSpawnIntervalSec;
         this.onlineConfig.maxCratesOnFloor = s.maxCratesOnFloor;

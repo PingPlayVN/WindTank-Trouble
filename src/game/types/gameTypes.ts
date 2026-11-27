@@ -57,19 +57,17 @@ export interface PlayerInputState {
 
 export type MapModeId =
   | 'mix'
-  | 'procedural_classic'
   | 'procedural_large'
   | 'procedural_mega'
   | 'procedural_colossal'
   | 'procedural_titan'
-  | 'classic_duel'
-  | 'crossfire_chambers'
-  | 'four_corners'
+  | 'procedural_leviathan'
   | 'ricochet_alley'
   | 'twin_courtyards'
   | 'grand_labyrinth'
   | 'citadel_wargrounds'
-  | 'titan_stronghold';
+  | 'titan_stronghold'
+  | 'imperial_bastion';
 
 export type SkillId =
   | 'laser'

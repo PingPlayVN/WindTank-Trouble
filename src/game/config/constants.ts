@@ -33,6 +33,34 @@ export const MOBILE_ARENA_VIEWPORT = {
   centerY: 414,
 } as const;
 
+/**
+ * Shared Online Cross-Platform Viewport when one player is on PC and the other is on Mobile:
+ * - Horizontally (`maxWidth: 856`, `x: 212..1068`) preserves Mobile's left/right thumb joystick gutters!
+ * - Vertically (`maxHeight: 536`, `centerY: 368`, `y: 100..636`) clears BOTH Mobile's top compact score
+ *   pills (`y: 0..76`) AND PC's bottom full scoreboard plaques (`y: 648..760`) with zero overlap!
+ */
+export const CROSS_PLATFORM_ARENA_VIEWPORT = {
+  topBarHeight: 88,
+  bottomBarHeight: 116,
+  maxWidth: 856,
+  maxHeight: 536,
+  centerX: DESIGN_WIDTH / 2,
+  centerY: 368,
+} as const;
+
+export function resolveOnlineArenaViewport(
+  hostTouchActive: boolean,
+  guestTouchActive: boolean,
+): { readonly maxWidth: number; readonly maxHeight: number; readonly centerX: number; readonly centerY: number } {
+  if (hostTouchActive && guestTouchActive) {
+    return MOBILE_ARENA_VIEWPORT;
+  }
+  if (!hostTouchActive && !guestTouchActive) {
+    return ARENA_VIEWPORT;
+  }
+  return CROSS_PLATFORM_ARENA_VIEWPORT;
+}
+
 export interface DeviceDetectProbe {
   search?: string;
   userAgent?: string;
