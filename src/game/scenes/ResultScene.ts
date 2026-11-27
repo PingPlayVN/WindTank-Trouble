@@ -7,14 +7,17 @@ import {
   UI_COLORS,
 } from '../config/constants';
 import { audioManager } from '../managers/AudioManager';
+import { mobileOrientationManager } from '../managers/MobileOrientationManager';
 import { peerMultiplayer } from '../network/PeerMultiplayerManager';
 import type { PlayerConfig, RoundResultSummary } from '../types/gameTypes';
 import {
   animateModalOpen,
   animateStaggeredEntrance,
   createArcadeButton,
+  createModalScrim,
   drawMazeBackdrop,
 } from '../../ui/components/ArcadeWidgets';
+import { createMobileFullscreenControls } from '../../ui/components/FullscreenPromptWidget';
 
 interface ResultSceneData {
   summary: RoundResultSummary;
@@ -37,7 +40,12 @@ export class ResultScene extends Phaser.Scene {
   }
 
   create(): void {
+    mobileOrientationManager.syncLayout();
     drawMazeBackdrop(this, DESIGN_WIDTH, DESIGN_HEIGHT);
+    const fsControls = createMobileFullscreenControls(this, {
+      buttonY: 40,
+      showRecommendationBanner: false,
+    });
 
     const isOnline = peerMultiplayer.isOnlineSession();
     const isGuest = peerMultiplayer.getRole() === 'guest';
@@ -59,8 +67,7 @@ export class ResultScene extends Phaser.Scene {
       tint: [winnerPalette.primary, winnerPalette.highlight, 0xffd54f, 0x43a047, 0x1e88e5],
     });
 
-    const backdropAlpha = this.add
-      .rectangle(DESIGN_WIDTH / 2, DESIGN_HEIGHT / 2, DESIGN_WIDTH, DESIGN_HEIGHT, 0x000000, 0.01);
+    const backdropAlpha = createModalScrim(this, 0x000000, 0.01);
     const contentRoot = this.add.container(0, 0);
 
     const panelW = 690;
@@ -213,12 +220,13 @@ export class ResultScene extends Phaser.Scene {
       this.scene.start('GameScene', { freshMatch: true });
     };
 
+    // Symmetrically aligned with the 530px leaderboard rows (`264 + 22 + 244 = 530px`)
     const rematchBtn = createArcadeButton(this, {
-      x: px - 135,
+      x: px - 133,
       y: py + panelH / 2 - 34,
-      width: 256,
+      width: 264,
       height: 48,
-      label: isGuest ? 'CHỜ CHỦ PHÒNG ĐẤU LẠI…' : 'ĐẤU LẠI NGAY (ENTER)',
+      label: isGuest ? 'CHỜ CHỦ PHÒNG ĐẤU LẠI…' : '▶ ĐẤU LẠI NGAY (ENTER)',
       fontSize: 15,
       fillColor: isGuest ? 0x90a4ae : 0x43a047,
       hoverColor: isGuest ? 0x90a4ae : 0x4caf50,
@@ -227,11 +235,11 @@ export class ResultScene extends Phaser.Scene {
     });
 
     const menuBtn = createArcadeButton(this, {
-      x: px + 148,
+      x: px + 143,
       y: py + panelH / 2 - 34,
-      width: 224,
+      width: 244,
       height: 48,
-      label: isOnline ? 'RỜI PHÒNG ONLINE' : 'VỀ TRANG CHỦ',
+      label: isOnline ? '← RỜI PHÒNG ONLINE' : '← VỀ TRANG CHỦ',
       fontSize: 15.5,
       fillColor: UI_COLORS.cardBg,
       onClick: () => {
@@ -261,6 +269,7 @@ export class ResultScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener('keydown', this.onKeyDownBound);
+      fsControls.destroy();
       confetti.destroy();
     });
   }

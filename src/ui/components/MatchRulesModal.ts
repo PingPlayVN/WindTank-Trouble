@@ -22,6 +22,7 @@ import type { PlayerIndex, SkillId } from '../../game/types/gameTypes';
 import {
   animateModalOpen,
   createArcadeButton,
+  createModalScrim,
   createScoreStepper,
   type ArcadeButtonHandle,
   type ScoreStepperHandle,
@@ -108,9 +109,7 @@ export class MatchRulesModal {
   }
 
   private build(): void {
-    const scrim = this.scene.add
-      .rectangle(DESIGN_WIDTH / 2, DESIGN_HEIGHT / 2, DESIGN_WIDTH, DESIGN_HEIGHT, 0x101216, 0.62)
-      .setInteractive();
+    const scrim = createModalScrim(this.scene, 0x101216, 0.62);
 
     const panelW = 1020;
     const panelH = 686;
@@ -668,7 +667,7 @@ export class MatchRulesModal {
 
   private buildSkillsToggleMatrix(centerX: number, topY: number): void {
     const hdr = this.scene.add
-      .text(centerX - 476, topY + 6, 'BỘ 10 KỸ NĂNG RƠI TRONG THÙNG GỖ (BẤM ĐỂ BẬT / TẮT):', {
+      .text(centerX - 476, topY + 6, 'BỘ 15 KỸ NĂNG RƠI TRONG THÙNG GỖ (BẤM ĐỂ BẬT / TẮT):', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: '13.5px',
         fontStyle: '900',
@@ -718,12 +717,12 @@ export class MatchRulesModal {
 
     const cols = 5;
     const chipW = 182;
-    const chipH = 88;
+    const chipH = 58;
     const gapX = 11;
-    const gapY = 10;
+    const gapY = 7;
     const gridW = cols * chipW + (cols - 1) * gapX;
     const startX = centerX - gridW / 2 + chipW / 2;
-    const startY = topY + 72;
+    const startY = topY + 53;
 
     SKILL_DESCRIPTORS.forEach((desc, idx) => {
       const col = idx % cols;
@@ -732,29 +731,29 @@ export class MatchRulesModal {
       const cy = startY + row * (chipH + gapY);
 
       const bg = this.scene.add.graphics();
-      const icon = this.scene.add.image(cx - 58, cy - 8, `skill_emblem_${desc.id}`).setScale(0.72);
+      const icon = this.scene.add.image(cx - 64, cy - 8, `skill_emblem_${desc.id}`).setScale(0.56);
       const nameTxt = this.scene.add
-        .text(cx - 26, cy - 18, desc.hudShort, {
+        .text(cx - 40, cy - 14, desc.hudShort, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '12.5px',
+          fontSize: '11.8px',
           fontStyle: '900',
           color: UI_COLORS.inkDarkHex,
         })
         .setOrigin(0, 0.5);
 
       const weightTxt = this.scene.add
-        .text(cx - 26, cy + 2, `Tỉ lệ gốc: ${desc.dropPercent}%`, {
+        .text(cx - 40, cy + 1, `Tỉ lệ: ${desc.dropPercent}%`, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '11px',
+          fontSize: '10.2px',
           fontStyle: '700',
           color: UI_COLORS.inkMutedHex,
         })
         .setOrigin(0, 0.5);
 
       const badge = this.scene.add
-        .text(cx, cy + 28, '✓ ĐANG BẬT', {
+        .text(cx, cy + 20, '✓ ĐANG BẬT', {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '11.5px',
+          fontSize: '10.5px',
           fontStyle: '900',
           color: '#1B5E20',
         })
@@ -896,7 +895,7 @@ export class MatchRulesModal {
 
     const enabledSet = new Set<SkillId>(s.enabledSkills);
     const chipW = 182;
-    const chipH = 88;
+    const chipH = 58;
 
     for (const id of ALL_SKILL_IDS) {
       const chip = this.skillChips.get(id);
@@ -906,16 +905,16 @@ export class MatchRulesModal {
 
       chip.bg.clear();
       chip.bg.fillStyle(on ? 0xffffff : 0xe9ecef, 1);
-      chip.bg.fillRoundedRect(chip.cx - chipW / 2, chip.cy - chipH / 2, chipW, chipH, 10);
+      chip.bg.fillRoundedRect(chip.cx - chipW / 2, chip.cy - chipH / 2, chipW, chipH, 8);
       chip.bg.fillStyle(on ? desc.accentColor : 0x9aa0a8, on ? 0.16 : 0.14);
-      chip.bg.fillRoundedRect(chip.cx - chipW / 2, chip.cy + chipH / 2 - 25, chipW, 25, {
+      chip.bg.fillRoundedRect(chip.cx - chipW / 2, chip.cy + chipH / 2 - 18, chipW, 18, {
         tl: 0,
         tr: 0,
-        bl: 10,
-        br: 10,
+        bl: 8,
+        br: 8,
       });
-      chip.bg.lineStyle(on ? 2.4 : 1.6, on ? desc.accentColor : 0xb0b5bd, 1);
-      chip.bg.strokeRoundedRect(chip.cx - chipW / 2, chip.cy - chipH / 2, chipW, chipH, 10);
+      chip.bg.lineStyle(on ? 2.2 : 1.5, on ? desc.accentColor : 0xb0b5bd, 1);
+      chip.bg.strokeRoundedRect(chip.cx - chipW / 2, chip.cy - chipH / 2, chipW, chipH, 8);
 
       chip.badge
         .setText(on ? '✓ ĐANG BẬT' : '✕ ĐÃ TẮT')

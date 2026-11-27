@@ -146,20 +146,31 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
       ({ x, y }) => {
         const canvas = document.querySelector('canvas')!;
         const rect = canvas.getBoundingClientRect();
+        const orient = (
+          window as unknown as {
+            __WINDTANK_ORIENTATION__?: {
+              getState: () => { logicalWidth?: number; viewLeft?: number };
+            };
+          }
+        ).__WINDTANK_ORIENTATION__?.getState();
+        const logicalW = orient?.logicalWidth ?? 1280;
+        const viewLeft = orient?.viewLeft ?? 0;
+        const normX = (x - viewLeft) / logicalW;
+        const normY = y / 760;
         const isRotated = document.body.classList.contains('mobile-force-landscape');
         if (!isRotated) {
           return {
-            sx: rect.left + (x / 1280) * rect.width,
-            sy: rect.top + (y / 760) * rect.height,
+            sx: rect.left + normX * rect.width,
+            sy: rect.top + normY * rect.height,
           };
         }
-        // Forward +90deg clockwise mapping from (1280x760) design space to portrait screen!
+        // Forward +90deg clockwise mapping from widescreen world space to portrait screen!
         const cx = rect.left + rect.width * 0.5;
         const cy = rect.top + rect.height * 0.5;
         const unrotW = rect.height;
         const unrotH = rect.width;
-        const u = (x / 1280 - 0.5) * unrotW;
-        const v = (y / 760 - 0.5) * unrotH;
+        const u = (normX - 0.5) * unrotW;
+        const v = (normY - 0.5) * unrotH;
         return { sx: cx - v, sy: cy + u };
       },
       { x: dx, y: dy },
@@ -189,8 +200,8 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   expect(pcOrient.isMobileUi).toBe(false);
   expect(pcOrient.isCssPortraitRotated).toBe(false);
 
-  // Open SettingsModal on PC (`CÀI ĐẶT & ĐỔI PHÍM` at x=765, y=584) -> verify ONLY Keyboard Matrix is shown!
-  await clickDesignCoord(765, 584);
+  // Open SettingsModal on PC (`⚙ CÀI ĐẶT & ĐỔI PHÍM` centered at x=640, y=598) -> verify ONLY Keyboard Matrix is shown!
+  await clickDesignCoord(640, 598);
   await page.waitForTimeout(220);
   await page.screenshot({ path: path.join(SHOT_DIR, '00b-pc-settings-only-keyboard-keys.png') });
   await page.keyboard.press('Escape');
@@ -598,12 +609,21 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   });
   expect(dismissedPrompt).toBe(true);
 
-  // Enter Fullscreen via `⛶ FULL MÀN HÌNH` button click, assert `document.fullscreenElement` is active, then click again to exit cleanly!
-  await clickDesignCoord(1184, 40, mobilePage);
+  // Enter Fullscreen via `⛶ FULL MÀN HÌNH` button click (`viewRight - 92`), assert `document.fullscreenElement` is active, then click again to exit cleanly!
+  const getMobileFsBtnX = () =>
+    mobilePage.evaluate(() => {
+      const o = (
+        window as unknown as {
+          __WINDTANK_ORIENTATION__: { getState: () => { viewRight: number } };
+        }
+      ).__WINDTANK_ORIENTATION__;
+      return o.getState().viewRight - 92;
+    });
+  await clickDesignCoord(await getMobileFsBtnX(), 40, mobilePage);
   await mobilePage.waitForFunction(() => Boolean(document.fullscreenElement), null, {
     timeout: 5000,
   });
-  await clickDesignCoord(1184, 40, mobilePage);
+  await clickDesignCoord(await getMobileFsBtnX(), 40, mobilePage);
   await mobilePage.evaluate(async () => {
     if (document.fullscreenElement) {
       await document.exitFullscreen().catch(() => {});
@@ -628,14 +648,14 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   await mobilePage.setViewportSize({ width: 844, height: 390 });
   await mobilePage.waitForTimeout(180);
 
-  // Ensure P2 is Human (not AI) in SetupScene; if P2 was AI from shared storage, click P2 toggle at (496, 352)
+  // Ensure P2 is Human (not AI) in SetupScene; if P2 was AI from shared storage, click P2 toggle on wide Mobile Card 2 (`x=874, y=334`)
   const p2WasAI = await mobilePage.evaluate(() => {
     const raw = window.localStorage.getItem('windtank_settings_v1');
     const parsed = raw ? JSON.parse(raw) : null;
     return Boolean(parsed?.playerIsAI?.[1]);
   });
   if (p2WasAI) {
-    await clickDesignCoord(496, 352, mobilePage);
+    await clickDesignCoord(874, 334, mobilePage);
     await mobilePage.waitForTimeout(120);
   }
   await mobilePage.screenshot({
@@ -783,25 +803,28 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
       }
     ).__PHASER_TOUCH_CONTROLS__;
 
-    // 1. Follow-Touch mode: touching at (156, 286) moves joystick center right to (156, 286)!
+    const rest = tc.getGeometry().stickRest;
+    const touchX = rest.x + 42;
+    const touchY = 286;
+
+    // 1. Follow-Touch mode: touching at (touchX, 286) moves joystick center right to (touchX, 286)!
     tc.setFloatingStick(true);
-    tc.simulateTouchDown(156, 286, 977);
+    tc.simulateTouchDown(touchX, touchY, 977);
     const floatingBase = tc.getGeometry().stickActiveBase;
     tc.simulateTouchUp(977);
 
-    // 2. Fixed mode: touching at (156, 286) keeps joystick center locked at rest (106, 214)!
+    // 2. Fixed mode: touching at (touchX, 286) keeps joystick center locked at rest!
     tc.setFloatingStick(false);
-    tc.simulateTouchDown(156, 286, 978);
+    tc.simulateTouchDown(touchX, touchY, 978);
     const fixedBase = tc.getGeometry().stickActiveBase;
-    const rest = tc.getGeometry().stickRest;
     tc.simulateTouchUp(978);
     tc.setFloatingStick(true);
 
-    return { floatingBase, fixedBase, rest };
+    return { floatingBase, fixedBase, rest, touchX, touchY };
   });
   expect(anchorCheck.floatingBase.active).toBe(true);
-  expect(anchorCheck.floatingBase.x).toBe(156);
-  expect(anchorCheck.floatingBase.y).toBe(286);
+  expect(anchorCheck.floatingBase.x).toBe(anchorCheck.touchX);
+  expect(anchorCheck.floatingBase.y).toBe(anchorCheck.touchY);
   expect(anchorCheck.fixedBase.active).toBe(true);
   expect(anchorCheck.fixedBase.x).toBe(anchorCheck.rest.x);
   expect(anchorCheck.fixedBase.y).toBe(anchorCheck.rest.y);

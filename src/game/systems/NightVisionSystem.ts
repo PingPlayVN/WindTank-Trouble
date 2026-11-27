@@ -7,7 +7,13 @@ import {
   coalesceProjectileLightSources,
   type TntBarrelState,
 } from './BattleModeSim';
-import { computeReaperBlades, type MysteryCrateState } from './PowerUpSim';
+import {
+  computeReaperBlades,
+  type CryoZoneState,
+  type EnergyBarrierState,
+  type MysteryCrateState,
+  type WarpBeaconState,
+} from './PowerUpSim';
 import type {
   BuiltArenaLayout,
   ProjectileKinematics,
@@ -197,6 +203,24 @@ function getFlarePalette(variant: ProjectileVariant): FlarePalette {
         glintHex: 0xff8a65,
         trailRgb: '240, 104, 60',
         radiusCells: variant === 'spike_ball' ? 2.75 : 1.85,
+      };
+    case 'emp_orb':
+      return {
+        coreRgb: '224, 247, 255',
+        midRgb: '112, 82, 255',
+        edgeRgb: '34, 16, 86',
+        glintHex: 0x00e5ff,
+        trailRgb: '101, 31, 255',
+        radiusCells: 2.9,
+      };
+    case 'cryo_orb':
+      return {
+        coreRgb: '232, 252, 255',
+        midRgb: '64, 212, 238',
+        edgeRgb: '12, 54, 72',
+        glintHex: 0x84ffff,
+        trailRgb: '0, 229, 255',
+        radiusCells: 2.65,
       };
     default:
       // Standard Tank Shell -> Soft Warm Magnesium Signal Flare (`Đạn Pháo Sáng Dịu Mắt`)
@@ -418,6 +442,11 @@ export class NightVisionSystem {
     crates: readonly MysteryCrateState[],
     barrels: readonly TntBarrelState[],
     allTanks: readonly Tank[] = viewerTanks,
+    extraWorldGlows?: {
+      cryoZones: readonly CryoZoneState[];
+      barriers: readonly EnergyBarrierState[];
+      warpBeacons: readonly WarpBeaconState[];
+    },
   ): void {
     if (!this.enabled) {
       if (this.lightmapImage.visible) {
@@ -784,6 +813,52 @@ export class NightVisionSystem {
         '80, 16, 4',
         fuseFlicker,
       );
+    }
+
+    // 2D-2. Emissive Night-Ops Glow for Cryo Ice Zones, Energy Force Barriers & Spatial Warp Beacons!
+    if (extraWorldGlows) {
+      for (const cz of extraWorldGlows.cryoZones) {
+        const fade = Math.min(1, Math.max(0.15, cz.duration - cz.age));
+        paintRadialLight(
+          cz.x,
+          cz.y,
+          cz.radius * 1.25,
+          '210, 250, 255',
+          '48, 192, 218',
+          '8, 42, 58',
+          0.36 * fade,
+        );
+      }
+
+      for (const wb of extraWorldGlows.warpBeacons) {
+        const pulse = 0.42 + 0.1 * Math.sin(this.pulseClock * 6 + wb.id);
+        paintRadialLight(
+          wb.x,
+          wb.y,
+          56 * scale,
+          '248, 210, 255',
+          '192, 64, 248',
+          '52, 12, 78',
+          pulse,
+        );
+      }
+
+      for (const eb of extraWorldGlows.barriers) {
+        const fade = Math.min(1, Math.max(0.2, eb.duration - eb.age));
+        for (const t of [0.15, 0.5, 0.85]) {
+          const px = eb.x0 + (eb.x1 - eb.x0) * t;
+          const py = eb.y0 + (eb.y1 - eb.y0) * t;
+          paintRadialLight(
+            px,
+            py,
+            46 * scale,
+            '210, 255, 228',
+            '24, 216, 118',
+            '6, 56, 28',
+            0.4 * fade,
+          );
+        }
+      }
     }
 
     // 2E. Transient Muzzle, Bounce, Dying Flare Ember & Explosion Flashes

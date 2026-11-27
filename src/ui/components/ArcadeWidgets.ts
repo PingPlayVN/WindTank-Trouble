@@ -9,6 +9,7 @@ import {
   UI_COLORS,
 } from '../../game/config/constants';
 import { audioManager } from '../../game/managers/AudioManager';
+import { mobileOrientationManager } from '../../game/managers/MobileOrientationManager';
 
 export interface ArcadeButtonOptions {
   x: number;
@@ -202,39 +203,59 @@ export function createArcadeButton(
 }
 
 /**
- * Draws a subtle architectural maze-blueprint background pattern so menu/setup/result
- * screens share Tank Trouble's crisp labyrinth identity without visual noise.
+ * Draws a subtle architectural maze-blueprint background pattern across the full active camera span
+ * (`[viewLeft .. viewRight]`) so widescreen mobile displays have zero letterbox seams.
  */
 export function drawMazeBackdrop(scene: Phaser.Scene, width: number, height: number): void {
-  scene.add.rectangle(width / 2, height / 2, width, height, UI_COLORS.menuBg);
+  const viewLeft = mobileOrientationManager.getViewLeft();
+  const viewRight = mobileOrientationManager.getViewRight();
+  const fullW = Math.max(width, viewRight - viewLeft);
+
+  scene.add.rectangle(width / 2, height / 2, fullW + 80, height + 40, UI_COLORS.menuBg);
 
   const g = scene.add.graphics();
   const step = 64;
+  const startGridX = Math.floor((viewLeft - step) / step) * step;
+  const endGridX = viewRight + step;
   g.lineStyle(1, 0xe1e3e0, 0.9);
-  for (let x = 0; x <= width; x += step) {
+  for (let x = startGridX; x <= endGridX; x += step) {
     g.lineBetween(x, 0, x, height);
   }
   for (let y = 0; y <= height; y += step) {
-    g.lineBetween(0, y, width, y);
+    g.lineBetween(startGridX, y, endGridX, y);
   }
 
-  // Faint architectural maze wall accents around outer frame edges
+  // Faint architectural maze wall accents anchored to actual left/right screen edges
   g.fillStyle(0xd8dad7, 0.65);
   const segments: Array<[number, number, number, number]> = [
-    [40, 48, 128, 8],
-    [40, 48, 8, 96],
-    [104, 136, 8, 80],
-    [width - 176, 56, 136, 8],
-    [width - 48, 56, 8, 112],
-    [width - 136, 160, 96, 8],
-    [48, height - 144, 8, 96],
-    [48, height - 56, 144, 8],
-    [width - 192, height - 56, 144, 8],
-    [width - 56, height - 152, 8, 104],
+    [viewLeft + 40, 48, 128, 8],
+    [viewLeft + 40, 48, 8, 96],
+    [viewLeft + 104, 136, 8, 80],
+    [viewRight - 176, 56, 136, 8],
+    [viewRight - 48, 56, 8, 112],
+    [viewRight - 136, 160, 96, 8],
+    [viewLeft + 48, height - 144, 8, 96],
+    [viewLeft + 48, height - 56, 144, 8],
+    [viewRight - 192, height - 56, 144, 8],
+    [viewRight - 56, height - 152, 8, 104],
   ];
   for (const [sx, sy, sw, sh] of segments) {
     g.fillRoundedRect(sx, sy, sw, sh, 2);
   }
+}
+
+/**
+ * Full-bleed interactive modal scrim spanning the entire widescreen mobile or PC viewport.
+ */
+export function createModalScrim(
+  scene: Phaser.Scene,
+  color: number,
+  alpha: number,
+): Phaser.GameObjects.Rectangle {
+  const scrimW = Math.max(DESIGN_WIDTH, mobileOrientationManager.getLogicalWidth()) + 80;
+  return scene.add
+    .rectangle(DESIGN_WIDTH / 2, DESIGN_HEIGHT / 2, scrimW, DESIGN_HEIGHT + 40, color, alpha)
+    .setInteractive();
 }
 
 /**

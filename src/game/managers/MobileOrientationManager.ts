@@ -1,6 +1,14 @@
 import Phaser from 'phaser';
-import { DESIGN_HEIGHT, DESIGN_WIDTH, isTouchDeviceDetected } from '../config/constants';
+import {
+  computeMobileLogicalWidth,
+  DESIGN_HEIGHT,
+  DESIGN_WIDTH,
+  isTouchDeviceDetected,
+  resolveLocalMobileArenaViewport,
+} from '../config/constants';
 import { settingsManager } from '../managers/SettingsManager';
+
+export { computeMobileLogicalWidth };
 
 export interface MobileViewportState {
   isMobileUi: boolean;
@@ -8,19 +16,25 @@ export interface MobileViewportState {
   isFullscreen: boolean;
   viewportWidth: number;
   viewportHeight: number;
+  logicalWidth: number;
+  viewLeft: number;
+  viewRight: number;
 }
 
 type FullscreenListener = (isFullscreen: boolean) => void;
 
 /**
  * Automatically detects Mobile vs PC, locks the page against mobile scroll/bounce/zoom,
- * manages Cross-Browser Fullscreen + Native Landscape Orientation Lock, and — whenever a mobile
- * player holds their phone vertically (`innerHeight > innerWidth`) — applies an instant, centered
- * `90deg` CSS landscape rotation to `#game-root` WITH exact live pointer-coordinate remapping!
+ * expands widescreen mobile canvases up to `1680×760` (centered around `DESIGN_WIDTH / 2 = 640`
+ * so zero gray letterbox sidebars appear on modern 19.5:9 / 20:9 phones), manages Cross-Browser
+ * Fullscreen + Native Landscape Orientation Lock, and — whenever a mobile player holds their phone
+ * vertically (`innerHeight > innerWidth`) — applies an instant, centered `90deg` CSS landscape
+ * rotation to `#game-root` WITH exact live pointer-coordinate remapping!
  */
 class MobileOrientationManager {
   private game: Phaser.Game | null = null;
   private cssRotated = false;
+  private logicalWidth = DESIGN_WIDTH;
   private expectedCssW = '';
   private expectedCssH = '';
   private attached = false;
@@ -45,7 +59,10 @@ class MobileOrientationManager {
         // Prevent Phaser ScaleManager's internal getBoundingClientRect() refresh from clobbering
         // canvas CSS dimensions when #game-root is rotated +90deg on portrait phones!
         game.scale?.on(Phaser.Scale.Events.RESIZE, () => this.enforceCanvasStyle());
-        game.events.on(Phaser.Core.Events.PRE_RENDER, () => this.enforceCanvasStyle());
+        game.events.on(Phaser.Core.Events.PRE_RENDER, () => {
+          this.enforceCanvasStyle();
+          this.ensureSceneCameraSizes();
+        });
       }
       this.syncLayout();
     };
@@ -189,6 +206,22 @@ class MobileOrientationManager {
     };
   }
 
+  getLogicalWidth(): number {
+    return this.logicalWidth;
+  }
+
+  getViewLeft(): number {
+    return -Math.round((this.logicalWidth - DESIGN_WIDTH) / 2);
+  }
+
+  getViewRight(): number {
+    return DESIGN_WIDTH + Math.round((this.logicalWidth - DESIGN_WIDTH) / 2);
+  }
+
+  getLocalMobileArenaViewport() {
+    return resolveLocalMobileArenaViewport(this.logicalWidth);
+  }
+
   getState(): MobileViewportState {
     const w = typeof window !== 'undefined' ? window.innerWidth : DESIGN_WIDTH;
     const h = typeof window !== 'undefined' ? window.innerHeight : DESIGN_HEIGHT;
@@ -198,6 +231,9 @@ class MobileOrientationManager {
       isFullscreen: this.isFullscreen(),
       viewportWidth: w,
       viewportHeight: h,
+      logicalWidth: this.logicalWidth,
+      viewLeft: this.getViewLeft(),
+      viewRight: this.getViewRight(),
     };
   }
 
@@ -227,17 +263,55 @@ class MobileOrientationManager {
       root.style.height = `${availH}px`;
     }
 
-    const fitScale = Math.min(availW / DESIGN_WIDTH, availH / DESIGN_HEIGHT);
-    const cssW = Math.max(1, Math.floor(DESIGN_WIDTH * fitScale));
+    const nextLogicalW = computeMobileLogicalWidth(availW, availH, isMobile);
+    const logicalWidthChanged = nextLogicalW !== this.logicalWidth;
+    this.logicalWidth = nextLogicalW;
+
+    const fitScale = Math.min(availW / this.logicalWidth, availH / DESIGN_HEIGHT);
+    const cssW = Math.max(1, Math.floor(this.logicalWidth * fitScale));
     const cssH = Math.max(1, Math.floor(DESIGN_HEIGHT * fitScale));
     this.expectedCssW = `${cssW}px`;
     this.expectedCssH = `${cssH}px`;
 
     if (this.game?.scale && this.game.isBooted) {
+      if (this.game.scale.width !== this.logicalWidth || this.game.scale.height !== DESIGN_HEIGHT) {
+        this.game.scale.resize(this.logicalWidth, DESIGN_HEIGHT);
+      }
       this.game.scale.setParentSize(availW, availH);
+      this.ensureSceneCameraSizes(logicalWidthChanged);
     }
 
     this.enforceCanvasStyle();
+  }
+
+  private ensureSceneCameraSizes(forceScrollSync = false): void {
+    if (!this.game?.scene) return;
+    const targetW = this.logicalWidth;
+    const baseScrollX = this.getViewLeft();
+    for (const sc of this.game.scene.scenes) {
+      const cam = sc.cameras?.main as
+        | (Phaser.Cameras.Scene2D.Camera & { __wtAppliedBaseScrollX?: number })
+        | undefined;
+      if (!cam) continue;
+
+      if (cam.width !== targetW || cam.height !== DESIGN_HEIGHT) {
+        cam.setSize(targetW, DESIGN_HEIGHT);
+      }
+
+      const needsInitialOrResizeSync =
+        forceScrollSync || cam.__wtAppliedBaseScrollX !== baseScrollX;
+      const isGameScene = sc.scene?.key === 'GameScene';
+
+      if (needsInitialOrResizeSync) {
+        cam.__wtAppliedBaseScrollX = baseScrollX;
+        cam.scrollX = baseScrollX;
+      } else if (!isGameScene && cam.scrollX !== baseScrollX) {
+        cam.scrollX = baseScrollX;
+      } else if (isGameScene && Math.abs(cam.scrollX - baseScrollX) > 12) {
+        // Allow up to +-8px trauma camera shake in GameScene, but snap immediately if reset to 0!
+        cam.scrollX = baseScrollX;
+      }
+    }
   }
 
   private enforceCanvasStyle(): void {
@@ -278,7 +352,7 @@ class MobileOrientationManager {
     if (!this.cssRotated) {
       const w = Math.max(1, rect.width);
       const h = Math.max(1, rect.height);
-      x = ((clientX - rect.left) / w) * DESIGN_WIDTH;
+      x = ((clientX - rect.left) / w) * this.logicalWidth;
       y = ((clientY - rect.top) / h) * DESIGN_HEIGHT;
     } else {
       const cx = rect.left + rect.width * 0.5;
@@ -288,7 +362,7 @@ class MobileOrientationManager {
 
       const u = clientY - cy;
       const v = -(clientX - cx);
-      x = ((u + unrotCssW * 0.5) / unrotCssW) * DESIGN_WIDTH;
+      x = ((u + unrotCssW * 0.5) / unrotCssW) * this.logicalWidth;
       y = ((v + unrotCssH * 0.5) / unrotCssH) * DESIGN_HEIGHT;
     }
 

@@ -90,10 +90,15 @@ export function resolveTankWallCollisions(tank: TankKinematics, walls: readonly 
 export function resolveAllTankCollisions(
   tanks: TankKinematics[],
   walls: readonly WallRect[],
+  phantomIndices?: ReadonlySet<number>,
+  perimeterWalls?: readonly WallRect[],
 ): void {
+  const wallsFor = (t: TankKinematics): readonly WallRect[] =>
+    phantomIndices?.has(t.index) && perimeterWalls ? perimeterWalls : walls;
+
   const blockedByWall = new Array<boolean>(tanks.length).fill(false);
   for (let i = 0; i < tanks.length; i++) {
-    blockedByWall[i] = resolveTankWallCollisions(tanks[i], walls);
+    blockedByWall[i] = resolveTankWallCollisions(tanks[i], wallsFor(tanks[i]));
   }
 
   for (let iter = 0; iter < 6; iter++) {
@@ -126,7 +131,7 @@ export function resolveAllTankCollisions(
     }
 
     for (let i = 0; i < tanks.length; i++) {
-      blockedByWall[i] = resolveTankWallCollisions(tanks[i], walls);
+      blockedByWall[i] = resolveTankWallCollisions(tanks[i], wallsFor(tanks[i]));
     }
     if (!anyTankOverlap) break;
   }
@@ -564,7 +569,15 @@ function findEarliestTankHitOnSegment(
   for (let i = 0; i < tanks.length; i++) {
     const t = tanks[i];
     if (!t.alive) continue;
-    if (t.index === proj.ownerIndex && (proj.graceTimer > 0 || proj.variant === 'flame')) continue;
+    if (
+      t.index === proj.ownerIndex &&
+      (proj.graceTimer > 0 ||
+        proj.variant === 'flame' ||
+        proj.variant === 'emp_orb' ||
+        proj.variant === 'cryo_orb')
+    ) {
+      continue;
+    }
 
     const combinedR = proj.radius + t.radius * 0.94;
     const combinedRSq = combinedR * combinedR;

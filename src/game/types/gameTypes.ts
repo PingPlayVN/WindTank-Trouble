@@ -79,7 +79,12 @@ export type SkillId =
   | 'drill'
   | 'flame'
   | 'scatter'
-  | 'reaper';
+  | 'reaper'
+  | 'emp'
+  | 'phantom'
+  | 'cryo'
+  | 'barrier'
+  | 'warp';
 
 export type ProjectileVariant =
   | 'standard'
@@ -89,7 +94,9 @@ export type ProjectileVariant =
   | 'homing_missile'
   | 'scatter'
   | 'drill'
-  | 'flame';
+  | 'flame'
+  | 'emp_orb'
+  | 'cryo_orb';
 
 export type BounceBehavior = 'reflect' | 'shatter' | 'slide' | 'drill';
 
@@ -155,6 +162,7 @@ export interface GameSettings {
   powerUpSpawnIntervalSec: number; // 0 = OFF, 1..300 seconds
   maxCratesOnFloor: number; // 1..12
   enabledSkills: SkillId[];
+  skillsPoolVersion?: number;
   playerIsAI: [boolean, boolean, boolean, boolean];
   playerAIDifficulty: [AIDifficulty, AIDifficulty, AIDifficulty, AIDifficulty];
   touchScheme: TouchScheme;

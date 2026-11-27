@@ -37,8 +37,13 @@ export class Tank {
     reaperWindupRemaining: 0,
     reaperDeployRemaining: 0,
     reaperSpinRemaining: 0,
+    warpBeaconPlaced: false,
   };
   private shieldRemainingSec = 0;
+  private phantomRemainingSec = 0;
+  private empJamRemainingSec = 0;
+  private frozenRemainingSec = 0;
+  private onIceFloor = false;
   private laserReadyToDischarge = false;
   private reaperGyroStartAngle = 0;
   private reaperGyroTotalDelta = Math.PI * 2.6;
@@ -185,6 +190,7 @@ export class Tank {
   getActiveVisualSuit(): SkillId | null {
     if (this.skillState.skill) return this.skillState.skill;
     if (this.shieldRemainingSec > 0) return 'shield';
+    if (this.phantomRemainingSec > 0) return 'phantom';
     return null;
   }
 
@@ -200,6 +206,92 @@ export class Tank {
     return this.shieldRemainingSec;
   }
 
+  isPhantom(): boolean {
+    return this.kinematics.alive && this.phantomRemainingSec > 0;
+  }
+
+  getPhantomRemainingSec(): number {
+    return this.phantomRemainingSec;
+  }
+
+  activatePhantom(durationSec = POWERUP_CONFIG.phantomDurationSec): void {
+    this.phantomRemainingSec = durationSec;
+    this.skillState = {
+      skill: null,
+      ammo: 0,
+      chargingLaserRemaining: 0,
+      reaperWindupRemaining: 0,
+      reaperDeployRemaining: 0,
+      reaperSpinRemaining: 0,
+      warpBeaconPlaced: false,
+    };
+    this.refreshBodyTexture();
+  }
+
+  isEmpJammed(): boolean {
+    return this.kinematics.alive && this.empJamRemainingSec > 0;
+  }
+
+  getEmpJamRemainingSec(): number {
+    return this.empJamRemainingSec;
+  }
+
+  applyEmpJam(
+    durationSec = POWERUP_CONFIG.empJamDurationSec,
+  ): { brokeShield: boolean; interruptedChannel: boolean } {
+    if (!this.kinematics.alive) {
+      return { brokeShield: false, interruptedChannel: false };
+    }
+    const brokeShield = this.shieldRemainingSec > 0;
+    this.shieldRemainingSec = 0;
+
+    const interruptedChannel =
+      this.skillState.chargingLaserRemaining > 0 ||
+      this.isReaperWindingUp() ||
+      this.isReaperSweeping();
+    if (interruptedChannel) {
+      this.clearSkill();
+    }
+
+    this.empJamRemainingSec = Math.max(this.empJamRemainingSec, durationSec);
+    this.refreshBodyTexture();
+    return { brokeShield, interruptedChannel };
+  }
+
+  isFrozen(): boolean {
+    return this.kinematics.alive && this.frozenRemainingSec > 0;
+  }
+
+  getFrozenRemainingSec(): number {
+    return this.frozenRemainingSec;
+  }
+
+  applyCryoFreeze(durationSec = POWERUP_CONFIG.cryoFreezeDurationSec): boolean {
+    if (!this.kinematics.alive || this.isShielded()) return false;
+    this.frozenRemainingSec = Math.max(this.frozenRemainingSec, durationSec);
+    this.kinematics.vx = 0;
+    this.kinematics.vy = 0;
+    return true;
+  }
+
+  setOnIceFloor(onIce: boolean): void {
+    this.onIceFloor = onIce;
+  }
+
+  isOnIceFloor(): boolean {
+    return this.onIceFloor;
+  }
+
+  isWarpBeaconPlaced(): boolean {
+    return this.skillState.skill === 'warp' && Boolean(this.skillState.warpBeaconPlaced);
+  }
+
+  setWarpBeaconPlaced(placed: boolean): void {
+    if (this.skillState.skill === 'warp') {
+      this.skillState.warpBeaconPlaced = placed;
+    }
+  }
+
   activateShield(durationSec = POWERUP_CONFIG.shieldDurationSec): void {
     this.shieldRemainingSec = durationSec;
     this.skillState = {
@@ -209,6 +301,7 @@ export class Tank {
       reaperWindupRemaining: 0,
       reaperDeployRemaining: 0,
       reaperSpinRemaining: 0,
+      warpBeaconPlaced: false,
     };
     this.refreshBodyTexture();
   }
@@ -378,6 +471,7 @@ export class Tank {
       reaperWindupRemaining: 0,
       reaperDeployRemaining: 0,
       reaperSpinRemaining: 0,
+      warpBeaconPlaced: false,
     };
     this.laserReadyToDischarge = false;
     this.refreshBodyTexture();
@@ -401,6 +495,7 @@ export class Tank {
       reaperWindupRemaining: 0,
       reaperDeployRemaining: 0,
       reaperSpinRemaining: 0,
+      warpBeaconPlaced: false,
     };
     this.laserReadyToDischarge = false;
     this.refreshBodyTexture();
@@ -464,12 +559,23 @@ export class Tank {
     dt: number,
     onTreadMark: (x: number, y: number, angle: number) => void,
     onExhaust: (x: number, y: number) => void,
-  ): { shieldJustExpired: boolean; reaperJustEnded: boolean; emitCriticalDamage: boolean } {
+  ): {
+    shieldJustExpired: boolean;
+    phantomJustExpired: boolean;
+    reaperJustEnded: boolean;
+    emitCriticalDamage: boolean;
+  } {
     let shieldJustExpired = false;
+    let phantomJustExpired = false;
     let reaperJustEnded = false;
 
     if (!this.kinematics.alive) {
-      return { shieldJustExpired, reaperJustEnded, emitCriticalDamage: false };
+      return {
+        shieldJustExpired,
+        phantomJustExpired,
+        reaperJustEnded,
+        emitCriticalDamage: false,
+      };
     }
 
     this.auraPulseClock += dt;
@@ -482,6 +588,22 @@ export class Tank {
       }
     }
 
+    if (this.phantomRemainingSec > 0) {
+      this.phantomRemainingSec = Math.max(0, this.phantomRemainingSec - dt);
+      if (this.phantomRemainingSec <= 0) {
+        phantomJustExpired = true;
+        this.refreshBodyTexture();
+      }
+    }
+
+    if (this.empJamRemainingSec > 0) {
+      this.empJamRemainingSec = Math.max(0, this.empJamRemainingSec - dt);
+    }
+
+    if (this.frozenRemainingSec > 0) {
+      this.frozenRemainingSec = Math.max(0, this.frozenRemainingSec - dt);
+    }
+
     if (this.fireCooldown > 0) {
       this.fireCooldown = Math.max(0, this.fireCooldown - dt);
     }
@@ -489,6 +611,27 @@ export class Tank {
       this.recoilOffset = Math.max(0, this.recoilOffset - dt * 24);
     } else {
       this.recoilOffset = 0;
+    }
+
+    // Solid Cryo Freeze Lock: freezes linear velocity, rotation, and weapon trigger
+    if (this.frozenRemainingSec > 0) {
+      this.kinematics.vx = 0;
+      this.kinematics.vy = 0;
+      if (this.flameHitCooldown > 0) this.flameHitCooldown = Math.max(0, this.flameHitCooldown - dt);
+      if (this.reaperHitCooldown > 0) this.reaperHitCooldown = Math.max(0, this.reaperHitCooldown - dt);
+      if (this.spikeHitCooldown > 0) this.spikeHitCooldown = Math.max(0, this.spikeHitCooldown - dt);
+      if (this.hitFlashTimer > 0) {
+        this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
+        if (this.hitFlashTimer <= 0 && this.kinematics.alive) {
+          this.bodySprite.clearTint();
+        }
+      }
+      return {
+        shieldJustExpired,
+        phantomJustExpired,
+        reaperJustEnded,
+        emitCriticalDamage: false,
+      };
     }
 
     // 2.0s Laser Charge Lock: completely freezes movement & rotation
@@ -500,7 +643,12 @@ export class Tank {
         this.skillState.chargingLaserRemaining = 0;
         this.laserReadyToDischarge = true;
       }
-      return { shieldJustExpired, reaperJustEnded, emitCriticalDamage: false };
+      return {
+        shieldJustExpired,
+        phantomJustExpired,
+        reaperJustEnded,
+        emitCriticalDamage: false,
+      };
     }
 
     // Reaper 4-Stage Choreography (all linear movement locked on the spot!):
@@ -571,27 +719,41 @@ export class Tank {
           emitCriticalDamage = true;
         }
       }
-      return { shieldJustExpired, reaperJustEnded, emitCriticalDamage };
+      return {
+        shieldJustExpired,
+        phantomJustExpired,
+        reaperJustEnded,
+        emitCriticalDamage,
+      };
     }
 
     const turnDir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    const turnMul = this.onIceFloor ? POWERUP_CONFIG.cryoDriftTurnMultiplier : 1.0;
     if (turnDir !== 0) {
       this.kinematics.angle = Phaser.Math.Angle.Wrap(
-        this.kinematics.angle + turnDir * BASE_GAMEPLAY.tankTurnSpeedRad * dt,
+        this.kinematics.angle + turnDir * BASE_GAMEPLAY.tankTurnSpeedRad * turnMul * dt,
       );
     }
+
+    const speedMul =
+      (this.phantomRemainingSec > 0 ? POWERUP_CONFIG.phantomSpeedMultiplier : 1.0) *
+      (this.empJamRemainingSec > 0 ? POWERUP_CONFIG.empMoveSpeedMultiplier : 1.0) *
+      (this.onIceFloor ? POWERUP_CONFIG.cryoDriftSpeedMultiplier : 1.0);
 
     const moveIntent = (input.forward ? 1 : 0) - (input.backward ? 1 : 0);
     let targetSpeed = 0;
     if (moveIntent > 0) {
-      targetSpeed = BASE_GAMEPLAY.tankForwardSpeed * this.scaleRatio;
+      targetSpeed = BASE_GAMEPLAY.tankForwardSpeed * this.scaleRatio * speedMul;
     } else if (moveIntent < 0) {
-      targetSpeed = -BASE_GAMEPLAY.tankBackwardSpeed * this.scaleRatio;
+      targetSpeed = -BASE_GAMEPLAY.tankBackwardSpeed * this.scaleRatio * speedMul;
     }
 
     const targetVx = Math.cos(this.kinematics.angle) * targetSpeed;
     const targetVy = Math.sin(this.kinematics.angle) * targetSpeed;
-    const blend = Math.min(1, BASE_GAMEPLAY.tankVelocityLerp * dt);
+    const velLerp = this.onIceFloor
+      ? POWERUP_CONFIG.cryoDriftVelocityLerp
+      : BASE_GAMEPLAY.tankVelocityLerp;
+    const blend = Math.min(1, velLerp * dt);
 
     this.kinematics.vx += (targetVx - this.kinematics.vx) * blend;
     this.kinematics.vy += (targetVy - this.kinematics.vy) * blend;
@@ -615,7 +777,9 @@ export class Tank {
       this.decalDistanceAccumulator += linearStep;
       if (this.decalDistanceAccumulator >= 10 * this.scaleRatio) {
         this.decalDistanceAccumulator = 0;
-        onTreadMark(this.kinematics.x, this.kinematics.y, this.kinematics.angle);
+        if (!this.isPhantom()) {
+          onTreadMark(this.kinematics.x, this.kinematics.y, this.kinematics.angle);
+        }
       }
 
       this.exhaustTimer += dt;
@@ -649,7 +813,12 @@ export class Tank {
       }
     }
 
-    return { shieldJustExpired, reaperJustEnded, emitCriticalDamage };
+    return {
+      shieldJustExpired,
+      phantomJustExpired,
+      reaperJustEnded,
+      emitCriticalDamage,
+    };
   }
 
   /**
@@ -685,8 +854,13 @@ export class Tank {
       reaperWindupRemaining: snap.reaperWindupRemaining,
       reaperDeployRemaining: snap.reaperDeployRemaining ?? 0,
       reaperSpinRemaining: snap.reaperSpinRemaining,
+      warpBeaconPlaced: Boolean(snap.warpBeaconPlaced),
     };
     this.shieldRemainingSec = snap.shieldRemaining;
+    this.phantomRemainingSec = snap.phantomRemaining ?? 0;
+    this.empJamRemainingSec = snap.empJamRemaining ?? 0;
+    this.frozenRemainingSec = snap.frozenRemaining ?? 0;
+    this.onIceFloor = Boolean(snap.onIceFloor);
     if (typeof snap.maxHp === 'number' && snap.maxHp > 0) {
       this.maxHp = snap.maxHp;
     }
@@ -755,7 +929,12 @@ export class Tank {
     const rx = -Math.cos(this.kinematics.angle) * this.recoilOffset * this.scaleRatio + jitterX;
     const ry = -Math.sin(this.kinematics.angle) * this.recoilOffset * this.scaleRatio + jitterY;
 
-    this.bodySprite.setPosition(this.kinematics.x + rx, this.kinematics.y + ry);
+    const hoverOffsetY =
+      this.phantomRemainingSec > 0
+        ? Math.sin(this.auraPulseClock * 9.5) * 2.4 * this.scaleRatio
+        : 0;
+
+    this.bodySprite.setPosition(this.kinematics.x + rx, this.kinematics.y + ry + hoverOffsetY);
     this.bodySprite.setRotation(this.kinematics.angle);
 
     this.shadowSprite.setPosition(
@@ -763,6 +942,18 @@ export class Tank {
       this.kinematics.y + ry + 3.5 * this.scaleRatio,
     );
     this.shadowSprite.setRotation(this.kinematics.angle);
+
+    if (this.phantomRemainingSec > 0) {
+      const blink =
+        this.phantomRemainingSec < 0.85
+          ? 0.38 + 0.46 * Math.abs(Math.sin(this.phantomRemainingSec * 24))
+          : 0.56 + 0.14 * Math.sin(this.auraPulseClock * 12);
+      this.bodySprite.setAlpha(blink);
+      this.shadowSprite.setAlpha(0.16);
+    } else {
+      this.bodySprite.setAlpha(1);
+      this.shadowSprite.setAlpha(1);
+    }
 
     this.auraGraphics.clear();
 
@@ -808,6 +999,138 @@ export class Tank {
       this.auraGraphics.closePath();
       this.auraGraphics.fillPath();
       this.auraGraphics.strokePath();
+    }
+
+    // 1B. Active 3.5s Phantom Wraith Phase Aura + 3 Orbiting Spirit Wisps!
+    if (this.phantomRemainingSec > 0) {
+      const s = this.scaleRatio;
+      const cx = this.kinematics.x;
+      const cy = this.kinematics.y;
+      const ghostR = this.kinematics.radius * (1.56 + Math.sin(this.auraPulseClock * 10) * 0.1);
+      const ratio = Math.max(0, Math.min(1, this.phantomRemainingSec / POWERUP_CONFIG.phantomDurationSec));
+
+      this.auraGraphics.fillStyle(0xb388ff, 0.18);
+      this.auraGraphics.fillCircle(cx, cy, ghostR);
+      this.auraGraphics.lineStyle(1.8 * s, 0xd1c4e9, 0.55);
+      this.auraGraphics.strokeCircle(cx, cy, ghostR * 1.14);
+
+      // Radial timer arc around wraith tank
+      this.auraGraphics.lineStyle(2.8 * s, 0xea80fc, 0.92);
+      this.auraGraphics.beginPath();
+      this.auraGraphics.arc(cx, cy, ghostR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
+      this.auraGraphics.strokePath();
+
+      // 3 Orbiting ethereal spirit wisps with comet tails
+      for (let w = 0; w < 3; w++) {
+        const wa = this.auraPulseClock * 5.6 + (w * Math.PI * 2) / 3;
+        const wx = cx + Math.cos(wa) * (ghostR * 1.08);
+        const wy = cy + Math.sin(wa) * (ghostR * 1.08);
+        const tx = cx + Math.cos(wa - 0.42) * (ghostR * 1.04);
+        const ty = cy + Math.sin(wa - 0.42) * (ghostR * 1.04);
+        this.auraGraphics.lineStyle(2.2 * s, 0x80d8ff, 0.55);
+        this.auraGraphics.lineBetween(tx, ty, wx, wy);
+        this.auraGraphics.fillStyle(0xffffff, 0.95);
+        this.auraGraphics.fillCircle(wx, wy, 2.5 * s);
+      }
+    }
+
+    // 1C. Faceted Glacial Iceberg Prism Encasement (`Cryo Freeze`) + Slippery Drift Halo!
+    if (this.onIceFloor && this.frozenRemainingSec <= 0) {
+      const s = this.scaleRatio;
+      this.auraGraphics.lineStyle(1.8 * s, 0x84ffff, 0.65);
+      this.auraGraphics.strokeCircle(
+        this.kinematics.x,
+        this.kinematics.y,
+        this.kinematics.radius * 1.32,
+      );
+    }
+
+    if (this.frozenRemainingSec > 0) {
+      const s = this.scaleRatio;
+      const cx = this.kinematics.x;
+      const cy = this.kinematics.y;
+      const iceR = this.kinematics.radius * 1.68;
+
+      // Outer jagged 8-vertex glacier crystal block
+      this.auraGraphics.fillStyle(0x80deea, 0.42);
+      this.auraGraphics.lineStyle(2.8 * s, 0x00acc1, 0.96);
+      this.auraGraphics.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const a = -Math.PI / 8 + (i / 8) * Math.PI * 2;
+        const r = i % 2 === 0 ? iceR : iceR * 0.84;
+        const px = cx + Math.cos(a) * r;
+        const py = cy + Math.sin(a) * r;
+        if (i === 0) this.auraGraphics.moveTo(px, py);
+        else this.auraGraphics.lineTo(px, py);
+      }
+      this.auraGraphics.closePath();
+      this.auraGraphics.fillPath();
+      this.auraGraphics.strokePath();
+
+      // Inner bright frost crystal facet + white specular sheen slashes!
+      this.auraGraphics.fillStyle(0xe0f7fa, 0.34);
+      this.auraGraphics.lineStyle(1.6 * s, 0xffffff, 0.92);
+      this.auraGraphics.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        const r = iceR * 0.62;
+        const px = cx + Math.cos(a) * r;
+        const py = cy + Math.sin(a) * r;
+        if (i === 0) this.auraGraphics.moveTo(px, py);
+        else this.auraGraphics.lineTo(px, py);
+      }
+      this.auraGraphics.closePath();
+      this.auraGraphics.fillPath();
+      this.auraGraphics.strokePath();
+
+      // Diagonal ice reflection glints
+      this.auraGraphics.lineStyle(2.2 * s, 0xffffff, 0.88);
+      this.auraGraphics.lineBetween(
+        cx - iceR * 0.45,
+        cy - iceR * 0.25,
+        cx - iceR * 0.1,
+        cy - iceR * 0.6,
+      );
+      this.auraGraphics.lineBetween(
+        cx + iceR * 0.08,
+        cy + iceR * 0.52,
+        cx + iceR * 0.42,
+        cy + iceR * 0.18,
+      );
+    }
+
+    // 1D. EMP Weapon-Jam & Slow High-Voltage Lightning Cage!
+    if (this.empJamRemainingSec > 0) {
+      const s = this.scaleRatio;
+      const cx = this.kinematics.x;
+      const cy = this.kinematics.y;
+      const jamR = this.kinematics.radius * 1.54;
+
+      this.auraGraphics.lineStyle(1.8 * s, 0x651fff, 0.72);
+      this.auraGraphics.strokeCircle(cx, cy, jamR);
+
+      for (let k = 0; k < 5; k++) {
+        const baseA = this.auraPulseClock * 20 + (k * Math.PI * 2) / 5;
+        const col = k % 2 === 0 ? 0x00e5ff : 0xffea00;
+        this.auraGraphics.lineStyle(2.1 * s, col, 0.95);
+        const x0 = cx + Math.cos(baseA) * (jamR * 0.58);
+        const y0 = cy + Math.sin(baseA) * (jamR * 0.58);
+        const xm = cx + Math.cos(baseA + 0.26) * (jamR * 1.18);
+        const ym = cy + Math.sin(baseA + 0.26) * (jamR * 1.18);
+        const x1 = cx + Math.cos(baseA + 0.52) * (jamR * 0.68);
+        const y1 = cy + Math.sin(baseA + 0.52) * (jamR * 0.68);
+        this.auraGraphics.lineBetween(x0, y0, xm, ym);
+        this.auraGraphics.lineBetween(xm, ym, x1, y1);
+      }
+
+      // Blinking weapon-jammed X indicator above turret
+      if (Math.floor(this.auraPulseClock * 14) % 2 === 0) {
+        const iy = cy - this.kinematics.radius * 1.45;
+        const sz = 4.2 * s;
+        this.auraGraphics.lineStyle(2.4 * s, 0xff1744, 0.95);
+        this.auraGraphics.lineBetween(cx - sz, iy - sz, cx + sz, iy + sz);
+        this.auraGraphics.lineBetween(cx + sz, iy - sz, cx - sz, iy + sz);
+      }
     }
 
     // 2. Equipped Skill Aura + Laser Charge / Reaper Windup Telegraphs
@@ -961,6 +1284,8 @@ export class Tank {
     return (
       this.kinematics.alive &&
       this.fireCooldown <= 0 &&
+      this.empJamRemainingSec <= 0 &&
+      this.frozenRemainingSec <= 0 &&
       this.skillState.chargingLaserRemaining <= 0 &&
       !this.isReaperWindingUp() &&
       !this.isReaperSweeping()
@@ -1004,12 +1329,19 @@ export class Tank {
     this.kinematics.vx = 0;
     this.kinematics.vy = 0;
     this.shieldRemainingSec = 0;
+    this.phantomRemainingSec = 0;
+    this.empJamRemainingSec = 0;
+    this.frozenRemainingSec = 0;
+    this.onIceFloor = false;
     this.skillState.chargingLaserRemaining = 0;
     this.skillState.reaperWindupRemaining = 0;
     this.skillState.reaperSpinRemaining = 0;
+    this.skillState.warpBeaconPlaced = false;
     this.laserReadyToDischarge = false;
     this.spawnRing.setVisible(false);
     this.auraGraphics.clear();
+    this.bodySprite.setAlpha(1);
+    this.shadowSprite.setAlpha(1);
 
     this.bodySprite.setTintFill(0xffffff);
     this.scene.time.delayedCall(45, () => {

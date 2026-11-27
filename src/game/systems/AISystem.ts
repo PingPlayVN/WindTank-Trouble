@@ -102,6 +102,9 @@ export class AISystem {
     const reaperIndices = new Set<PlayerIndex>(
       tanks.filter((t) => t.isReaperWindingUp() || t.isReaperSweeping()).map((t) => t.index),
     );
+    const laserChargingIndices = new Set<PlayerIndex>(
+      tanks.filter((t) => t.isChargingLaser()).map((t) => t.index),
+    );
 
     const decision = computeBotDecision(
       {
@@ -113,16 +116,22 @@ export class AISystem {
         selfSkillAmmo: tank.getSkillAmmo(),
         selfAmmo: projectileSystem.getRemainingAmmo(tank.index),
         selfShielded: tank.isShielded(),
+        selfPhantom: tank.isPhantom(),
+        selfWarpBeaconPlaced: tank.isWarpBeaconPlaced(),
+        hasActiveEmpOrb: powerUpSystem.hasActiveEmpOrb(tank.index),
         selfReaperSweeping: tank.isReaperSweeping(),
         selfChargingLaser: tank.isChargingLaser(),
-        canFire: tank.canFire(),
+        canFire: tank.canFire() || (!tank.isFrozen() && !tank.isEmpJammed() && powerUpSystem.hasActiveEmpOrb(tank.index)),
         tanks: tankKinematics,
         shieldedTankIndices: shieldedIndices,
         reaperTankIndices: reaperIndices,
+        laserChargingTankIndices: laserChargingIndices,
         projectiles: projectileSystem.getKinematicsList(),
         crates: powerUpSystem.getCrateStates(),
         spikeZones: powerUpSystem.getSpikeZoneStates(),
         mines: powerUpSystem.getMineStates(),
+        cryoZones: powerUpSystem.getCryoZoneStates(),
+        warpBeacons: powerUpSystem.getWarpBeaconStates(),
         barrels,
         arena,
       },

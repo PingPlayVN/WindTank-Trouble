@@ -9,6 +9,7 @@ import {
   UI_COLORS,
 } from '../../game/config/constants';
 import { audioManager } from '../../game/managers/AudioManager';
+import { mobileOrientationManager } from '../../game/managers/MobileOrientationManager';
 import { settingsManager } from '../../game/managers/SettingsManager';
 import { computeVectorStickInput } from '../../game/systems/TouchSim';
 import type { PlayerInputState, SkillId, TouchScheme } from '../../game/types/gameTypes';
@@ -21,64 +22,65 @@ export interface LocalTouchHudStatus {
   skillAmmo: number;
   laserChargeProgress: number | null;
   shieldRemaining: number;
+  phantomRemaining?: number;
   reaperActive: boolean;
+  warpBeaconPlaced?: boolean;
+  empOrbActive?: boolean;
 }
 
-// --- 1-Player Ergonomic Landscape Geometry (Joystick default enlarged 1.25x: 62 -> 78) ---
-const SOLO_STICK_X = 108;
-const SOLO_STICK_Y = 568;
-const SOLO_STICK_R = 78;
+// --- 1-Player Widescreen Ergonomic Landscape Geometry (Enlarged default radii + crisp map clearance!) ---
+const SOLO_STICK_OFFSET_X = 112;
+const SOLO_STICK_Y = 562;
+const SOLO_STICK_R = 90;
 
-const SOLO_FIRE_X = 1188;
-const SOLO_FIRE_Y = 574;
-const SOLO_FIRE_R = 52;
+const SOLO_FIRE_OFFSET_X = 96;
+const SOLO_FIRE_Y = 556;
+const SOLO_FIRE_R = 62;
 
-const SOLO_REV_X = 1098;
-const SOLO_REV_Y = 668;
-const SOLO_REV_R = 32;
+const SOLO_REV_OFFSET_X = 178;
+const SOLO_REV_Y = 676;
+const SOLO_REV_R = 36;
 
-const SOLO_DPAD_LEFT_X = 64;
-const SOLO_DPAD_LEFT_Y = 594;
-const SOLO_DPAD_RIGHT_X = 154;
-const SOLO_DPAD_RIGHT_Y = 594;
-const SOLO_DPAD_STEER_R = 37;
-const SOLO_DPAD_FWD_X = 1100;
-const SOLO_DPAD_FWD_Y = 500;
-const SOLO_DPAD_FWD_R = 34;
+const SOLO_DPAD_LEFT_OFFSET_X = 66;
+const SOLO_DPAD_LEFT_Y = 592;
+const SOLO_DPAD_RIGHT_OFFSET_X = 164;
+const SOLO_DPAD_RIGHT_Y = 592;
+const SOLO_DPAD_STEER_R = 42;
+const SOLO_DPAD_FWD_OFFSET_X = 194;
+const SOLO_DPAD_FWD_Y = 486;
+const SOLO_DPAD_FWD_R = 38;
 
-// --- 2-Player Face-to-Face Tabletop Opposite Geometry (Joystick default enlarged 1.25x: 54 -> 68) ---
-// Player 1 sits at the LEFT short edge (`x <= 222`, looking right `+X`):
+// --- 2-Player Face-to-Face Tabletop Opposite Geometry (Anchored to true widescreen left/right edges!) ---
+// Player 1 sits at the LEFT short edge (`viewLeft .. viewLeft + 234`, looking right `+X`):
 //   Left thumb (Top-Left) = Stick | Right thumb (Bottom-Left) = Fire + Reverse
-const P1_OPP_STICK_X = 106;
-const P1_OPP_STICK_Y = 214;
-const P1_OPP_STICK_R = 68;
-const P1_OPP_FIRE_X = 102;
-const P1_OPP_FIRE_Y = 562;
-const P1_OPP_FIRE_R = 46;
-const P1_OPP_REV_X = 174;
-const P1_OPP_REV_Y = 668;
-const P1_OPP_REV_R = 28;
-const P1_OPP_FWD_X = 174;
-const P1_OPP_FWD_Y = 466;
-const P1_OPP_DPAD_L = { x: 106, y: 152 };
-const P1_OPP_DPAD_R = { x: 106, y: 244 };
+const OPP_BAND_INSET = 8;
+const OPP_BAND_WIDTH = 226;
+const OPP_STICK_OFFSET_X = 114;
+const P1_OPP_STICK_Y = 216;
+const P1_OPP_STICK_R = 82;
+const OPP_FIRE_OFFSET_X = 110;
+const P1_OPP_FIRE_Y = 558;
+const P1_OPP_FIRE_R = 56;
+const OPP_REV_OFFSET_X = 184;
+const P1_OPP_REV_Y = 674;
+const P1_OPP_REV_R = 34;
+const OPP_FWD_OFFSET_X = 184;
+const P1_OPP_FWD_Y = 454;
+const P1_OPP_DPAD_L_Y = 152;
+const P1_OPP_DPAD_R_Y = 250;
 
-// Player 2 sits OPPOSITE Player 1 at the RIGHT short edge (`x >= 1058`, looking left `-X`):
+// Player 2 sits OPPOSITE Player 1 at the RIGHT short edge (`viewRight - 234 .. viewRight`, looking left `-X`):
 //   Left thumb (Bottom-Right) = Stick | Right thumb (Top-Right) = Fire + Reverse (180° symmetric!)
-const P2_OPP_STICK_X = 1174;
-const P2_OPP_STICK_Y = 562;
-const P2_OPP_STICK_R = 68;
-const P2_OPP_FIRE_X = 1178;
-const P2_OPP_FIRE_Y = 214;
-const P2_OPP_FIRE_R = 46;
-const P2_OPP_REV_X = 1106;
-const P2_OPP_REV_Y = 112;
-const P2_OPP_REV_R = 28;
-const P2_OPP_FWD_X = 1106;
-const P2_OPP_FWD_Y = 310;
-const P2_OPP_DPAD_L = { x: 1174, y: 624 };
-const P2_OPP_DPAD_R = { x: 1174, y: 532 };
-const OPP_DPAD_R = 32;
+const P2_OPP_STICK_Y = 558;
+const P2_OPP_STICK_R = 82;
+const P2_OPP_FIRE_Y = 216;
+const P2_OPP_FIRE_R = 56;
+const P2_OPP_REV_Y = 114;
+const P2_OPP_REV_R = 34;
+const P2_OPP_FWD_Y = 320;
+const P2_OPP_DPAD_L_Y = 622;
+const P2_OPP_DPAD_R_Y = 524;
+const OPP_DPAD_R = 36;
 
 interface TouchSlotRuntime {
   stickPointerId: number | null;
@@ -154,8 +156,8 @@ export class TouchControlsOverlay {
   private clockSec = 0;
 
   private readonly slots: [TouchSlotRuntime, TouchSlotRuntime] = [
-    createSlotRuntime(SOLO_STICK_X, SOLO_STICK_Y, 'red'),
-    createSlotRuntime(P2_OPP_STICK_X, P2_OPP_STICK_Y, 'green'),
+    createSlotRuntime(SOLO_STICK_OFFSET_X, SOLO_STICK_Y, 'red'),
+    createSlotRuntime(DESIGN_WIDTH - OPP_STICK_OFFSET_X, P2_OPP_STICK_Y, 'green'),
   ];
 
   private readonly onDownBound: (p: Phaser.Input.Pointer) => void;
@@ -203,48 +205,66 @@ export class TouchControlsOverlay {
       return t;
     };
 
-    this.p1FireTitle = mk('BẮN!', 17, '#FFFFFF', true);
-    this.p1FireSub = mk('ĐẠN 10/10', 10, '#FFF8E1', true);
-    this.p1RevLbl = mk('LÙI', 11.5, UI_COLORS.inkDarkHex);
-    this.p1SideTag = mk('KÉO NHẸ: NGẮM • KÉO HẾT: LÁI', 9.5, UI_COLORS.inkMutedHex);
-    this.p1DpadL = mk('◀', 18, UI_COLORS.inkDarkHex);
-    this.p1DpadR = mk('▶', 18, UI_COLORS.inkDarkHex);
-    this.p1DpadFwd = mk('TIẾN ▲', 11, UI_COLORS.inkDarkHex);
+    this.p1FireTitle = mk('BẮN!', 19, '#FFFFFF', true);
+    this.p1FireSub = mk('ĐẠN 10/10', 10.5, '#FFF8E1', true);
+    this.p1RevLbl = mk('LÙI', 12.5, UI_COLORS.inkDarkHex);
+    this.p1SideTag = mk('KÉO NHẸ: NGẮM • KÉO HẾT: LÁI', 10, UI_COLORS.inkMutedHex);
+    this.p1DpadL = mk('◀', 19, UI_COLORS.inkDarkHex);
+    this.p1DpadR = mk('▶', 19, UI_COLORS.inkDarkHex);
+    this.p1DpadFwd = mk('TIẾN ▲', 11.5, UI_COLORS.inkDarkHex);
 
-    this.p2FireTitle = mk('BẮN!', 16, '#FFFFFF', true);
-    this.p2FireSub = mk('ĐẠN 10/10', 9.5, '#FFF8E1', true);
-    this.p2RevLbl = mk('LÙI', 11, UI_COLORS.inkDarkHex);
-    this.p2SideTag = mk('👤 XE 2 (NGỒI ĐỐI DIỆN)', 10, '#1B5E20');
-    this.p2DpadL = mk('◀', 18, UI_COLORS.inkDarkHex);
-    this.p2DpadR = mk('▶', 18, UI_COLORS.inkDarkHex);
-    this.p2DpadFwd = mk('TIẾN ▲', 10.5, UI_COLORS.inkDarkHex);
+    this.p2FireTitle = mk('BẮN!', 18, '#FFFFFF', true);
+    this.p2FireSub = mk('ĐẠN 10/10', 10, '#FFF8E1', true);
+    this.p2RevLbl = mk('LÙI', 12, UI_COLORS.inkDarkHex);
+    this.p2SideTag = mk('👤 XE 2 (NGỒI ĐỐI DIỆN)', 10.5, '#1B5E20');
+    this.p2DpadL = mk('◀', 19, UI_COLORS.inkDarkHex);
+    this.p2DpadR = mk('▶', 19, UI_COLORS.inkDarkHex);
+    this.p2DpadFwd = mk('TIẾN ▲', 11, UI_COLORS.inkDarkHex);
   }
 
   private getScheme(): TouchScheme {
     return settingsManager.getSettings().touchScheme;
   }
 
+  private toWorldPoint(p: Phaser.Input.Pointer & { isWorldCoord?: boolean }): { x: number; y: number } {
+    if (p.isWorldCoord) {
+      return { x: p.x, y: p.y };
+    }
+    const cam = this.scene.cameras?.main;
+    return {
+      x: p.x + (cam ? cam.scrollX : 0),
+      y: p.y + (cam ? cam.scrollY : 0),
+    };
+  }
+
   private getSlotGeometry(slotIdx: 0 | 1) {
     const s = settingsManager.getSettings();
     const scale = Phaser.Math.Clamp(s.touchButtonScale ?? 1.0, 0.8, 1.35);
+    const viewLeft = mobileOrientationManager.getViewLeft();
+    const viewRight = mobileOrientationManager.getViewRight();
 
     if (!this.dualOppositeMode) {
       const swap = Boolean(s.touchSwapHands);
+      // Since viewLeft + viewRight === DESIGN_WIDTH, (DESIGN_WIDTH - x) mirrors viewLeft <-> viewRight!
       const mx = (x: number) => (swap ? DESIGN_WIDTH - x : x);
-      const dpadLeftBaseX = swap ? DESIGN_WIDTH - SOLO_DPAD_RIGHT_X : SOLO_DPAD_LEFT_X;
-      const dpadRightBaseX = swap ? DESIGN_WIDTH - SOLO_DPAD_LEFT_X : SOLO_DPAD_RIGHT_X;
+      const dpadLeftBaseX = swap
+        ? viewRight - SOLO_DPAD_RIGHT_OFFSET_X
+        : viewLeft + SOLO_DPAD_LEFT_OFFSET_X;
+      const dpadRightBaseX = swap
+        ? viewRight - SOLO_DPAD_LEFT_OFFSET_X
+        : viewLeft + SOLO_DPAD_RIGHT_OFFSET_X;
 
       return {
-        stickRestX: mx(SOLO_STICK_X),
+        stickRestX: mx(viewLeft + SOLO_STICK_OFFSET_X),
         stickRestY: SOLO_STICK_Y,
         stickMaxR: Math.round(SOLO_STICK_R * scale),
-        fireX: mx(SOLO_FIRE_X),
+        fireX: mx(viewRight - SOLO_FIRE_OFFSET_X),
         fireY: SOLO_FIRE_Y,
         fireR: Math.round(SOLO_FIRE_R * scale),
-        revX: mx(SOLO_REV_X),
+        revX: mx(viewRight - SOLO_REV_OFFSET_X),
         revY: SOLO_REV_Y,
         revR: Math.round(SOLO_REV_R * scale),
-        fwdX: mx(SOLO_DPAD_FWD_X),
+        fwdX: mx(viewRight - SOLO_DPAD_FWD_OFFSET_X),
         fwdY: SOLO_DPAD_FWD_Y,
         fwdR: Math.round(SOLO_DPAD_FWD_R * scale),
         dpadL: { x: dpadLeftBaseX, y: SOLO_DPAD_LEFT_Y },
@@ -256,40 +276,40 @@ export class TouchControlsOverlay {
 
     if (slotIdx === 0) {
       return {
-        stickRestX: P1_OPP_STICK_X,
+        stickRestX: viewLeft + OPP_STICK_OFFSET_X,
         stickRestY: P1_OPP_STICK_Y,
         stickMaxR: Math.round(P1_OPP_STICK_R * scale),
-        fireX: P1_OPP_FIRE_X,
+        fireX: viewLeft + OPP_FIRE_OFFSET_X,
         fireY: P1_OPP_FIRE_Y,
         fireR: Math.round(P1_OPP_FIRE_R * scale),
-        revX: P1_OPP_REV_X,
+        revX: viewLeft + OPP_REV_OFFSET_X,
         revY: P1_OPP_REV_Y,
         revR: Math.round(P1_OPP_REV_R * scale),
-        fwdX: P1_OPP_FWD_X,
+        fwdX: viewLeft + OPP_FWD_OFFSET_X,
         fwdY: P1_OPP_FWD_Y,
-        fwdR: Math.round(28 * scale),
-        dpadL: P1_OPP_DPAD_L,
-        dpadR: P1_OPP_DPAD_R,
+        fwdR: Math.round(32 * scale),
+        dpadL: { x: viewLeft + OPP_STICK_OFFSET_X, y: P1_OPP_DPAD_L_Y },
+        dpadR: { x: viewLeft + OPP_STICK_OFFSET_X, y: P1_OPP_DPAD_R_Y },
         dpadSteerR: Math.round(OPP_DPAD_R * scale),
         labelRot: Math.PI / 2,
       };
     }
 
     return {
-      stickRestX: P2_OPP_STICK_X,
+      stickRestX: viewRight - OPP_STICK_OFFSET_X,
       stickRestY: P2_OPP_STICK_Y,
       stickMaxR: Math.round(P2_OPP_STICK_R * scale),
-      fireX: P2_OPP_FIRE_X,
+      fireX: viewRight - OPP_FIRE_OFFSET_X,
       fireY: P2_OPP_FIRE_Y,
       fireR: Math.round(P2_OPP_FIRE_R * scale),
-      revX: P2_OPP_REV_X,
+      revX: viewRight - OPP_REV_OFFSET_X,
       revY: P2_OPP_REV_Y,
       revR: Math.round(P2_OPP_REV_R * scale),
-      fwdX: P2_OPP_FWD_X,
+      fwdX: viewRight - OPP_FWD_OFFSET_X,
       fwdY: P2_OPP_FWD_Y,
-      fwdR: Math.round(28 * scale),
-      dpadL: P2_OPP_DPAD_L,
-      dpadR: P2_OPP_DPAD_R,
+      fwdR: Math.round(32 * scale),
+      dpadL: { x: viewRight - OPP_STICK_OFFSET_X, y: P2_OPP_DPAD_L_Y },
+      dpadR: { x: viewRight - OPP_STICK_OFFSET_X, y: P2_OPP_DPAD_R_Y },
       dpadSteerR: Math.round(OPP_DPAD_R * scale),
       labelRot: -Math.PI / 2,
     };
@@ -439,35 +459,35 @@ export class TouchControlsOverlay {
     slot.firePressCounter++;
   }
 
-  private tryBindTouchToSlot(slotIdx: 0 | 1, p: Phaser.Input.Pointer): boolean {
+  private tryBindTouchToSlot(slotIdx: 0 | 1, p: Phaser.Input.Pointer, x: number, y: number): boolean {
     const slot = this.slots[slotIdx];
     const geo = this.getSlotGeometry(slotIdx);
-    const x = p.x;
-    const y = p.y;
+    const viewLeft = mobileOrientationManager.getViewLeft();
+    const viewRight = mobileOrientationManager.getViewRight();
 
     // 1. Fire button
-    if (Math.hypot(x - geo.fireX, y - geo.fireY) <= geo.fireR + 10) {
+    if (Math.hypot(x - geo.fireX, y - geo.fireY) <= geo.fireR + 12) {
       slot.firePointerIds.add(p.id);
       this.triggerSlotFire(slotIdx);
       return true;
     }
 
     // 2. Reverse button
-    if (Math.hypot(x - geo.revX, y - geo.revY) <= geo.revR + 9) {
+    if (Math.hypot(x - geo.revX, y - geo.revY) <= geo.revR + 10) {
       slot.revPointerIds.add(p.id);
       return true;
     }
 
     if (this.getScheme() === 'dual_pad') {
-      if (Math.hypot(x - geo.fwdX, y - geo.fwdY) <= geo.fwdR + 8) {
+      if (Math.hypot(x - geo.fwdX, y - geo.fwdY) <= geo.fwdR + 9) {
         slot.driveFwdPointerIds.add(p.id);
         return true;
       }
-      if (Math.hypot(x - geo.dpadL.x, y - geo.dpadL.y) <= geo.dpadSteerR + 8) {
+      if (Math.hypot(x - geo.dpadL.x, y - geo.dpadL.y) <= geo.dpadSteerR + 9) {
         slot.steerLeftPointerIds.add(p.id);
         return true;
       }
-      if (Math.hypot(x - geo.dpadR.x, y - geo.dpadR.y) <= geo.dpadSteerR + 8) {
+      if (Math.hypot(x - geo.dpadR.x, y - geo.dpadR.y) <= geo.dpadSteerR + 9) {
         slot.steerRightPointerIds.add(p.id);
         return true;
       }
@@ -481,7 +501,10 @@ export class TouchControlsOverlay {
 
     if (!this.dualOppositeMode) {
       const swap = Boolean(s.touchSwapHands);
-      const inSoloZone = swap ? x >= DESIGN_WIDTH - 268 && y >= 120 : x <= 268 && y >= 120;
+      const zoneReach = 286;
+      const inSoloZone = swap
+        ? x >= viewRight - zoneReach && y >= 108
+        : x <= viewLeft + zoneReach && y >= 108;
       if (inSoloZone) {
         slot.stickPointerId = p.id;
         if (!floating) {
@@ -490,10 +513,10 @@ export class TouchControlsOverlay {
           slot.stickBaseY = geo.stickRestY;
         } else {
           // Follow-touch mode (`Di chuyển theo điểm đặt tay`): center spawns right where thumb touches!
-          const padX = Math.min(92, geo.stickMaxR + 6);
+          const padX = Math.min(104, geo.stickMaxR + 8);
           slot.stickBaseX = swap
-            ? Phaser.Math.Clamp(x, DESIGN_WIDTH - 208, DESIGN_WIDTH - padX)
-            : Phaser.Math.Clamp(x, padX, 208);
+            ? Phaser.Math.Clamp(x, viewRight - 224, viewRight - padX)
+            : Phaser.Math.Clamp(x, viewLeft + padX, viewLeft + 224);
           slot.stickBaseY = Phaser.Math.Clamp(y, 156, DESIGN_HEIGHT - geo.stickMaxR - 12);
         }
         this.updateSlotStickKnob(slotIdx, x, y);
@@ -502,28 +525,34 @@ export class TouchControlsOverlay {
       return false;
     }
 
-    // 2P Opposite Stick Zones:
-    if (slotIdx === 0 && x <= 228 && y >= 78 && y <= 400) {
+    // 2P Opposite Stick Zones (anchored to true widescreen left/right edges):
+    const leftStickMaxX = Math.max(180, viewLeft + 246);
+    if (slotIdx === 0 && x <= leftStickMaxX && y >= 72 && y <= 404) {
       slot.stickPointerId = p.id;
       if (!floating) {
         slot.stickBaseX = geo.stickRestX;
         slot.stickBaseY = geo.stickRestY;
       } else {
-        slot.stickBaseX = Phaser.Math.Clamp(x, 74, 178);
-        slot.stickBaseY = Phaser.Math.Clamp(y, 146, 332);
+        slot.stickBaseX = Phaser.Math.Clamp(x, viewLeft + 84, Math.max(168, viewLeft + 194));
+        slot.stickBaseY = Phaser.Math.Clamp(y, 152, 332);
       }
       this.updateSlotStickKnob(0, x, y);
       return true;
     }
 
-    if (slotIdx === 1 && x >= 1052 && y >= 360 && y <= 748) {
+    const rightStickMinX = Math.min(DESIGN_WIDTH - 180, viewRight - 246);
+    if (slotIdx === 1 && x >= rightStickMinX && y >= 356 && y <= 752) {
       slot.stickPointerId = p.id;
       if (!floating) {
         slot.stickBaseX = geo.stickRestX;
         slot.stickBaseY = geo.stickRestY;
       } else {
-        slot.stickBaseX = Phaser.Math.Clamp(x, 1102, 1206);
-        slot.stickBaseY = Phaser.Math.Clamp(y, 428, 678);
+        slot.stickBaseX = Phaser.Math.Clamp(
+          x,
+          Math.min(DESIGN_WIDTH - 168, viewRight - 194),
+          viewRight - 84,
+        );
+        slot.stickBaseY = Phaser.Math.Clamp(y, 428, 674);
       }
       this.updateSlotStickKnob(1, x, y);
       return true;
@@ -534,26 +563,28 @@ export class TouchControlsOverlay {
 
   private handlePointerDown(p: Phaser.Input.Pointer): void {
     if (!this.root.visible || this.isBlocked()) return;
-    // Never intercept Top Bar buttons (`y <= 64`)
-    if (p.y <= 64) return;
+    const wp = this.toWorldPoint(p);
+    // Never intercept Top Bar buttons (`y <= 58`)
+    if (wp.y <= 58) return;
 
-    if (this.tryBindTouchToSlot(0, p)) {
+    if (this.tryBindTouchToSlot(0, p, wp.x, wp.y)) {
       this.redraw();
       return;
     }
-    if (this.dualOppositeMode && this.tryBindTouchToSlot(1, p)) {
+    if (this.dualOppositeMode && this.tryBindTouchToSlot(1, p, wp.x, wp.y)) {
       this.redraw();
     }
   }
 
   private handlePointerMove(p: Phaser.Input.Pointer): void {
     if (!this.root.visible || this.isBlocked()) return;
+    const wp = this.toWorldPoint(p);
 
     for (const idx of [0, 1] as const) {
       if (idx === 1 && !this.dualOppositeMode) continue;
       const slot = this.slots[idx];
       if (slot.stickPointerId === p.id) {
-        this.updateSlotStickKnob(idx, p.x, p.y);
+        this.updateSlotStickKnob(idx, wp.x, wp.y);
         this.redraw();
         return;
       }
@@ -616,13 +647,17 @@ export class TouchControlsOverlay {
     const isVector = this.getScheme() === 'vector_stick';
     const pal = getPaletteById(slot.hud.colorId ?? (slotIdx === 0 ? 'red' : 'green'));
 
+    const viewLeft = mobileOrientationManager.getViewLeft();
+    const viewRight = mobileOrientationManager.getViewRight();
+
     // Subtle tabletop player zone divider tint in 2P Opposite Mode
     if (this.dualOppositeMode) {
-      const bandX = slotIdx === 0 ? 6 : 1280 - 216;
-      g.fillStyle(pal.primary, 0.045);
-      g.fillRoundedRect(bandX, 82, 210, DESIGN_HEIGHT - 94, 14);
-      g.lineStyle(1.5, pal.primary, 0.22);
-      g.strokeRoundedRect(bandX, 82, 210, DESIGN_HEIGHT - 94, 14);
+      const bandX =
+        slotIdx === 0 ? viewLeft + OPP_BAND_INSET : viewRight - OPP_BAND_INSET - OPP_BAND_WIDTH;
+      g.fillStyle(pal.primary, 0.05);
+      g.fillRoundedRect(bandX, 74, OPP_BAND_WIDTH, DESIGN_HEIGHT - 84, 14);
+      g.lineStyle(1.5, pal.primary, 0.24);
+      g.strokeRoundedRect(bandX, 74, OPP_BAND_WIDTH, DESIGN_HEIGHT - 84, 14);
     }
 
     dpadL.setVisible(!isVector);
@@ -684,15 +719,15 @@ export class TouchControlsOverlay {
       }
 
       const btnScale = Phaser.Math.Clamp(cfg.touchButtonScale ?? 1.0, 0.8, 1.35);
-      const knobR = Math.round((this.dualOppositeMode ? 26 : 30) * btnScale);
+      const knobR = Math.round((this.dualOppositeMode ? 31 : 35) * btnScale);
       g.fillStyle(0x1d1f22, 0.22);
       g.fillCircle(kx + 2, ky + 3, knobR);
       g.fillStyle(knobFill, 0.95);
       g.fillCircle(kx, ky, knobR);
-      g.lineStyle(2.6, knobStroke, 0.95);
+      g.lineStyle(2.8, knobStroke, 0.95);
       g.strokeCircle(kx, ky, knobR);
       g.fillStyle(knobStroke, 0.25);
-      g.fillCircle(kx, ky, Math.round(8.5 * btnScale));
+      g.fillCircle(kx, ky, Math.round(9.5 * btnScale));
     } else {
       const drawPad = (cx: number, cy: number, r: number, pressed: boolean, accent = 0xe3f2fd) => {
         g.fillStyle(0x1d1f22, 0.18);
@@ -713,7 +748,7 @@ export class TouchControlsOverlay {
 
     // 2. Side Tag / Tabletop Seat Indicator
     if (this.dualOppositeMode) {
-      const tagX = slotIdx === 0 ? 22 : 1258;
+      const tagX = slotIdx === 0 ? viewLeft + 22 : viewRight - 22;
       sideTag
         .setText(slotIdx === 0 ? 'XE 1 • CẠNH TRÁI' : 'XE 2 • ĐỐI DIỆN')
         .setColor(pal.primaryHex)
@@ -723,7 +758,7 @@ export class TouchControlsOverlay {
     } else {
       const floating = Boolean(settingsManager.getSettings().touchFloatingStick);
       sideTag
-        .setText(floating ? '🎯 THEO ĐIỂM CHẠM • NGẮM & LÁI' : '📌 CỐ ĐỊNH • NGẮM & LÁI')
+        .setText(floating ? '● THEO ĐIỂM CHẠM • NGẮM & LÁI' : '● CỐ ĐỊNH • NGẮM & LÁI')
         .setColor(UI_COLORS.inkMutedHex)
         .setPosition(geo.stickRestX, Math.min(DESIGN_HEIGHT - 12, geo.stickRestY + geo.stickMaxR + 14))
         .setRotation(0)
@@ -746,7 +781,15 @@ export class TouchControlsOverlay {
     // 4. Giant `BẮN!` Button + 360-deg Segmented Ammo / Skill Ring
     const firePressed = slot.firePointerIds.size > 0;
     const st = slot.hud;
-    const activeSuit = st.skill ?? (st.shieldRemaining > 0 ? 'shield' : null);
+    const activeSuit =
+      st.skill ??
+      (st.shieldRemaining > 0
+        ? 'shield'
+        : (st.phantomRemaining ?? 0) > 0
+          ? 'phantom'
+          : st.empOrbActive
+            ? 'emp'
+            : null);
     const baseColor = activeSuit ? getSkillDescriptor(activeSuit).accentColor : pal.primary;
 
     g.fillStyle(0x1d1f22, 0.25);
@@ -765,9 +808,16 @@ export class TouchControlsOverlay {
       const desc = getSkillDescriptor(activeSuit);
       let ratio = 1;
       subCopy = desc.hudShort;
-      if (st.shieldRemaining > 0 && !st.skill) {
+      if (st.empOrbActive) {
+        subCopy = 'BẤM KÍCH NỔ!';
+      } else if (st.shieldRemaining > 0 && !st.skill) {
         ratio = Math.min(1, st.shieldRemaining / POWERUP_CONFIG.shieldDurationSec);
         subCopy = `KHIÊN ${st.shieldRemaining.toFixed(1)}s`;
+      } else if ((st.phantomRemaining ?? 0) > 0 && !st.skill) {
+        ratio = Math.min(1, (st.phantomRemaining ?? 0) / POWERUP_CONFIG.phantomDurationSec);
+        subCopy = `MA ${(st.phantomRemaining ?? 0).toFixed(1)}s`;
+      } else if (st.skill === 'warp') {
+        subCopy = st.warpBeaconPlaced ? 'BẤM BIẾN VỀ!' : 'ĐẶT CỔNG';
       } else if (st.skill === 'laser') {
         ratio = st.laserChargeProgress !== null ? st.laserChargeProgress : 1;
         subCopy =
@@ -925,7 +975,12 @@ export class TouchControlsOverlay {
         this.redraw();
       },
       simulateTouchDown: (x: number, y: number, pointerId = 950) => {
-        this.handlePointerDown({ id: pointerId, x, y } as Phaser.Input.Pointer);
+        this.handlePointerDown({
+          id: pointerId,
+          x,
+          y,
+          isWorldCoord: true,
+        } as unknown as Phaser.Input.Pointer);
       },
       simulateTouchUp: (pointerId = 950) => {
         this.handlePointerUp({ id: pointerId, x: 0, y: 0 } as Phaser.Input.Pointer);

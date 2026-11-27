@@ -506,6 +506,156 @@ export class AudioManager {
     osc.stop(now + 0.52);
   }
 
+  playEmpLaunch(): void {
+    const ctx = this.ensureReady();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const vol = this.getGainScale() * 0.28;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(520, now);
+    osc.frequency.exponentialRampToValueAtTime(190, now + 0.16);
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.19);
+  }
+
+  playEmpBlast(): void {
+    const ctx = this.ensureReady();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const vol = this.getGainScale() * 0.38;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.exponentialRampToValueAtTime(68, now + 0.34);
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.38);
+    this.playFilteredNoise(ctx, now, 0.22, 2400, 'bandpass', vol * 0.72);
+  }
+
+  playPhantomActivate(): void {
+    const ctx = this.ensureReady();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const vol = this.getGainScale() * 0.28;
+    for (const [freqStart, freqEnd, delay] of [
+      [330, 660, 0],
+      [495, 990, 0.05],
+    ]) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freqStart, now + delay);
+      osc.frequency.exponentialRampToValueAtTime(freqEnd, now + delay + 0.28);
+      gain.gain.setValueAtTime(vol * 0.75, now + delay);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + delay + 0.32);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + delay);
+      osc.stop(now + delay + 0.34);
+    }
+  }
+
+  playCryoShot(): void {
+    const ctx = this.ensureReady();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const vol = this.getGainScale() * 0.26;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(980, now);
+    osc.frequency.exponentialRampToValueAtTime(420, now + 0.14);
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.17);
+  }
+
+  playCryoShatter(): void {
+    const ctx = this.ensureReady();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const vol = this.getGainScale() * 0.32;
+    for (const [f, d] of [
+      [1320, 0],
+      [1760, 0.035],
+      [1046, 0.07],
+    ]) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, now + d);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.65, now + d + 0.15);
+      gain.gain.setValueAtTime(vol * 0.65, now + d);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + d + 0.16);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + d);
+      osc.stop(now + d + 0.18);
+    }
+    this.playFilteredNoise(ctx, now, 0.16, 3600, 'highpass', vol * 0.6);
+  }
+
+  playBarrierDeploy(): void {
+    const ctx = this.ensureReady();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const vol = this.getGainScale() * 0.28;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(220, now);
+    osc.frequency.exponentialRampToValueAtTime(580, now + 0.18);
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.24);
+  }
+
+  playWarpBeacon(): void {
+    const ctx = this.ensureReady();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const vol = this.getGainScale() * 0.26;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(440, now);
+    osc.frequency.exponentialRampToValueAtTime(880, now + 0.2);
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.25);
+  }
+
+  playWarpTeleport(): void {
+    const ctx = this.ensureReady();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const vol = this.getGainScale() * 0.36;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(190, now);
+    osc.frequency.exponentialRampToValueAtTime(1240, now + 0.24);
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.3);
+    this.playFilteredNoise(ctx, now, 0.18, 1900, 'bandpass', vol * 0.7);
+  }
+
   private playFilteredNoise(
     ctx: AudioContext,
     startTime: number,

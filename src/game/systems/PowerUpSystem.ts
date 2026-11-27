@@ -9,33 +9,48 @@ import type { Tank } from '../entities/Tank';
 import { audioManager } from '../managers/AudioManager';
 import { computeSafeMuzzleSpawn, resolveTankWallCollisions } from './CollisionSystem';
 import type { EffectsSystem } from './EffectsSystem';
+import { rebuildArenaWalls } from '../maps/MazeBuilder';
 import { SeededRng } from './MazeSystem';
 import {
   canPickupCrate,
+  computeEmpBlastImpact,
   computeLaserBeam,
   computeReaperBlades,
   computeScatterAngles,
+  computeWarpBlastVictims,
   createSpikeBurstPayload,
   deflectProjectilesAgainstShields,
+  deployEnergyBarrierAhead,
   drillMazeWallAtPoint,
+  ejectTankFromInteriorWalls,
+  findBarriersHitByPolyline,
   findGroundSpikeVictims,
+  findTanksInCryoZones,
   findTriggeredMines,
   incinerateProjectilesWithFlames,
   pickMysteryCrateCell,
+  previewEnergyBarrierEdge,
+  removeEnergyBarrierFromArena,
   rollWeightedSkill,
   steerHomingMissile,
   stepFlameThermodynamics,
   tryApplyCratePickup,
+  type CryoZoneState,
+  type EnergyBarrierState,
   type GroundSpikeZone,
   type MysteryCrateState,
   type ProximityMineState,
+  type WarpBeaconState,
 } from './PowerUpSim';
 import type { ProjectileSystem } from './ProjectileSystem';
 import type {
+  NetBarrierSnapshot,
   NetCrateSnapshot,
+  NetCryoZoneSnapshot,
   NetGameEvent,
   NetMineSnapshot,
   NetSpikeZoneSnapshot,
+  NetWarpBeaconSnapshot,
 } from '../network/PeerMultiplayerManager';
 import type {
   BuiltArenaLayout,
@@ -66,6 +81,17 @@ interface MineVisualEntry {
   armRing: Phaser.GameObjects.Arc;
 }
 
+interface CryoZoneVisualEntry {
+  state: CryoZoneState;
+  disc: Phaser.GameObjects.Arc;
+}
+
+interface WarpBeaconVisualEntry {
+  state: WarpBeaconState;
+  sprite: Phaser.GameObjects.Image;
+  ring: Phaser.GameObjects.Arc;
+}
+
 export class PowerUpSystem {
   private readonly scene: Phaser.Scene;
   private readonly arena: BuiltArenaLayout;
@@ -83,10 +109,20 @@ export class PowerUpSystem {
   private chargeFxAccumulator = 0;
   private missileTrailAccumulator = 0;
   private reaperSparkAccumulator = 0;
+  private ghostTrailAccumulator = 0;
+  private statusVfxAccumulator = 0;
 
   private readonly crates: CrateVisualEntry[] = [];
   private readonly spikeZones: SpikeZoneVisualEntry[] = [];
   private readonly mines: MineVisualEntry[] = [];
+  private readonly cryoZones: CryoZoneVisualEntry[] = [];
+  private readonly barriers: EnergyBarrierState[] = [];
+  private readonly warpBeacons: WarpBeaconVisualEntry[] = [];
+  private readonly pendingEmpBlasts: Array<{ x: number; y: number; ownerIndex: PlayerIndex }> = [];
+  private readonly pendingWarpBlasts: Array<{ x: number; y: number; ownerIndex: PlayerIndex }> = [];
+  private readonly zoneGraphics: Phaser.GameObjects.Graphics;
+  private readonly barrierGraphics: Phaser.GameObjects.Graphics;
+  private readonly holoGraphics: Phaser.GameObjects.Graphics;
   private readonly reticleGraphics: Phaser.GameObjects.Graphics;
   private readonly reaperShadowGraphics: Phaser.GameObjects.Graphics;
   private readonly reaperGraphics: Phaser.GameObjects.Graphics;
@@ -121,6 +157,12 @@ export class PowerUpSystem {
     this.spawnTimerSec =
       this.spawnIntervalSec > 0 ? Math.max(0.5, Math.min(initialSpawnTimerSec, this.spawnIntervalSec)) : 0;
 
+    this.zoneGraphics = scene.add.graphics().setDepth(5.8);
+    this.barrierGraphics = scene.add.graphics().setDepth(11.5);
+    this.holoGraphics = scene.add
+      .graphics()
+      .setDepth(21.5)
+      .setBlendMode(Phaser.BlendModes.ADD);
     this.reticleGraphics = scene.add.graphics().setDepth(22);
     this.reaperShadowGraphics = scene.add.graphics().setDepth(24);
     this.reaperGraphics = scene.add
@@ -170,8 +212,24 @@ export class PowerUpSystem {
     return this.mines.map((m) => m.state);
   }
 
+  getCryoZoneStates(): ReadonlyArray<CryoZoneState> {
+    return this.cryoZones.map((z) => z.state);
+  }
+
+  getBarrierStates(): ReadonlyArray<EnergyBarrierState> {
+    return this.barriers;
+  }
+
+  getWarpBeaconStates(): ReadonlyArray<WarpBeaconState> {
+    return this.warpBeacons.map((b) => b.state);
+  }
+
+  hasActiveEmpOrb(playerIndex: PlayerIndex): boolean {
+    return this.projectileSystem.hasActiveVariantForPlayer(playerIndex, 'emp_orb');
+  }
+
   getGroundHazardCount(): number {
-    return this.spikeZones.length + this.mines.length;
+    return this.spikeZones.length + this.mines.length + this.cryoZones.length;
   }
 
   getMineCount(): number {
@@ -186,6 +244,9 @@ export class PowerUpSystem {
     crates: NetCrateSnapshot[];
     mines: NetMineSnapshot[];
     spikeZones: NetSpikeZoneSnapshot[];
+    cryoZones: NetCryoZoneSnapshot[];
+    barriers: NetBarrierSnapshot[];
+    warpBeacons: NetWarpBeaconSnapshot[];
   } {
     return {
       crates: this.crates.map((c) => ({
@@ -215,6 +276,36 @@ export class PowerUpSystem {
           angle: Math.round(n.angle * 100) / 100,
         })),
       })),
+      cryoZones: this.cryoZones.map((z) => ({
+        id: z.state.id,
+        ownerIndex: z.state.ownerIndex,
+        x: Math.round(z.state.x * 10) / 10,
+        y: Math.round(z.state.y * 10) / 10,
+        radius: Math.round(z.state.radius * 10) / 10,
+        age: Math.round(z.state.age * 100) / 100,
+        duration: z.state.duration,
+      })),
+      barriers: this.barriers.map((b) => ({
+        id: b.id,
+        ownerIndex: b.ownerIndex,
+        kind: b.kind,
+        r: b.r,
+        c: b.c,
+        x0: Math.round(b.x0 * 10) / 10,
+        y0: Math.round(b.y0 * 10) / 10,
+        x1: Math.round(b.x1 * 10) / 10,
+        y1: Math.round(b.y1 * 10) / 10,
+        age: Math.round(b.age * 100) / 100,
+        duration: b.duration,
+      })),
+      warpBeacons: this.warpBeacons.map((b) => ({
+        id: b.state.id,
+        ownerIndex: b.state.ownerIndex,
+        x: Math.round(b.state.x * 10) / 10,
+        y: Math.round(b.state.y * 10) / 10,
+        age: Math.round(b.state.age * 100) / 100,
+        maxDuration: b.state.maxDuration,
+      })),
     };
   }
 
@@ -222,6 +313,9 @@ export class PowerUpSystem {
     crates: readonly NetCrateSnapshot[],
     mines: readonly NetMineSnapshot[],
     spikeZones: readonly NetSpikeZoneSnapshot[],
+    cryoZones: readonly NetCryoZoneSnapshot[] = [],
+    barriers: readonly NetBarrierSnapshot[] = [],
+    warpBeacons: readonly NetWarpBeaconSnapshot[] = [],
   ): void {
     const scale = this.arena.scaleRatio;
 
@@ -341,6 +435,98 @@ export class PowerUpSystem {
         });
       }
     }
+
+    // 4. Reconcile Cryo Ice Zones
+    const cryoIds = new Set(cryoZones.map((z) => z.id));
+    for (let i = this.cryoZones.length - 1; i >= 0; i--) {
+      if (!cryoIds.has(this.cryoZones[i].state.id)) {
+        this.cryoZones[i].disc.destroy();
+        this.cryoZones.splice(i, 1);
+      }
+    }
+    for (const z of cryoZones) {
+      const existing = this.cryoZones.find((e) => e.state.id === z.id);
+      if (existing) {
+        existing.state.age = z.age;
+      } else {
+        const disc = this.scene.add
+          .circle(z.x, z.y, z.radius, 0x80deea, 0.34)
+          .setStrokeStyle(2.2 * scale, 0x00acc1, 0.72)
+          .setDepth(5.5);
+        this.cryoZones.push({
+          state: {
+            id: z.id,
+            ownerIndex: z.ownerIndex,
+            x: z.x,
+            y: z.y,
+            radius: z.radius,
+            age: z.age,
+            duration: z.duration,
+          },
+          disc,
+        });
+      }
+    }
+
+    // 5. Reconcile Energy Force Barriers (syncing arena grid walls!)
+    const barrierIds = new Set(barriers.map((b) => b.id));
+    let wallsChanged = false;
+    for (let i = this.barriers.length - 1; i >= 0; i--) {
+      if (!barrierIds.has(this.barriers[i].id)) {
+        removeEnergyBarrierFromArena(this.barriers[i], this.arena);
+        this.barriers.splice(i, 1);
+        wallsChanged = true;
+      }
+    }
+    for (const b of barriers) {
+      const existing = this.barriers.find((e) => e.id === b.id);
+      if (existing) {
+        existing.age = b.age;
+      } else {
+        if (b.kind === 'h' && this.arena.grid.hWalls[b.r]?.[b.c] !== undefined) {
+          this.arena.grid.hWalls[b.r][b.c] = true;
+        } else if (b.kind === 'v' && this.arena.grid.vWalls[b.r]?.[b.c] !== undefined) {
+          this.arena.grid.vWalls[b.r][b.c] = true;
+        }
+        this.barriers.push({ ...b });
+        wallsChanged = true;
+      }
+    }
+    if (wallsChanged) {
+      rebuildArenaWalls(this.arena);
+      this.onWallsModified?.();
+    }
+
+    // 6. Reconcile Spatial Warp Beacons
+    const beaconIds = new Set(warpBeacons.map((b) => b.id));
+    for (let i = this.warpBeacons.length - 1; i >= 0; i--) {
+      if (!beaconIds.has(this.warpBeacons[i].state.id)) {
+        this.warpBeacons[i].sprite.destroy();
+        this.warpBeacons[i].ring.destroy();
+        this.warpBeacons.splice(i, 1);
+      }
+    }
+    for (const b of warpBeacons) {
+      const existing = this.warpBeacons.find((e) => e.state.id === b.id);
+      if (existing) {
+        existing.state.age = b.age;
+      } else {
+        const ring = this.scene.add
+          .circle(b.x, b.y, 18 * scale)
+          .setStrokeStyle(2.2 * scale, 0xe040fb, 0.78)
+          .setFillStyle(0xea80fc, 0.14)
+          .setDepth(6.5);
+        const sprite = this.scene.add
+          .image(b.x, b.y, 'pickup_warp_beacon')
+          .setScale(scale * 0.85)
+          .setDepth(8.5);
+        this.warpBeacons.push({
+          state: { ...b },
+          sprite,
+          ring,
+        });
+      }
+    }
   }
 
   handleDrillWallImpact(proj: ProjectileKinematics, hitX: number, hitY: number): boolean {
@@ -427,8 +613,33 @@ export class PowerUpSystem {
     walls: readonly WallRect[],
     isHeldFire: boolean,
     consumeBufferedPress: () => boolean,
+    allTanks: readonly Tank[] = [tank],
   ): { fired: boolean; hudDirty: boolean } {
-    if (!tank.kinematics.alive || !tank.canFire()) {
+    if (!tank.kinematics.alive) {
+      return { fired: false, hudDirty: false };
+    }
+
+    // Remote Mid-Air Detonation for an active EMP Orb (`2nd BẮN press`!)
+    if (!tank.isFrozen() && !tank.isEmpJammed() && this.hasActiveEmpOrb(tank.index)) {
+      const empProj = this.projectileSystem
+        .getPool()
+        .find(
+          (p) =>
+            p.kinematics.active &&
+            p.kinematics.ownerIndex === tank.index &&
+            p.kinematics.variant === 'emp_orb' &&
+            p.kinematics.age >= 0.08,
+        );
+      if (empProj && consumeBufferedPress()) {
+        const bx = empProj.kinematics.x;
+        const by = empProj.kinematics.y;
+        empProj.deactivate();
+        this.pendingEmpBlasts.push({ x: bx, y: by, ownerIndex: tank.index });
+        return { fired: true, hudDirty: true };
+      }
+    }
+
+    if (!tank.canFire()) {
       return { fired: false, hudDirty: false };
     }
 
@@ -790,7 +1001,7 @@ export class PowerUpSystem {
       return { fired: true, hudDirty: true };
     }
 
-    // 11. Homing Missile (4.0s bounce -> shortest-path maze seeker!)
+    // 11. Homing Missile (2.5s bounce -> shortest-path maze seeker!)
     if (skill === 'homing') {
       const radius =
         BASE_GAMEPLAY.projectileRadius * POWERUP_CONFIG.homingRadiusMultiplier * scale;
@@ -829,14 +1040,376 @@ export class PowerUpSystem {
       return { fired: true, hudDirty: true };
     }
 
+    // 12. EMP Grenade (`Lựu Đạn Xung Điện EMP` — 1 bouncing orb, press 2nd time or wait 2.0s to detonate!)
+    if (skill === 'emp') {
+      const radius =
+        BASE_GAMEPLAY.projectileRadius * POWERUP_CONFIG.empOrbRadiusMultiplier * scale;
+      const speed =
+        BASE_GAMEPLAY.projectileSpeed * POWERUP_CONFIG.empOrbSpeedMultiplier * scale;
+      const spawn = computeSafeMuzzleSpawn(
+        tank.kinematics.x,
+        tank.kinematics.y,
+        tank.kinematics.angle,
+        tank.getBarrelLength(),
+        radius,
+        speed,
+        walls,
+      );
+
+      const proj = this.projectileSystem.spawnCustomProjectile({
+        ownerIndex: tank.index,
+        x: spawn.x,
+        y: spawn.y,
+        vx: spawn.vx,
+        vy: spawn.vy,
+        radius,
+        maxLifetime: POWERUP_CONFIG.empFlightDetonateSec,
+        maxBounces: POWERUP_CONFIG.empOrbMaxBounces,
+        graceTimer: BASE_GAMEPLAY.selfHitGraceSec,
+        variant: 'emp_orb',
+        bounceBehavior: 'reflect',
+      });
+      if (!proj) return { fired: false, hudDirty: false };
+
+      tank.triggerFireVisual(0.1);
+      tank.consumeSkillAmmo(1);
+      audioManager.playEmpLaunch();
+      this.effectsSystem.emitEmpMuzzle(spawn.x, spawn.y, tank.kinematics.angle);
+      this.netEventSink?.({
+        kind: 'muzzle_fx',
+        variant: 'emp_orb',
+        x: spawn.x,
+        y: spawn.y,
+        angle: tank.kinematics.angle,
+      });
+      return { fired: true, hudDirty: true };
+    }
+
+    // 13. Phantom Phase (`Giáp Bóng Ma Xuyên Tường` — 3.5s interior wall phase + +20% speed + standard cannon!)
+    if (skill === 'phantom') {
+      tank.activatePhantom(POWERUP_CONFIG.phantomDurationSec);
+      audioManager.playPhantomActivate();
+      this.effectsSystem.emitPhantomActivate(tank.kinematics.x, tank.kinematics.y);
+      this.netEventSink?.({
+        kind: 'hazard_fx',
+        sub: 'phantom_activate',
+        x: tank.kinematics.x,
+        y: tank.kinematics.y,
+      });
+      return { fired: true, hudDirty: true };
+    }
+
+    // 14. Cryo Cannon (`Pháo Đóng Băng` — 2 bouncing cryo orbs -> direct freeze + 6s slippery ice zone!)
+    if (skill === 'cryo') {
+      const radius =
+        BASE_GAMEPLAY.projectileRadius * POWERUP_CONFIG.cryoOrbRadiusMultiplier * scale;
+      const speed =
+        BASE_GAMEPLAY.projectileSpeed * POWERUP_CONFIG.cryoOrbSpeedMultiplier * scale;
+      const spawn = computeSafeMuzzleSpawn(
+        tank.kinematics.x,
+        tank.kinematics.y,
+        tank.kinematics.angle,
+        tank.getBarrelLength(),
+        radius,
+        speed,
+        walls,
+      );
+
+      const proj = this.projectileSystem.spawnCustomProjectile({
+        ownerIndex: tank.index,
+        x: spawn.x,
+        y: spawn.y,
+        vx: spawn.vx,
+        vy: spawn.vy,
+        radius,
+        maxLifetime: POWERUP_CONFIG.cryoOrbLifetimeSec,
+        maxBounces: POWERUP_CONFIG.cryoOrbMaxBounces,
+        graceTimer: BASE_GAMEPLAY.selfHitGraceSec,
+        variant: 'cryo_orb',
+        bounceBehavior: 'reflect',
+      });
+      if (!proj) return { fired: false, hudDirty: false };
+
+      tank.triggerFireVisual(POWERUP_CONFIG.cryoCooldownSec);
+      audioManager.playCryoShot();
+      this.effectsSystem.emitCryoMuzzle(spawn.x, spawn.y, tank.kinematics.angle);
+      this.netEventSink?.({
+        kind: 'muzzle_fx',
+        variant: 'cryo_orb',
+        x: spawn.x,
+        y: spawn.y,
+        angle: tank.kinematics.angle,
+      });
+
+      const { depleted } = tank.consumeSkillAmmo(1);
+      if (depleted) {
+        this.effectsSystem.emitSuitRevert(tank.kinematics.x, tank.kinematics.y);
+      }
+      return { fired: true, hudDirty: true };
+    }
+
+    // 15. Energy Barrier (`Súng Xây Tường Năng Lượng` — 3 deployable 8.0s maze force-walls!)
+    if (skill === 'barrier') {
+      const barrier = deployEnergyBarrierAhead(
+        tank.kinematics,
+        this.arena,
+        allTanks.map((t) => t.kinematics),
+        this.nextEntityId++,
+        POWERUP_CONFIG.barrierDurationSec,
+      );
+      if (!barrier) {
+        return { fired: false, hudDirty: false };
+      }
+
+      this.barriers.push(barrier);
+      this.onWallsModified?.();
+      tank.triggerFireVisual(POWERUP_CONFIG.barrierCooldownSec);
+      audioManager.playBarrierDeploy();
+      this.effectsSystem.emitBarrierDeploy(barrier.x0, barrier.y0, barrier.x1, barrier.y1);
+      this.netEventSink?.({
+        kind: 'hazard_fx',
+        sub: 'barrier_deploy',
+        x: barrier.x0,
+        y: barrier.y0,
+        x2: barrier.x1,
+        y2: barrier.y1,
+      });
+
+      const { depleted } = tank.consumeSkillAmmo(1);
+      if (depleted) {
+        this.effectsSystem.emitSuitRevert(tank.kinematics.x, tank.kinematics.y);
+      }
+      return { fired: true, hudDirty: true };
+    }
+
+    // 16. Spatial Warp Beacon (`Mỏ Neo Không Gian` — 1st press plants beacon, 2nd press teleports + rift blast!)
+    if (skill === 'warp') {
+      const existingIdx = this.warpBeacons.findIndex(
+        (b) => b.state.ownerIndex === tank.index,
+      );
+
+      if (!tank.isWarpBeaconPlaced() || existingIdx < 0) {
+        if (existingIdx >= 0) {
+          this.warpBeacons[existingIdx].sprite.destroy();
+          this.warpBeacons[existingIdx].ring.destroy();
+          this.warpBeacons.splice(existingIdx, 1);
+        }
+        const bx = tank.kinematics.x;
+        const by = tank.kinematics.y;
+        const ring = this.scene.add
+          .circle(bx, by, 18 * scale)
+          .setStrokeStyle(2.2 * scale, 0xe040fb, 0.78)
+          .setFillStyle(0xea80fc, 0.14)
+          .setDepth(6.5);
+        const sprite = this.scene.add
+          .image(bx, by, 'pickup_warp_beacon')
+          .setScale(scale * 0.85)
+          .setDepth(8.5);
+        this.warpBeacons.push({
+          state: {
+            id: this.nextEntityId++,
+            ownerIndex: tank.index,
+            x: bx,
+            y: by,
+            age: 0,
+            maxDuration: POWERUP_CONFIG.warpBeaconDurationSec,
+          },
+          sprite,
+          ring,
+        });
+        tank.setWarpBeaconPlaced(true);
+        tank.triggerFireVisual(0.24);
+        audioManager.playWarpBeacon();
+        this.effectsSystem.emitWarpBeaconPlant(bx, by);
+        this.netEventSink?.({ kind: 'hazard_fx', sub: 'warp_plant', x: bx, y: by });
+        return { fired: true, hudDirty: true };
+      }
+
+      const beaconEntry = this.warpBeacons[existingIdx];
+      const fromX = tank.kinematics.x;
+      const fromY = tank.kinematics.y;
+      const toX = beaconEntry.state.x;
+      const toY = beaconEntry.state.y;
+      const blastR = POWERUP_CONFIG.warpBlastRadius * scale;
+
+      beaconEntry.sprite.destroy();
+      beaconEntry.ring.destroy();
+      this.warpBeacons.splice(existingIdx, 1);
+
+      tank.kinematics.x = toX;
+      tank.kinematics.y = toY;
+      tank.kinematics.vx = 0;
+      tank.kinematics.vy = 0;
+      ejectTankFromInteriorWalls(tank.kinematics, this.arena);
+      tank.triggerFireVisual(0.2);
+      tank.clearSkill();
+
+      audioManager.playWarpTeleport();
+      this.effectsSystem.emitWarpTeleport(fromX, fromY, toX, toY, blastR);
+      this.netEventSink?.({
+        kind: 'hazard_fx',
+        sub: 'warp_teleport',
+        x: fromX,
+        y: fromY,
+        x2: toX,
+        y2: toY,
+        radius: blastR,
+      });
+      this.pendingWarpBlasts.push({ x: fromX, y: fromY, ownerIndex: tank.index });
+      return { fired: true, hudDirty: true };
+    }
+
     return { fired: false, hudDirty: false };
+  }
+
+  checkBarrierBounceRipple(worldX: number, worldY: number): void {
+    if (this.barriers.length === 0) return;
+    const maxDist = 14 * this.arena.scaleRatio;
+    for (const b of this.barriers) {
+      const dx = b.x1 - b.x0;
+      const dy = b.y1 - b.y0;
+      const lenSq = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((worldX - b.x0) * dx + (worldY - b.y0) * dy) / lenSq));
+      const px = b.x0 + dx * t;
+      const py = b.y0 + dy * t;
+      if (Math.hypot(worldX - px, worldY - py) <= maxDist) {
+        this.effectsSystem.emitBarrierImpactRipple(worldX, worldY);
+        return;
+      }
+    }
+  }
+
+  handleProjectileExpired(
+    x: number,
+    y: number,
+    variant: ProjectileKinematics['variant'],
+    ownerIndex: PlayerIndex,
+  ): void {
+    if (variant === 'cryo_orb') {
+      this.spawnCryoZone(x, y, ownerIndex);
+    } else if (variant === 'emp_orb') {
+      this.pendingEmpBlasts.push({ x, y, ownerIndex });
+    }
+  }
+
+  private spawnCryoZone(cx: number, cy: number, ownerIndex: PlayerIndex): void {
+    const scale = this.arena.scaleRatio;
+    const zoneR = this.arena.cellSize * POWERUP_CONFIG.cryoZoneCellsRadius;
+    audioManager.playCryoShatter();
+    this.effectsSystem.emitCryoShatter(cx, cy, zoneR);
+    this.netEventSink?.({
+      kind: 'hazard_fx',
+      sub: 'cryo_shatter',
+      x: cx,
+      y: cy,
+      radius: zoneR,
+    });
+
+    const disc = this.scene.add
+      .circle(cx, cy, zoneR, 0x80deea, 0.34)
+      .setStrokeStyle(2.2 * scale, 0x00acc1, 0.72)
+      .setDepth(5.5);
+    this.cryoZones.push({
+      state: {
+        id: this.nextEntityId++,
+        ownerIndex,
+        x: cx,
+        y: cy,
+        radius: zoneR,
+        age: 0,
+        duration: POWERUP_CONFIG.cryoZoneDurationSec,
+      },
+      disc,
+    });
+  }
+
+  private executeEmpBlast(
+    cx: number,
+    cy: number,
+    ownerIndex: PlayerIndex,
+    tanks: readonly Tank[],
+    onSkillHitTank: (victim: Tank, source: 'emp_blast') => void,
+  ): boolean {
+    let hudDirty = false;
+    const blastR = this.arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius;
+    audioManager.playEmpBlast();
+    this.effectsSystem.emitEmpBlast(cx, cy, blastR);
+    this.netEventSink?.({
+      kind: 'hazard_fx',
+      sub: 'emp_blast',
+      x: cx,
+      y: cy,
+      radius: blastR,
+    });
+
+    const impact = computeEmpBlastImpact(
+      cx,
+      cy,
+      blastR,
+      ownerIndex,
+      tanks.map((t) => t.kinematics),
+      this.mines.map((m) => m.state),
+      this.barriers,
+    );
+
+    if (impact.clearedMineIds.length > 0) {
+      const clearSet = new Set(impact.clearedMineIds);
+      for (let i = this.mines.length - 1; i >= 0; i--) {
+        if (clearSet.has(this.mines[i].state.id)) {
+          this.effectsSystem.emitBulletIncinerated(
+            this.mines[i].state.x,
+            this.mines[i].state.y,
+          );
+          this.mines[i].sprite.destroy();
+          this.mines[i].armRing.destroy();
+          this.mines.splice(i, 1);
+        }
+      }
+    }
+
+    if (impact.clearedBarrierIds.length > 0) {
+      const clearBarriers = new Set(impact.clearedBarrierIds);
+      let modified = false;
+      for (let i = this.barriers.length - 1; i >= 0; i--) {
+        if (clearBarriers.has(this.barriers[i].id)) {
+          const b = this.barriers[i];
+          this.effectsSystem.emitBarrierShatter(b.x0, b.y0, b.x1, b.y1);
+          removeEnergyBarrierFromArena(b, this.arena);
+          this.barriers.splice(i, 1);
+          modified = true;
+        }
+      }
+      if (modified) this.onWallsModified?.();
+    }
+
+    for (const vIdx of impact.hitEnemyIndices) {
+      const victim = tanks.find((t) => t.index === vIdx);
+      if (!victim || !victim.kinematics.alive) continue;
+      const jamRes = victim.applyEmpJam(POWERUP_CONFIG.empJamDurationSec);
+      if (jamRes.brokeShield || jamRes.interruptedChannel) {
+        this.effectsSystem.emitSuitRevert(victim.kinematics.x, victim.kinematics.y);
+      }
+      onSkillHitTank(victim, 'emp_blast');
+      hudDirty = true;
+    }
+
+    const shooter = tanks.find((t) => t.index === ownerIndex);
+    if (shooter && !shooter.getEquippedSkill()) {
+      this.effectsSystem.emitSuitRevert(shooter.kinematics.x, shooter.kinematics.y);
+      hudDirty = true;
+    }
+
+    return hudDirty;
   }
 
   preProjectileSubStep(
     subDt: number,
     tanks: readonly Tank[],
     phase: RoundPhase,
-    onSkillHitTank: (victim: Tank, source: 'laser' | 'reaper') => void,
+    onSkillHitTank: (
+      victim: Tank,
+      source: 'laser' | 'reaper' | 'emp_blast' | 'warp_blast',
+    ) => void,
     onLaserBeamFired?: (points: Array<{ x: number; y: number }>) => void,
   ): { hudDirty: boolean } {
     let hudDirty = false;
@@ -906,6 +1479,25 @@ export class PowerUpSystem {
         audioManager.playLaserBlast();
         this.effectsSystem.emitLaserBeamBlast(beam.points, victimCoords);
         onLaserBeamFired?.(beam.points);
+        if (this.barriers.length > 0) {
+          const hitBarriers = findBarriersHitByPolyline(
+            beam.points,
+            POWERUP_CONFIG.laserBeamHalfWidth * scale,
+            this.barriers,
+          );
+          if (hitBarriers.length > 0) {
+            const hitSet = new Set(hitBarriers);
+            for (let i = this.barriers.length - 1; i >= 0; i--) {
+              if (hitSet.has(this.barriers[i].id)) {
+                const b = this.barriers[i];
+                this.effectsSystem.emitBarrierShatter(b.x0, b.y0, b.x1, b.y1);
+                removeEnergyBarrierFromArena(b, this.arena);
+                this.barriers.splice(i, 1);
+              }
+            }
+            this.onWallsModified?.();
+          }
+        }
         this.netEventSink?.({
           kind: 'laser_blast',
           points: beam.points,
@@ -1062,6 +1654,12 @@ export class PowerUpSystem {
       if (k.variant === 'drill' && emitTrail) {
         this.effectsSystem.emitDrillTrail(k.x, k.y, Math.atan2(k.vy, k.vx));
       }
+      if (k.variant === 'emp_orb' && emitTrail) {
+        this.effectsSystem.emitEmpOrbFlightTick(k.x, k.y);
+      }
+      if (k.variant === 'cryo_orb' && emitTrail) {
+        this.effectsSystem.emitCryoOrbFlightTick(k.x, k.y);
+      }
       if (k.variant === 'flame' && emitTrail && (k.id & 3) === 0) {
         this.effectsSystem.emitFlameStreamEmber(
           k.x,
@@ -1087,6 +1685,69 @@ export class PowerUpSystem {
       }
     }
 
+    // 6B. Continuous Phantom Afterimage Clones, EMP Jam Sparks & Ice-Drift Snow Spray!
+    this.ghostTrailAccumulator += subDt;
+    const emitGhostClone = this.ghostTrailAccumulator >= 0.085;
+    if (emitGhostClone) this.ghostTrailAccumulator = 0;
+
+    this.statusVfxAccumulator += subDt;
+    const emitStatusTick = this.statusVfxAccumulator >= 0.095;
+    if (emitStatusTick) this.statusVfxAccumulator = 0;
+
+    for (const t of tanks) {
+      if (!t.kinematics.alive) continue;
+      const speed = Math.hypot(t.kinematics.vx, t.kinematics.vy);
+      if (emitGhostClone && t.isPhantom() && speed > 18 * scale) {
+        this.effectsSystem.emitPhantomAfterimage(
+          t.kinematics.x,
+          t.kinematics.y,
+          t.kinematics.angle,
+          t.palette.id,
+        );
+      }
+      if (emitStatusTick && t.isEmpJammed()) {
+        this.effectsSystem.emitEmpJammedTick(t.kinematics.x, t.kinematics.y);
+      }
+      if (emitStatusTick && t.isOnIceFloor() && !t.isFrozen() && speed > 22 * scale) {
+        this.effectsSystem.emitIceDriftSpray(
+          t.kinematics.x,
+          t.kinematics.y,
+          t.kinematics.angle,
+        );
+      }
+    }
+
+    // 7. Resolve queued Mid-Air EMP Detonations & Spatial Warp Departure Blasts
+    while (this.pendingEmpBlasts.length > 0) {
+      const ev = this.pendingEmpBlasts.shift()!;
+      if (this.executeEmpBlast(ev.x, ev.y, ev.ownerIndex, tanks, onSkillHitTank)) {
+        hudDirty = true;
+      }
+    }
+
+    while (this.pendingWarpBlasts.length > 0) {
+      const ev = this.pendingWarpBlasts.shift()!;
+      const blastR = POWERUP_CONFIG.warpBlastRadius * scale;
+      const victims = computeWarpBlastVictims(
+        ev.x,
+        ev.y,
+        ev.ownerIndex,
+        blastR,
+        tanks.map((t) => t.kinematics),
+      );
+      for (const vIdx of victims) {
+        const victim = tanks.find((t) => t.index === vIdx);
+        if (!victim || !victim.kinematics.alive) continue;
+        if (victim.isShielded()) {
+          audioManager.playShieldDeflect();
+          this.effectsSystem.emitShieldDeflect(victim.kinematics.x, victim.kinematics.y);
+        } else {
+          onSkillHitTank(victim, 'warp_blast');
+          hudDirty = true;
+        }
+      }
+    }
+
     return { hudDirty };
   }
 
@@ -1094,18 +1755,34 @@ export class PowerUpSystem {
     subDt: number,
     tanks: readonly Tank[],
     hits: readonly ProjectileHitEvent[],
-    onHazardHitTank: (victim: Tank, source: 'ground_spike' | 'mine') => void,
-  ): void {
+    onHazardHitTank: (
+      victim: Tank,
+      source: 'ground_spike' | 'mine' | 'emp_blast' | 'warp_blast',
+    ) => void,
+  ): boolean {
+    let hudDirty = false;
     const tankKinematics = tanks.map((t) => t.kinematics);
     const shieldedIndices = new Set<PlayerIndex>(
       tanks.filter((t) => t.isShielded()).map((t) => t.index),
     );
 
-    // 1. Spike Ball impact or 3.0s timed detonation
+    // 1. Spike Ball, EMP Orb & Cryo Orb impacts or timed detonations!
     for (const hit of hits) {
       const proj = this.projectileSystem.getProjectileById(hit.projectileId);
-      if (proj && proj.kinematics.variant === 'spike_ball') {
+      if (!proj) continue;
+      const v = proj.kinematics.variant;
+      if (v === 'spike_ball') {
         this.detonateSpikeBall(hit.x, hit.y, hit.ownerIndex);
+      } else if (v === 'emp_orb') {
+        if (this.executeEmpBlast(hit.x, hit.y, hit.ownerIndex, tanks, onHazardHitTank)) {
+          hudDirty = true;
+        }
+      } else if (v === 'cryo_orb') {
+        const victim = tanks.find((t) => t.index === hit.victimIndex);
+        if (victim && !victim.isShielded()) {
+          victim.applyCryoFreeze(POWERUP_CONFIG.cryoFreezeDurationSec);
+        }
+        this.spawnCryoZone(hit.x, hit.y, hit.ownerIndex);
       }
     }
 
@@ -1193,6 +1870,79 @@ export class PowerUpSystem {
         }
       }
     }
+
+    // 4. Age Cryo Ice Zones & apply low-traction Ice Drift to rival tanks!
+    for (let i = this.cryoZones.length - 1; i >= 0; i--) {
+      const z = this.cryoZones[i];
+      z.state.age += subDt;
+      if (z.state.age >= z.state.duration) {
+        z.disc.destroy();
+        this.cryoZones.splice(i, 1);
+      }
+    }
+    const slidingIndices = findTanksInCryoZones(
+      this.cryoZones.map((z) => z.state),
+      tankKinematics,
+    );
+    for (const t of tanks) {
+      t.setOnIceFloor(slidingIndices.has(t.index) && !t.isShielded());
+    }
+
+    // 5. Age Energy Force Barriers & detect external demolition (Drill / TNT Barrel)
+    if (this.barriers.length > 0) {
+      let modifiedWalls = false;
+      for (let i = this.barriers.length - 1; i >= 0; i--) {
+        const b = this.barriers[i];
+        b.age += subDt;
+        const stillInGrid =
+          b.kind === 'h'
+            ? Boolean(this.arena.grid.hWalls[b.r]?.[b.c])
+            : Boolean(this.arena.grid.vWalls[b.r]?.[b.c]);
+
+        if (!stillInGrid) {
+          this.effectsSystem.emitBarrierShatter(b.x0, b.y0, b.x1, b.y1);
+          this.barriers.splice(i, 1);
+          modifiedWalls = true;
+        } else if (b.age >= b.duration) {
+          this.effectsSystem.emitBarrierShatter(b.x0, b.y0, b.x1, b.y1);
+          this.netEventSink?.({
+            kind: 'hazard_fx',
+            sub: 'barrier_shatter',
+            x: b.x0,
+            y: b.y0,
+            x2: b.x1,
+            y2: b.y1,
+          });
+          removeEnergyBarrierFromArena(b, this.arena);
+          this.barriers.splice(i, 1);
+          modifiedWalls = true;
+        }
+      }
+      if (modifiedWalls) {
+        this.onWallsModified?.();
+      }
+    }
+
+    // 6. Age Spatial Warp Beacons (expire cleanly if 12s elapses or owner replaced/lost skill)
+    for (let i = this.warpBeacons.length - 1; i >= 0; i--) {
+      const b = this.warpBeacons[i];
+      b.state.age += subDt;
+      const owner = tanks.find((t) => t.index === b.state.ownerIndex);
+      const orphaned = !owner || !owner.kinematics.alive || owner.getEquippedSkill() !== 'warp';
+      const timedOut = b.state.age >= b.state.maxDuration;
+      if (orphaned || timedOut) {
+        if (timedOut && owner && owner.getEquippedSkill() === 'warp') {
+          owner.clearSkill();
+          this.effectsSystem.emitSuitRevert(owner.kinematics.x, owner.kinematics.y);
+          hudDirty = true;
+        }
+        b.sprite.destroy();
+        b.ring.destroy();
+        this.warpBeacons.splice(i, 1);
+      }
+    }
+
+    return hudDirty;
   }
 
   private detonateSpikeBall(bx: number, by: number, ownerIndex: PlayerIndex): void {
@@ -1283,6 +2033,200 @@ export class PowerUpSystem {
         const phase = (m.state.age - m.state.armingSec) % 3.2;
         const glint = phase < 0.16 ? 0.32 : 0.04;
         m.sprite.setAlpha(glint);
+      }
+    }
+
+    // Update Cryo Zones, Energy Force Barriers & Warp Beacons with rich procedural geometry!
+    this.zoneGraphics.clear();
+    this.holoGraphics.clear();
+
+    for (const cz of this.cryoZones) {
+      const rem = cz.state.duration - cz.state.age;
+      const fade = rem < 1.0 ? Math.max(0.1, rem) : 1;
+      const cx = cz.state.x;
+      const cy = cz.state.y;
+      const r = cz.state.radius;
+      cz.disc.setAlpha((0.24 + 0.07 * Math.sin(this.animClock * 5 + cz.state.id)) * fade);
+
+      // Rotating 6-branch glacial snowflake mandala + inner frost hexagon!
+      const slowRot = this.animClock * 0.45 + cz.state.id;
+      this.zoneGraphics.lineStyle(1.8 * scale, 0xffffff, 0.62 * fade);
+      for (let i = 0; i < 6; i++) {
+        const a = slowRot + (i * Math.PI) / 3;
+        const tipX = cx + Math.cos(a) * (r * 0.84);
+        const tipY = cy + Math.sin(a) * (r * 0.84);
+        this.zoneGraphics.lineBetween(cx, cy, tipX, tipY);
+
+        const branchDist = r * 0.52;
+        const bx = cx + Math.cos(a) * branchDist;
+        const by = cy + Math.sin(a) * branchDist;
+        for (const side of [-0.55, 0.55]) {
+          this.zoneGraphics.lineBetween(
+            bx,
+            by,
+            bx + Math.cos(a + side) * (r * 0.22),
+            by + Math.sin(a + side) * (r * 0.22),
+          );
+        }
+      }
+
+      // Inner crystal hexagon
+      this.zoneGraphics.lineStyle(1.5 * scale, 0x00bcd4, 0.52 * fade);
+      this.zoneGraphics.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = -slowRot * 0.8 + (i * Math.PI) / 3;
+        const px = cx + Math.cos(a) * (r * 0.42);
+        const py = cy + Math.sin(a) * (r * 0.42);
+        if (i === 0) this.zoneGraphics.moveTo(px, py);
+        else this.zoneGraphics.lineTo(px, py);
+      }
+      this.zoneGraphics.closePath();
+      this.zoneGraphics.strokePath();
+
+      // Twinkling frost glints across the ice sheet
+      for (let gIdx = 0; gIdx < 4; gIdx++) {
+        const ga = cz.state.id * 1.7 + gIdx * 1.57 + this.animClock * 0.9;
+        const gd = r * (0.28 + (gIdx % 2) * 0.38);
+        const twinkle = Math.max(0, Math.sin(this.animClock * 7 + gIdx * 2.1 + cz.state.id));
+        if (twinkle > 0.2) {
+          this.holoGraphics.fillStyle(0xffffff, 0.72 * twinkle * fade);
+          this.holoGraphics.fillCircle(
+            cx + Math.cos(ga) * gd,
+            cy + Math.sin(ga) * gd,
+            (1.6 + twinkle * 1.4) * scale,
+          );
+        }
+      }
+    }
+
+    for (const wb of this.warpBeacons) {
+      wb.sprite.rotation += dt * 2.8;
+      const rem = wb.state.maxDuration - wb.state.age;
+      const blink = rem < 2.0 ? 0.35 + 0.65 * Math.abs(Math.sin(rem * 16)) : 1;
+      const bx = wb.state.x;
+      const by = wb.state.y;
+      wb.sprite.setAlpha(blink);
+      wb.ring
+        .setScale(1 + Math.sin(this.animClock * 7 + wb.state.id) * 0.14)
+        .setAlpha(0.75 * blink);
+
+      // Counter-rotating sacred-geometry square sigils + 3 orbiting dimensional satellites!
+      const sigilR = 19 * scale;
+      for (const [dir, col] of [
+        [1, 0xe040fb],
+        [-1.3, 0x80d8ff],
+      ] as const) {
+        const rot = this.animClock * 2.4 * dir + wb.state.id;
+        this.holoGraphics.lineStyle(1.6 * scale, col, 0.68 * blink);
+        this.holoGraphics.beginPath();
+        for (let k = 0; k < 4; k++) {
+          const a = rot + (k * Math.PI) / 2;
+          const px = bx + Math.cos(a) * sigilR;
+          const py = by + Math.sin(a) * sigilR;
+          if (k === 0) this.holoGraphics.moveTo(px, py);
+          else this.holoGraphics.lineTo(px, py);
+        }
+        this.holoGraphics.closePath();
+        this.holoGraphics.strokePath();
+      }
+
+      for (let m = 0; m < 3; m++) {
+        const ma = this.animClock * 5.2 + (m * Math.PI * 2) / 3;
+        const mx = bx + Math.cos(ma) * (23 * scale);
+        const my = by + Math.sin(ma) * (23 * scale);
+        this.holoGraphics.fillStyle(m % 2 === 0 ? 0x80d8ff : 0xea80fc, 0.92 * blink);
+        this.holoGraphics.fillCircle(mx, my, 2.3 * scale);
+      }
+
+      // Subtle quantum-tether pulses linking the beacon to its owner tank!
+      const owner = tanks.find((t) => t.index === wb.state.ownerIndex && t.kinematics.alive);
+      if (owner && owner.isWarpBeaconPlaced()) {
+        const dx = owner.kinematics.x - bx;
+        const dy = owner.kinematics.y - by;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 26 * scale) {
+          const dots = Math.min(14, Math.max(3, Math.floor(dist / (32 * scale))));
+          const phaseShift = (this.animClock * 2.2) % 1;
+          for (let d = 0; d < dots; d++) {
+            const u = 1 - ((d + phaseShift) / dots);
+            const px = bx + dx * u;
+            const py = by + dy * u;
+            this.holoGraphics.fillStyle(0xea80fc, 0.34 * blink);
+            this.holoGraphics.fillCircle(px, py, 2.0 * scale);
+          }
+        }
+      }
+    }
+
+    // Live Holographic Doorway Preview when a tank holds `barrier` (`Súng Xây Tường Năng Lượng`)!
+    for (const tank of tanks) {
+      if (!tank.kinematics.alive || tank.getEquippedSkill() !== 'barrier') continue;
+      const preview = previewEnergyBarrierEdge(tank.kinematics, this.arena);
+      if (!preview) continue;
+      const pulse = 0.45 + 0.35 * Math.sin(this.animClock * 10);
+      this.holoGraphics.lineStyle(7 * scale, 0x00e676, 0.24 * pulse);
+      this.holoGraphics.lineBetween(preview.x0, preview.y0, preview.x1, preview.y1);
+
+      const segs = 7;
+      for (let sIdx = 0; sIdx < segs; sIdx += 2) {
+        const f0 = sIdx / segs;
+        const f1 = Math.min(1, (sIdx + 1) / segs);
+        this.holoGraphics.lineStyle(2.6 * scale, 0x69f0ae, 0.72 * pulse);
+        this.holoGraphics.lineBetween(
+          preview.x0 + (preview.x1 - preview.x0) * f0,
+          preview.y0 + (preview.y1 - preview.y0) * f0,
+          preview.x0 + (preview.x1 - preview.x0) * f1,
+          preview.y0 + (preview.y1 - preview.y0) * f1,
+        );
+      }
+      this.holoGraphics.fillStyle(0x69f0ae, 0.78 * pulse);
+      this.holoGraphics.fillCircle(preview.x0, preview.y0, 3.2 * scale);
+      this.holoGraphics.fillCircle(preview.x1, preview.y1, 3.2 * scale);
+    }
+
+    this.barrierGraphics.clear();
+    for (const b of this.barriers) {
+      const rem = b.duration - b.age;
+      const blink = rem < 1.5 ? 0.35 + 0.65 * Math.abs(Math.sin(rem * 18)) : 1;
+
+      // Additive neon emerald plasma aura (`holoGraphics`)
+      this.holoGraphics.lineStyle(18 * scale, 0x00e676, 0.28 * blink);
+      this.holoGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
+      this.holoGraphics.lineStyle(9 * scale, 0x69f0ae, 0.48 * blink);
+      this.holoGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
+
+      // Solid high-contrast energy core + scrolling interference nodes (`barrierGraphics`)
+      this.barrierGraphics.lineStyle(7.2 * scale, 0x00c853, 0.94 * blink);
+      this.barrierGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
+      this.barrierGraphics.lineStyle(2.8 * scale, 0xe8f5e9, 0.96 * blink);
+      this.barrierGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
+
+      const dx = b.x1 - b.x0;
+      const dy = b.y1 - b.y0;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const scroll = (this.animClock * 1.8) % 1;
+      for (let k = 0; k < 4; k++) {
+        const f = (k / 4 + scroll) % 1;
+        const px = b.x0 + dx * f;
+        const py = b.y0 + dy * f;
+        const rib = 4.5 * scale;
+        this.holoGraphics.lineStyle(1.8 * scale, 0x84ffff, 0.85 * blink);
+        this.holoGraphics.lineBetween(px - nx * rib, py - ny * rib, px + nx * rib, py + ny * rib);
+      }
+
+      // Armored emitter pylons at both ends
+      for (const [px, py] of [
+        [b.x0, b.y0],
+        [b.x1, b.y1],
+      ]) {
+        this.barrierGraphics.fillStyle(0x1b5e20, 0.98 * blink);
+        this.barrierGraphics.fillCircle(px, py, 5.4 * scale);
+        this.barrierGraphics.lineStyle(1.5 * scale, 0x18191b, 0.95 * blink);
+        this.barrierGraphics.strokeCircle(px, py, 5.4 * scale);
+        this.barrierGraphics.fillStyle(0x69f0ae, 0.98 * blink);
+        this.barrierGraphics.fillCircle(px, py, 2.6 * scale);
       }
     }
 
@@ -1459,6 +2403,23 @@ export class PowerUpSystem {
     }
     this.mines.length = 0;
 
+    for (const cz of this.cryoZones) {
+      cz.disc.destroy();
+    }
+    this.cryoZones.length = 0;
+
+    for (const wb of this.warpBeacons) {
+      wb.sprite.destroy();
+      wb.ring.destroy();
+    }
+    this.warpBeacons.length = 0;
+    this.barriers.length = 0;
+    this.pendingEmpBlasts.length = 0;
+    this.pendingWarpBlasts.length = 0;
+
+    this.zoneGraphics.destroy();
+    this.barrierGraphics.destroy();
+    this.holoGraphics.destroy();
     this.reaperShadowGraphics.destroy();
     this.reaperGraphics.destroy();
     this.reticleGraphics.destroy();

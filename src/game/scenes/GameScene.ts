@@ -3,7 +3,6 @@ import {
   ARENA_VIEWPORT,
   DEFAULT_PLAYER_BINDINGS,
   getSkillDescriptor,
-  MOBILE_ARENA_VIEWPORT,
   POWERUP_CONFIG,
   resolveOnlineArenaViewport,
   UI_COLORS,
@@ -34,7 +33,11 @@ import { InputSystem } from '../systems/InputSystem';
 import { MatchSystem } from '../systems/MatchSystem';
 import { isMazeValidAndConnected } from '../systems/MazeSystem';
 import { NightVisionSystem } from '../systems/NightVisionSystem';
-import { drillMazeWallAtPoint } from '../systems/PowerUpSim';
+import {
+  computeArenaPerimeterWalls,
+  drillMazeWallAtPoint,
+  ejectTankFromInteriorWalls,
+} from '../systems/PowerUpSim';
 import { PowerUpSystem } from '../systems/PowerUpSystem';
 import { ProjectileSystem } from '../systems/ProjectileSystem';
 import { TntBarrelSystem } from '../systems/TntBarrelSystem';
@@ -77,7 +80,10 @@ export interface HudSnapshot {
     skillAmmo: number;
     laserChargeProgress: number | null;
     shieldRemaining: number;
+    phantomRemaining?: number;
     reaperActive: boolean;
+    warpBeaconPlaced?: boolean;
+    empOrbActive?: boolean;
   }>;
 }
 
@@ -94,6 +100,7 @@ export class GameScene extends Phaser.Scene {
   private localKeyboardFireSeq = 0;
 
   private arena!: BuiltArenaLayout;
+  private perimeterWalls: BuiltArenaLayout['walls'] = [];
   private arenaGraphics!: Phaser.GameObjects.Graphics;
   private wallLayerGraphics!: Phaser.GameObjects.Graphics;
   private roster: PlayerConfig[] = [];
@@ -247,7 +254,7 @@ export class GameScene extends Phaser.Scene {
           Boolean(this.onlineConfig.guestTouchActive ?? this.onlineConfig.useMobileViewport),
         ))
       : settingsManager.isTouchControlsActive()
-        ? MOBILE_ARENA_VIEWPORT
+        ? mobileOrientationManager.getLocalMobileArenaViewport()
         : ARENA_VIEWPORT;
 
     this.arena = buildArenaLayout(mazeGrid, this.activePlayers.length, roundSeed, viewport);
@@ -560,6 +567,13 @@ export class GameScene extends Phaser.Scene {
     explicitDamage?: number,
   ): boolean {
     if (!victim.kinematics.alive || victim.isShielded()) return false;
+    // EMP & Cryo are non-lethal tactical disables in Classic 1-hit mode (shooter finishes them off!)
+    if (
+      !victim.hasArmorHpEnabled() &&
+      (source === 'emp_orb' || source === 'emp_blast' || source === 'cryo_orb')
+    ) {
+      return false;
+    }
     const dmg = explicitDamage ?? computeWeaponDamage(source);
     const continuous =
       source === 'flame'
@@ -690,6 +704,7 @@ export class GameScene extends Phaser.Scene {
               ? this.consumeMergedLocalFire(tank.index, humanCountOffline === 1, 0)
               : this.inputSystem.consumeBufferedFire(tank.index);
           },
+          this.tanks,
         );
         if (fireRes.fired) {
           const muzzle = tank.getMuzzleWorldPos();
@@ -713,7 +728,12 @@ export class GameScene extends Phaser.Scene {
         for (let i = 0; i < this.tanks.length; i++) {
           const tank = this.tanks[i];
           if (!tank.kinematics.alive) continue;
-          if (tank.isChargingLaser() || tank.isShielded() || tank.isReaperSweeping()) {
+          if (
+            tank.isChargingLaser() ||
+            tank.isShielded() ||
+            tank.isPhantom() ||
+            tank.isReaperSweeping()
+          ) {
             hudDirty = true;
           }
           const stateChanges = tank.updateMovement(
@@ -729,15 +749,31 @@ export class GameScene extends Phaser.Scene {
               tank.getHpRatio(),
             );
           }
-          if (stateChanges.shieldJustExpired || stateChanges.reaperJustEnded) {
+          if (stateChanges.phantomJustExpired) {
+            ejectTankFromInteriorWalls(tank.kinematics, this.arena);
+            this.effectsSystem.emitPhantomExit(tank.kinematics.x, tank.kinematics.y);
+          }
+          if (
+            stateChanges.shieldJustExpired ||
+            stateChanges.phantomJustExpired ||
+            stateChanges.reaperJustEnded
+          ) {
             this.effectsSystem.emitSuitRevert(tank.kinematics.x, tank.kinematics.y);
             hudDirty = true;
           }
         }
 
+        if (this.perimeterWalls.length === 0) {
+          this.perimeterWalls = computeArenaPerimeterWalls(this.arena);
+        }
+        const phantomIndices = new Set<number>(
+          this.tanks.filter((t) => t.isPhantom()).map((t) => t.index),
+        );
         resolveAllTankCollisions(
           this.tanks.map((t) => t.kinematics),
           this.arena.walls,
+          phantomIndices,
+          this.perimeterWalls,
         );
         this.tntBarrelSystem.resolveTankCollisions(this.tanks);
 
@@ -781,9 +817,10 @@ export class GameScene extends Phaser.Scene {
           subDt,
           this.tanks,
           this.arena.walls,
-          (px, py) => {
+          (px, py, variant, ownerIndex) => {
             this.effectsSystem.emitShellExpire(px, py);
             this.nightVisionSystem.triggerFlareExpireEmber(px, py);
+            this.powerUpSystem.handleProjectileExpired(px, py, variant, ownerIndex);
           },
           (proj, hx, hy) => this.powerUpSystem.handleDrillWallImpact(proj, hx, hy),
         );
@@ -791,6 +828,7 @@ export class GameScene extends Phaser.Scene {
         for (const b of simEvents.bounces) {
           audioManager.playWallBounce(b.bounces);
           this.effectsSystem.emitWallBounce(b.x, b.y);
+          this.powerUpSystem.checkBarrierBounceRipple(b.x, b.y);
           this.nightVisionSystem.triggerFlareBounceFlash(b.x, b.y);
           if (this.networkRole === 'host') {
             peerMultiplayer.sendEvent({
@@ -838,16 +876,20 @@ export class GameScene extends Phaser.Scene {
           hudDirty = true;
         }
 
-        this.powerUpSystem.postProjectileSubStep(
-          subDt,
-          this.tanks,
-          simEvents.hits,
-          (victim, source) => {
-            if (this.applyCombatHitToTank(victim, source, victim.kinematics.x, victim.kinematics.y)) {
-              hudDirty = true;
-            }
-          },
-        );
+        if (
+          this.powerUpSystem.postProjectileSubStep(
+            subDt,
+            this.tanks,
+            simEvents.hits,
+            (victim, source) => {
+              if (this.applyCombatHitToTank(victim, source, victim.kinematics.x, victim.kinematics.y)) {
+                hudDirty = true;
+              }
+            },
+          )
+        ) {
+          hudDirty = true;
+        }
       }
 
       for (const t of this.tanks) t.syncVisuals();
@@ -887,6 +929,11 @@ export class GameScene extends Phaser.Scene {
       this.powerUpSystem.getCrateStates(),
       this.tntBarrelSystem.getBarrelStates(),
       this.tanks,
+      {
+        cryoZones: this.powerUpSystem.getCryoZoneStates(),
+        barriers: this.powerUpSystem.getBarrierStates(),
+        warpBeacons: this.powerUpSystem.getWarpBeaconStates(),
+      },
     );
     this.matchSystem.update(totalDt, this.tanks);
     this.effectsSystem.update(totalDt);
@@ -952,12 +999,20 @@ export class GameScene extends Phaser.Scene {
           reaperDeployRemaining: Math.round((sk.reaperDeployRemaining ?? 0) * 100) / 100,
           reaperSpinRemaining: Math.round((sk.reaperSpinRemaining ?? 0) * 100) / 100,
           shieldRemaining: Math.round(t.getShieldRemainingSec() * 100) / 100,
+          phantomRemaining: Math.round(t.getPhantomRemainingSec() * 100) / 100,
+          empJamRemaining: Math.round(t.getEmpJamRemainingSec() * 100) / 100,
+          frozenRemaining: Math.round(t.getFrozenRemainingSec() * 100) / 100,
+          onIceFloor: t.isOnIceFloor(),
+          warpBeaconPlaced: Boolean(sk.warpBeaconPlaced),
         };
       }),
       projectiles: activeProjs,
       crates: entities.crates,
       mines: entities.mines,
       spikeZones: entities.spikeZones,
+      cryoZones: entities.cryoZones,
+      barriers: entities.barriers,
+      warpBeacons: entities.warpBeacons,
       barrels: this.tntBarrelSystem.getNetworkSnapshots(),
     });
   }
@@ -1018,7 +1073,14 @@ export class GameScene extends Phaser.Scene {
         }
       }
       this.projectileSystem.applyNetworkProjectiles(snap.projectiles, dt);
-      this.powerUpSystem.applyNetworkWorldEntities(snap.crates, snap.mines, snap.spikeZones);
+      this.powerUpSystem.applyNetworkWorldEntities(
+        snap.crates,
+        snap.mines,
+        snap.spikeZones,
+        snap.cryoZones,
+        snap.barriers,
+        snap.warpBeacons,
+      );
       if (snap.barrels) {
         this.tntBarrelSystem.applyNetworkSnapshots(snap.barrels);
       }
@@ -1045,6 +1107,11 @@ export class GameScene extends Phaser.Scene {
       this.powerUpSystem.getCrateStates(),
       this.tntBarrelSystem.getBarrelStates(),
       this.tanks,
+      {
+        cryoZones: this.powerUpSystem.getCryoZoneStates(),
+        barriers: this.powerUpSystem.getBarrierStates(),
+        warpBeacons: this.powerUpSystem.getWarpBeaconStates(),
+      },
     );
   }
 
@@ -1081,6 +1148,12 @@ export class GameScene extends Phaser.Scene {
         } else if (ev.variant === 'scatter') {
           audioManager.playScatterShot();
           this.effectsSystem.emitScatterMuzzle(ev.x, ev.y, ev.angle);
+        } else if (ev.variant === 'emp_orb') {
+          audioManager.playEmpLaunch();
+          this.effectsSystem.emitEmpMuzzle(ev.x, ev.y, ev.angle);
+        } else if (ev.variant === 'cryo_orb') {
+          audioManager.playCryoShot();
+          this.effectsSystem.emitCryoMuzzle(ev.x, ev.y, ev.angle);
         } else {
           audioManager.playFire();
           this.effectsSystem.emitMuzzleFlash(ev.x, ev.y, ev.angle);
@@ -1169,6 +1242,42 @@ export class GameScene extends Phaser.Scene {
           this.effectsSystem.emitReaperUnfurlBurst(ev.x, ev.y);
         } else if (ev.sub === 'bullet_burned') {
           this.effectsSystem.emitBulletIncinerated(ev.x, ev.y);
+        } else if (ev.sub === 'emp_blast') {
+          audioManager.playEmpBlast();
+          this.effectsSystem.emitEmpBlast(
+            ev.x,
+            ev.y,
+            ev.radius ?? this.arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius,
+          );
+          this.nightVisionSystem.triggerExplosionFlash(ev.x, ev.y, 240);
+        } else if (ev.sub === 'phantom_activate') {
+          audioManager.playPhantomActivate();
+          this.effectsSystem.emitPhantomActivate(ev.x, ev.y);
+        } else if (ev.sub === 'cryo_shatter') {
+          audioManager.playCryoShatter();
+          this.effectsSystem.emitCryoShatter(
+            ev.x,
+            ev.y,
+            ev.radius ?? this.arena.cellSize * POWERUP_CONFIG.cryoZoneCellsRadius,
+          );
+        } else if (ev.sub === 'barrier_deploy') {
+          audioManager.playBarrierDeploy();
+          this.effectsSystem.emitBarrierDeploy(ev.x, ev.y, ev.x2 ?? ev.x, ev.y2 ?? ev.y);
+        } else if (ev.sub === 'barrier_shatter') {
+          this.effectsSystem.emitBarrierShatter(ev.x, ev.y, ev.x2 ?? ev.x, ev.y2 ?? ev.y);
+        } else if (ev.sub === 'warp_plant') {
+          audioManager.playWarpBeacon();
+          this.effectsSystem.emitWarpBeaconPlant(ev.x, ev.y);
+        } else if (ev.sub === 'warp_teleport') {
+          audioManager.playWarpTeleport();
+          this.effectsSystem.emitWarpTeleport(
+            ev.x,
+            ev.y,
+            ev.x2 ?? ev.x,
+            ev.y2 ?? ev.y,
+            ev.radius ?? POWERUP_CONFIG.warpBlastRadius * this.arena.scaleRatio,
+          );
+          this.nightVisionSystem.triggerExplosionFlash(ev.x, ev.y, 210);
         }
         return false;
 
@@ -1379,7 +1488,10 @@ export class GameScene extends Phaser.Scene {
         skillAmmo: t.getSkillAmmo(),
         laserChargeProgress: t.getLaserChargeProgress(),
         shieldRemaining: t.getShieldRemainingSec(),
+        phantomRemaining: t.getPhantomRemainingSec(),
         reaperActive: t.isReaperWindingUp() || t.isReaperSweeping(),
+        warpBeaconPlaced: t.isWarpBeaconPlaced(),
+        empOrbActive: this.powerUpSystem ? this.powerUpSystem.hasActiveEmpOrb(t.index) : false,
       })),
     };
   }
@@ -1413,6 +1525,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.wallLayerGraphics = this.add.graphics().setDepth(10);
+    this.perimeterWalls = computeArenaPerimeterWalls(this.arena);
     this.redrawWallLayer();
   }
 

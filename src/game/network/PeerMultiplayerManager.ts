@@ -99,6 +99,11 @@ export interface NetTankSnapshot {
   reaperDeployRemaining?: number;
   reaperSpinRemaining: number;
   shieldRemaining: number;
+  phantomRemaining?: number;
+  empJamRemaining?: number;
+  frozenRemaining?: number;
+  onIceFloor?: boolean;
+  warpBeaconPlaced?: boolean;
 }
 
 export interface NetProjectileSnapshot {
@@ -140,6 +145,39 @@ export interface NetSpikeZoneSnapshot {
   nodes: Array<{ x: number; y: number; angle: number }>;
 }
 
+export interface NetCryoZoneSnapshot {
+  id: number;
+  ownerIndex: PlayerIndex;
+  x: number;
+  y: number;
+  radius: number;
+  age: number;
+  duration: number;
+}
+
+export interface NetBarrierSnapshot {
+  id: number;
+  ownerIndex: PlayerIndex;
+  kind: 'h' | 'v';
+  r: number;
+  c: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  age: number;
+  duration: number;
+}
+
+export interface NetWarpBeaconSnapshot {
+  id: number;
+  ownerIndex: PlayerIndex;
+  x: number;
+  y: number;
+  age: number;
+  maxDuration: number;
+}
+
 export interface WorldSnapshotPacket {
   t: 'world_snapshot';
   seq: number;
@@ -154,6 +192,9 @@ export interface WorldSnapshotPacket {
   crates: NetCrateSnapshot[];
   mines: NetMineSnapshot[];
   spikeZones: NetSpikeZoneSnapshot[];
+  cryoZones?: NetCryoZoneSnapshot[];
+  barriers?: NetBarrierSnapshot[];
+  warpBeacons?: NetWarpBeaconSnapshot[];
   barrels?: NetBarrelSnapshot[];
 }
 
@@ -162,7 +203,7 @@ export type NetGameEvent =
   | { kind: 'fight_start' }
   | {
       kind: 'muzzle_fx';
-      variant: 'standard' | 'gatling' | 'flame' | 'scatter' | 'drill';
+      variant: 'standard' | 'gatling' | 'flame' | 'scatter' | 'drill' | 'emp_orb' | 'cryo_orb';
       x: number;
       y: number;
       angle: number;
@@ -178,9 +219,24 @@ export type NetGameEvent =
   | { kind: 'crate_fx'; sub: 'spawn' | 'pickup'; x: number; y: number; skillId?: SkillId }
   | {
       kind: 'hazard_fx';
-      sub: 'spike_burst' | 'mine_deploy' | 'mine_blast' | 'reaper_unfurl' | 'bullet_burned';
+      sub:
+        | 'spike_burst'
+        | 'mine_deploy'
+        | 'mine_blast'
+        | 'reaper_unfurl'
+        | 'bullet_burned'
+        | 'emp_blast'
+        | 'phantom_activate'
+        | 'cryo_shatter'
+        | 'barrier_deploy'
+        | 'barrier_shatter'
+        | 'warp_plant'
+        | 'warp_teleport';
       x: number;
       y: number;
+      x2?: number;
+      y2?: number;
+      radius?: number;
     }
   | { kind: 'armor_hit'; victimIndex: PlayerIndex; x: number; y: number; hpRatio: number }
   | { kind: 'barrel_blast'; x: number; y: number; blastRadius: number }

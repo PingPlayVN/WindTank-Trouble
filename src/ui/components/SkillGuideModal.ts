@@ -11,6 +11,7 @@ import { audioManager } from '../../game/managers/AudioManager';
 import {
   animateModalOpen,
   createArcadeButton,
+  createModalScrim,
   type ArcadeButtonHandle,
 } from './ArcadeWidgets';
 
@@ -88,9 +89,7 @@ export class SkillGuideModal {
   }
 
   private build(): void {
-    const scrim = this.scene.add
-      .rectangle(DESIGN_WIDTH / 2, DESIGN_HEIGHT / 2, DESIGN_WIDTH, DESIGN_HEIGHT, 0x0f1115, 0.65)
-      .setInteractive();
+    const scrim = createModalScrim(this.scene, 0x0f1115, 0.65);
 
     const panelW = 1100;
     const panelH = 682;
@@ -106,7 +105,7 @@ export class SkillGuideModal {
     panel.strokeRoundedRect(px - panelW / 2, py - panelH / 2, panelW, panelH, 16);
 
     const title = this.scene.add
-      .text(px, py - panelH / 2 + 28, '★ CẨM NANG 10 VẬT PHẨM & GIÁP SIÊU NHÂN ★', {
+      .text(px, py - panelH / 2 + 28, '★ CẨM NANG 15 VẬT PHẨM & GIÁP SIÊU NHÂN ★', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: '23px',
         fontStyle: '900',
@@ -261,7 +260,7 @@ export class SkillGuideModal {
       .text(
         cx - width / 2 + 84,
         cy - 14,
-        `THÙNG GỖ BÍ ẨN  •  XUẤT HIỆN MỖI ${POWERUP_CONFIG.spawnIntervalSec} GIÂY  •  10 KỸ NĂNG NGẪU NHIÊN`,
+        `THÙNG GỖ BÍ ẨN  •  XUẤT HIỆN MỖI ${POWERUP_CONFIG.spawnIntervalSec} GIÂY  •  15 KỸ NĂNG NGẪU NHIÊN`,
         {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
           fontSize: '14.5px',

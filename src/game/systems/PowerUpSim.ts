@@ -6,7 +6,10 @@ import {
 } from '../config/constants';
 import { rebuildArenaWalls } from '../maps/MazeBuilder';
 import { getAccessibleNeighbors, type SeededRng } from './MazeSystem';
-import { sweepCircleAgainstWall } from './CollisionSystem';
+import {
+  resolveTankWallCollisions,
+  sweepCircleAgainstWall,
+} from './CollisionSystem';
 import type {
   BuiltArenaLayout,
   GridCell,
@@ -51,6 +54,7 @@ export interface PlayerSkillState {
   reaperWindupRemaining?: number;
   reaperDeployRemaining?: number;
   reaperSpinRemaining?: number;
+  warpBeaconPlaced?: boolean;
 }
 
 export interface ProximityMineState {
@@ -63,6 +67,39 @@ export interface ProximityMineState {
   duration: number;
   triggerRadius: number;
   blastRadius: number;
+}
+
+export interface CryoZoneState {
+  id: number;
+  ownerIndex: PlayerIndex;
+  x: number;
+  y: number;
+  radius: number;
+  age: number;
+  duration: number;
+}
+
+export interface EnergyBarrierState {
+  id: number;
+  ownerIndex: PlayerIndex;
+  kind: 'h' | 'v';
+  r: number;
+  c: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  age: number;
+  duration: number;
+}
+
+export interface WarpBeaconState {
+  id: number;
+  ownerIndex: PlayerIndex;
+  x: number;
+  y: number;
+  age: number;
+  maxDuration: number;
 }
 
 export function wrapAngleRad(angle: number): number {
@@ -480,8 +517,8 @@ function doorwayWorldPoint(a: GridCell, b: GridCell, arena: BuiltArenaLayout): {
 
 /**
  * Steers a Homing Missile:
- * - 0..4.0s: pure physical bouncing shell (`seeking: false`).
- * - >= 4.0s: switches to `'slide'` wall behavior, runs exact BFS shortest-path search on `arena.grid`
+ * - 0..2.5s (`POWERUP_CONFIG.homingBallisticSec`): pure physical bouncing shell (`seeking: false`).
+ * - >= 2.5s: switches to `'slide'` wall behavior, runs exact BFS shortest-path search on `arena.grid`
  *   to ALL living tanks (including the shooter!), dynamically locks onto whichever tank has the
  *   shortest true maze path distance, and steers along string-pulled corridor waypoints.
  */
@@ -1013,4 +1050,369 @@ export function computeReaperBlades(
   }
 
   return { bladeA, bladeB, crescentA, crescentB, hitVictimIndices };
+}
+
+/**
+ * 11. EMP Grenade (`Lựu Đạn Xung Điện EMP`): wall-piercing electromagnetic blast (`2.75` cells)
+ * that shatters enemy shields, interrupts Laser/Reaper channels, jams enemy triggers & movement,
+ * and neutralizes mines & energy barriers inside the blast sphere!
+ */
+export function computeEmpBlastImpact(
+  cx: number,
+  cy: number,
+  blastRadius: number,
+  ownerIndex: PlayerIndex,
+  tanks: readonly TankKinematics[],
+  mines: readonly ProximityMineState[],
+  barriers: readonly EnergyBarrierState[],
+): {
+  hitEnemyIndices: PlayerIndex[];
+  clearedMineIds: number[];
+  clearedBarrierIds: number[];
+} {
+  const hitEnemyIndices: PlayerIndex[] = [];
+  for (const t of tanks) {
+    if (!t.alive || t.index === ownerIndex) continue;
+    if (Math.hypot(t.x - cx, t.y - cy) <= blastRadius + t.radius * 0.7) {
+      hitEnemyIndices.push(t.index);
+    }
+  }
+
+  const clearedMineIds: number[] = [];
+  for (const m of mines) {
+    if (m.age >= m.duration) continue;
+    if (Math.hypot(m.x - cx, m.y - cy) <= blastRadius + m.triggerRadius * 0.4) {
+      clearedMineIds.push(m.id);
+    }
+  }
+
+  const blastRSq = blastRadius * blastRadius;
+  const clearedBarrierIds: number[] = [];
+  for (const b of barriers) {
+    if (b.age >= b.duration) continue;
+    if (pointToSegmentDistSq(cx, cy, b.x0, b.y0, b.x1, b.y1) <= blastRSq) {
+      clearedBarrierIds.push(b.id);
+    }
+  }
+
+  return { hitEnemyIndices, clearedMineIds, clearedBarrierIds };
+}
+
+/**
+ * 12. Phantom Phase (`Bóng Ma Xuyên Tường`): builds the 4 outer arena border walls so a phased tank
+ * glides freely through all interior maze walls while staying strictly inside the arena perimeter!
+ */
+export function computeArenaPerimeterWalls(arena: BuiltArenaLayout): WallRect[] {
+  const { originX, originY, width, height, wallThickness } = arena;
+  const ht = wallThickness / 2;
+  return [
+    // Top border
+    {
+      x: originX,
+      y: originY - ht,
+      width,
+      height: wallThickness,
+      minX: originX,
+      minY: originY - ht,
+      maxX: originX + width,
+      maxY: originY + ht,
+    },
+    // Bottom border
+    {
+      x: originX,
+      y: originY + height - ht,
+      width,
+      height: wallThickness,
+      minX: originX,
+      minY: originY + height - ht,
+      maxX: originX + width,
+      maxY: originY + height + ht,
+    },
+    // Left border
+    {
+      x: originX - ht,
+      y: originY,
+      width: wallThickness,
+      height,
+      minX: originX - ht,
+      minY: originY,
+      maxX: originX + ht,
+      maxY: originY + height,
+    },
+    // Right border
+    {
+      x: originX + width - ht,
+      y: originY,
+      width: wallThickness,
+      height,
+      minX: originX + width - ht,
+      minY: originY,
+      maxX: originX + width + ht,
+      maxY: originY + height,
+    },
+  ];
+}
+
+function tankOverlapsAnyWall(tank: TankKinematics, walls: readonly WallRect[]): boolean {
+  const rSq = (tank.radius - 0.25) * (tank.radius - 0.25);
+  for (const w of walls) {
+    const cx = Math.max(w.minX, Math.min(tank.x, w.maxX));
+    const cy = Math.max(w.minY, Math.min(tank.y, w.maxY));
+    const dx = tank.x - cx;
+    const dy = tank.y - cy;
+    if (dx * dx + dy * dy < rSq) return true;
+  }
+  return false;
+}
+
+/**
+ * Smoothly ejects a tank out of any interior maze wall when Phantom Phase expires mid-wall!
+ */
+export function ejectTankFromInteriorWalls(
+  tank: TankKinematics,
+  arena: BuiltArenaLayout,
+): boolean {
+  if (!tank.alive) return false;
+  if (!tankOverlapsAnyWall(tank, arena.walls)) return false;
+
+  for (let pass = 0; pass < 4; pass++) {
+    resolveTankWallCollisions(tank, arena.walls);
+    if (!tankOverlapsAnyWall(tank, arena.walls)) {
+      return true;
+    }
+  }
+
+  // Fallback if dead-center on a multi-wall junction: snap to nearest maze cell center!
+  const cell = worldToGridCell(tank.x, tank.y, arena);
+  tank.x = arena.originX + (cell.col + 0.5) * arena.cellSize;
+  tank.y = arena.originY + (cell.row + 0.5) * arena.cellSize;
+  resolveTankWallCollisions(tank, arena.walls);
+  return true;
+}
+
+/**
+ * 13. Cryo Cannon (`Pháo Đóng Băng`): identifies rival tanks sliding across active floor Cryo Zones.
+ */
+export function findTanksInCryoZones(
+  zones: readonly CryoZoneState[],
+  tanks: readonly TankKinematics[],
+): Set<PlayerIndex> {
+  const affected = new Set<PlayerIndex>();
+  for (const t of tanks) {
+    if (!t.alive) continue;
+    for (const z of zones) {
+      if (z.age >= z.duration || z.ownerIndex === t.index) continue;
+      if (Math.hypot(t.x - z.x, t.y - z.y) <= z.radius + t.radius * 0.45) {
+        affected.add(t.index);
+        break;
+      }
+    }
+  }
+  return affected;
+}
+
+/**
+ * Non-mutating lookup of the best open interior maze cell edge ahead of `tank`
+ * (used both for live holographic placement preview and actual deployment!).
+ */
+export function previewEnergyBarrierEdge(
+  tank: TankKinematics,
+  arena: BuiltArenaLayout,
+): {
+  kind: 'h' | 'v';
+  r: number;
+  c: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+} | null {
+  const { grid, originX, originY, cellSize } = arena;
+  const { cols, rows } = grid;
+  const fx = Math.cos(tank.angle);
+  const fy = Math.sin(tank.angle);
+  const probeX = tank.x + fx * (cellSize * 0.56);
+  const probeY = tank.y + fy * (cellSize * 0.56);
+  const maxSearchDist = cellSize * 1.45;
+
+  let best: {
+    kind: 'h' | 'v';
+    r: number;
+    c: number;
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+    score: number;
+  } | null = null;
+
+  for (let r = 1; r < rows; r++) {
+    const wy = originY + r * cellSize;
+    if (Math.abs(wy - probeY) > maxSearchDist) continue;
+    for (let c = 0; c < cols; c++) {
+      if (grid.hWalls[r][c]) continue;
+      const x0 = originX + c * cellSize;
+      const x1 = x0 + cellSize;
+      const mx = (x0 + x1) * 0.5;
+      const my = wy;
+      const toEdgeX = mx - tank.x;
+      const toEdgeY = my - tank.y;
+      const distFromTank = Math.hypot(toEdgeX, toEdgeY);
+      if (distFromTank < tank.radius * 0.35 || distFromTank > maxSearchDist * 1.25) continue;
+
+      const forwardDot = (toEdgeX * fx + toEdgeY * fy) / (distFromTank || 1);
+      if (forwardDot < 0.12) continue;
+
+      const perpAlign = Math.abs(fy);
+      const probeDist = Math.hypot(mx - probeX, my - probeY);
+      const score = probeDist - perpAlign * (cellSize * 0.38) - forwardDot * (cellSize * 0.22);
+      if (!best || score < best.score) {
+        best = { kind: 'h', r, c, x0, y0: wy, x1, y1: wy, score };
+      }
+    }
+  }
+
+  for (let c = 1; c < cols; c++) {
+    const wx = originX + c * cellSize;
+    if (Math.abs(wx - probeX) > maxSearchDist) continue;
+    for (let r = 0; r < rows; r++) {
+      if (grid.vWalls[r][c]) continue;
+      const y0 = originY + r * cellSize;
+      const y1 = y0 + cellSize;
+      const mx = wx;
+      const my = (y0 + y1) * 0.5;
+      const toEdgeX = mx - tank.x;
+      const toEdgeY = my - tank.y;
+      const distFromTank = Math.hypot(toEdgeX, toEdgeY);
+      if (distFromTank < tank.radius * 0.35 || distFromTank > maxSearchDist * 1.25) continue;
+
+      const forwardDot = (toEdgeX * fx + toEdgeY * fy) / (distFromTank || 1);
+      if (forwardDot < 0.12) continue;
+
+      const perpAlign = Math.abs(fx);
+      const probeDist = Math.hypot(mx - probeX, my - probeY);
+      const score = probeDist - perpAlign * (cellSize * 0.38) - forwardDot * (cellSize * 0.22);
+      if (!best || score < best.score) {
+        best = { kind: 'v', r, c, x0: wx, y0, x1: wx, y1, score };
+      }
+    }
+  }
+
+  if (!best) return null;
+  return {
+    kind: best.kind,
+    r: best.r,
+    c: best.c,
+    x0: best.x0,
+    y0: best.y0,
+    x1: best.x1,
+    y1: best.y1,
+  };
+}
+
+/**
+ * 14. Energy Barrier (`Súng Xây Tường Năng Lượng`): finds the best open interior maze cell edge
+ * immediately ahead of the tank, seals it in `arena.grid`, rebuilds `arena.walls`, and nudges
+ * any overlapping tank cleanly clear of the newly erected barrier!
+ */
+export function deployEnergyBarrierAhead(
+  tank: TankKinematics,
+  arena: BuiltArenaLayout,
+  allTanks: readonly TankKinematics[],
+  nextId: number,
+  durationSec = POWERUP_CONFIG.barrierDurationSec,
+): EnergyBarrierState | null {
+  const best = previewEnergyBarrierEdge(tank, arena);
+  if (!best) return null;
+
+  if (best.kind === 'h') {
+    arena.grid.hWalls[best.r][best.c] = true;
+  } else {
+    arena.grid.vWalls[best.r][best.c] = true;
+  }
+  rebuildArenaWalls(arena);
+
+  for (const t of allTanks) {
+    if (t.alive) {
+      ejectTankFromInteriorWalls(t, arena);
+    }
+  }
+
+  return {
+    id: nextId,
+    ownerIndex: tank.index,
+    kind: best.kind,
+    r: best.r,
+    c: best.c,
+    x0: best.x0,
+    y0: best.y0,
+    x1: best.x1,
+    y1: best.y1,
+    age: 0,
+    duration: durationSec,
+  };
+}
+
+export function removeEnergyBarrierFromArena(
+  barrier: EnergyBarrierState,
+  arena: BuiltArenaLayout,
+): void {
+  if (barrier.kind === 'h') {
+    if (arena.grid.hWalls[barrier.r]?.[barrier.c] !== undefined) {
+      arena.grid.hWalls[barrier.r][barrier.c] = false;
+    }
+  } else if (arena.grid.vWalls[barrier.r]?.[barrier.c] !== undefined) {
+    arena.grid.vWalls[barrier.r][barrier.c] = false;
+  }
+  rebuildArenaWalls(arena);
+}
+
+export function findBarriersHitByPolyline(
+  points: ReadonlyArray<{ x: number; y: number }>,
+  halfWidth: number,
+  barriers: readonly EnergyBarrierState[],
+): number[] {
+  if (points.length < 2 || barriers.length === 0) return [];
+  const hitIds: number[] = [];
+  const threshSq = (halfWidth + 6) * (halfWidth + 6);
+
+  for (const b of barriers) {
+    if (b.age >= b.duration) continue;
+    const mx = (b.x0 + b.x1) * 0.5;
+    const my = (b.y0 + b.y1) * 0.5;
+    for (let i = 1; i < points.length; i++) {
+      const p0 = points[i - 1];
+      const p1 = points[i];
+      if (
+        pointToSegmentDistSq(mx, my, p0.x, p0.y, p1.x, p1.y) <= threshSq ||
+        pointToSegmentDistSq(b.x0, b.y0, p0.x, p0.y, p1.x, p1.y) <= threshSq ||
+        pointToSegmentDistSq(b.x1, b.y1, p0.x, p0.y, p1.x, p1.y) <= threshSq
+      ) {
+        hitIds.push(b.id);
+        break;
+      }
+    }
+  }
+  return hitIds;
+}
+
+/**
+ * 15. Spatial Warp Beacon (`Mỏ Neo Không Gian`): finds rival tanks caught in the lethal
+ * Spatial Rift Shockwave at the teleporter's departure position!
+ */
+export function computeWarpBlastVictims(
+  departureX: number,
+  departureY: number,
+  ownerIndex: PlayerIndex,
+  blastRadius: number,
+  tanks: readonly TankKinematics[],
+): PlayerIndex[] {
+  const victims: PlayerIndex[] = [];
+  for (const t of tanks) {
+    if (!t.alive || t.index === ownerIndex) continue;
+    if (Math.hypot(t.x - departureX, t.y - departureY) <= blastRadius + t.radius * 0.6) {
+      victims.push(t.index);
+    }
+  }
+  return victims;
 }

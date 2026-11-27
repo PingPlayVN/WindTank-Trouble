@@ -12,6 +12,7 @@ import type { ControlAction, PlayerIndex } from '../../game/types/gameTypes';
 import {
   animateModalOpen,
   createArcadeButton,
+  createModalScrim,
   createScoreStepper,
   type ArcadeButtonHandle,
   type ScoreStepperHandle,
@@ -66,9 +67,7 @@ export class SettingsModal {
   }
 
   private build(mode: 'settings' | 'controls'): void {
-    const scrim = this.scene.add
-      .rectangle(DESIGN_WIDTH / 2, DESIGN_HEIGHT / 2, DESIGN_WIDTH, DESIGN_HEIGHT, 0x111317, 0.58)
-      .setInteractive();
+    const scrim = createModalScrim(this.scene, 0x111317, 0.58);
 
     const panelW = 980;
     const panelH = mode === 'settings' ? 624 : 574;
@@ -478,7 +477,7 @@ export class SettingsModal {
     const scaleRow = createTuningRow(
       topY + 200,
       'KÍCH CỠ CẦN GẠT & NÚT ĐIỀU KHIỂN',
-      'Tùy chỉnh to/nhỏ quanh kích cỡ Cần Gạt chuẩn (đã phóng lớn 1.25× dễ bám tay)',
+      'Tùy chỉnh to/nhỏ quanh kích cỡ Cần Gạt & Nút Bắn cỡ lớn mặc định mới',
       (dir) => {
         settingsManager.stepTouchButtonScale(dir * 0.1);
         refreshUI();
@@ -502,7 +501,7 @@ export class SettingsModal {
       width: 332,
       height: 38,
       lipHeight: 2.5,
-      label: '🎯 THEO ĐIỂM ĐẶT TAY',
+      label: '✦ THEO ĐIỂM ĐẶT TAY',
       fontSize: 13,
       onClick: () => {
         settingsManager.setTouchFloatingStick(true);
@@ -517,7 +516,7 @@ export class SettingsModal {
       width: 352,
       height: 38,
       lipHeight: 2.5,
-      label: '📌 CỐ ĐỊNH VỊ TRÍ',
+      label: '● CỐ ĐỊNH VỊ TRÍ',
       fontSize: 13,
       onClick: () => {
         settingsManager.setTouchFloatingStick(false);
@@ -542,7 +541,7 @@ export class SettingsModal {
       width: 332,
       height: 38,
       lipHeight: 2.5,
-      label: '✋ LÁI TRÁI • BẮN PHẢI',
+      label: '◀ LÁI TRÁI • BẮN PHẢI',
       fontSize: 13,
       onClick: () => {
         settingsManager.setTouchSwapHands(false);
@@ -557,7 +556,7 @@ export class SettingsModal {
       width: 352,
       height: 38,
       lipHeight: 2.5,
-      label: '🤚 BẮN TRÁI • LÁI PHẢI',
+      label: '▶ BẮN TRÁI • LÁI PHẢI',
       fontSize: 13,
       onClick: () => {
         settingsManager.setTouchSwapHands(true);
@@ -665,7 +664,7 @@ export class SettingsModal {
       {
         cx: centerX - 222,
         accent: 0x1565c0,
-        title: '🕹 CHẾ ĐỘ 1 NGƯỜI (ĐẤU AI / ONLINE 1VS1)',
+        title: '✦ CHẾ ĐỘ 1 NGƯỜI (ĐẤU AI / ONLINE 1VS1)',
         body:
           '• Ngón cái TRÁI điều khiển Cần Gạt Thông Minh:\n' +
           '  - Kéo nhẹ trong vòng xanh: xoay nòng ngắm bắn nảy tường tại chỗ.\n' +
@@ -676,7 +675,7 @@ export class SettingsModal {
       {
         cx: centerX + 222,
         accent: 0x2e7d32,
-        title: '👥 CHẾ ĐỘ 2 NGƯỜI NGỒI ĐỐI DIỆN TRÊN 1 MÁY',
+        title: '✦ CHẾ ĐỘ 2 NGƯỜI NGỒI ĐỐI DIỆN TRÊN 1 MÁY',
         body:
           '• Đặt điện thoại nằm ngang ở giữa bàn:\n' +
           '  - XE 1 ngồi ở cạnh TRÁI màn hình (Cần Gạt trên + nút BẮN! dưới).\n' +

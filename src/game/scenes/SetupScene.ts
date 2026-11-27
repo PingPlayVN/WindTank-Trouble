@@ -61,50 +61,74 @@ export class SetupScene extends Phaser.Scene {
     this.activeRulesModal = null;
 
     mobileOrientationManager.syncLayout();
+    const isMobile = settingsManager.isTouchControlsActive();
+    if (isMobile && settingsManager.getSettings().playerCount > 2) {
+      settingsManager.setPlayerCount(2);
+    }
     drawMazeBackdrop(this, DESIGN_WIDTH, DESIGN_HEIGHT);
     const fsControls = createMobileFullscreenControls(this, {
-      buttonX: DESIGN_WIDTH - 96,
-      buttonY: 46,
+      buttonY: 42,
       showRecommendationBanner: false,
     });
 
     const header = this.add
-      .text(DESIGN_WIDTH / 2, 46, 'SẢNH CHỌN XE TĂNG, ĐỘ KHÓ AI & LUẬT ĐẤU', {
+      .text(DESIGN_WIDTH / 2, isMobile ? 42 : 46, 'SẢNH CHỌN XE TĂNG, ĐỘ KHÓ AI & LUẬT ĐẤU', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
-        fontSize: '28px',
+        fontSize: isMobile ? '26px' : '28px',
         fontStyle: '900',
         color: UI_COLORS.inkDarkHex,
       })
       .setOrigin(0.5, 0.5);
 
-    const counts: Array<2 | 3 | 4> = [2, 3, 4];
-    counts.forEach((cnt, idx) => {
-      const btn = createArcadeButton(this, {
-        x: DESIGN_WIDTH / 2 + (idx - 1) * 156,
-        y: 102,
-        width: 142,
-        height: 40,
-        label: `${cnt} XE ĐẤU`,
-        fontSize: 15,
-        onClick: () => {
-          if (this.activeModal || this.activeSkillModal || this.activeRulesModal) return;
-          this.scoreStepper?.commitAndStopEditing();
-          settingsManager.setPlayerCount(cnt);
-          this.refreshAll( cnt - 1 );
-        },
+    const topItems: Array<Phaser.GameObjects.Container | Phaser.GameObjects.Text> = [header];
+
+    if (isMobile) {
+      const mobileSub = this.add
+        .text(
+          DESIGN_WIDTH / 2,
+          82,
+          'Chọn màu sơn, bật/tắt Máy AI (4 cấp độ) hoặc để 2 Người Chơi ngồi đối diện trên 1 máy',
+          {
+            fontFamily: "'Segoe UI', 'Inter', sans-serif",
+            fontSize: '13px',
+            fontStyle: '800',
+            color: UI_COLORS.inkMutedHex,
+          },
+        )
+        .setOrigin(0.5, 0.5);
+      topItems.push(mobileSub);
+    } else {
+      const counts: Array<2 | 3 | 4> = [2, 3, 4];
+      counts.forEach((cnt, idx) => {
+        const btn = createArcadeButton(this, {
+          x: DESIGN_WIDTH / 2 + (idx - 1) * 158,
+          y: 102,
+          width: 144,
+          height: 40,
+          label: `${cnt} XE ĐẤU`,
+          fontSize: 15,
+          onClick: () => {
+            if (this.activeModal || this.activeSkillModal || this.activeRulesModal) return;
+            this.scoreStepper?.commitAndStopEditing();
+            settingsManager.setPlayerCount(cnt);
+            this.refreshAll(cnt - 1);
+          },
+        });
+        this.countButtons.set(cnt, btn);
+        topItems.push(btn.container);
       });
-      this.countButtons.set(cnt, btn);
-    });
+    }
 
     this.cardsContainer = this.add.container(0, 0);
 
     const s = settingsManager.getSettings();
     const initialMode = MAP_MODES.find((m) => m.id === s.mapMode) ?? MAP_MODES[0];
 
+    // Symmetrically balanced Rules Bar (`x = 60 .. 1220`, centered around 640)
     const mapPrevBtn = createArcadeButton(this, {
-      x: 92,
+      x: 79,
       y: 590,
-      width: 36,
+      width: 38,
       height: 44,
       lipHeight: 3,
       label: '◀',
@@ -118,9 +142,9 @@ export class SetupScene extends Phaser.Scene {
     });
 
     this.mapBtn = createArcadeButton(this, {
-      x: 274,
+      x: 262,
       y: 590,
-      width: 318,
+      width: 316,
       height: 44,
       label: `BẢN ĐỒ: ${initialMode.label.toUpperCase()}`,
       fontSize: 13,
@@ -133,9 +157,9 @@ export class SetupScene extends Phaser.Scene {
     });
 
     const mapNextBtn = createArcadeButton(this, {
-      x: 456,
+      x: 445,
       y: 590,
-      width: 36,
+      width: 38,
       height: 44,
       lipHeight: 3,
       label: '▶',
@@ -149,7 +173,7 @@ export class SetupScene extends Phaser.Scene {
     });
 
     this.mapSubtitleText = this.add
-      .text(274, 624, initialMode.subtitle, {
+      .text(262, 624, initialMode.subtitle, {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: '12px',
         fontStyle: '600',
@@ -158,7 +182,7 @@ export class SetupScene extends Phaser.Scene {
       .setOrigin(0.5, 0.5);
 
     this.scoreStepper = createScoreStepper(this, {
-      x: 656,
+      x: 648,
       y: 590,
       width: 332,
       height: 44,
@@ -169,7 +193,7 @@ export class SetupScene extends Phaser.Scene {
     });
 
     const scoreHint = this.add
-      .text(656, 624, 'Bấm ◀/▶, bấm vào ô để gõ điểm, hoặc ∞ Vô Tận', {
+      .text(648, 624, 'Bấm ◀/▶, bấm vào ô để gõ điểm, hoặc ∞ Vô Tận', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: '12px',
         fontStyle: '600',
@@ -178,7 +202,7 @@ export class SetupScene extends Phaser.Scene {
       .setOrigin(0.5, 0.5);
 
     this.rulesBtn = createArcadeButton(this, {
-      x: 900,
+      x: 894,
       y: 590,
       width: 124,
       height: 44,
@@ -202,11 +226,11 @@ export class SetupScene extends Phaser.Scene {
     });
 
     const keysBtn = createArcadeButton(this, {
-      x: 1034,
+      x: 1026,
       y: 590,
-      width: 118,
+      width: 124,
       height: 44,
-      label: settingsManager.isTouchControlsActive() ? 'ĐỘ NHẠY LÁI' : 'ĐỔI PHÍM',
+      label: settingsManager.isTouchControlsActive() ? '⚙ ĐỘ NHẠY' : '⚙ ĐỔI PHÍM',
       fontSize: 13,
       fillColor: UI_COLORS.cardAltBg,
       hoverColor: 0xdcdfe4,
@@ -225,9 +249,9 @@ export class SetupScene extends Phaser.Scene {
     });
 
     const skillsBtn = createArcadeButton(this, {
-      x: 1164,
+      x: 1158,
       y: 590,
-      width: 118,
+      width: 124,
       height: 44,
       label: '★ KỸ NĂNG',
       fontSize: 13,
@@ -245,11 +269,12 @@ export class SetupScene extends Phaser.Scene {
       },
     });
 
+    // Symmetrically centered bottom navigation pair (`x = 332 .. 948`, exact center = 640!)
     const backBtn = createArcadeButton(this, {
-      x: 250,
+      x: 442,
       y: 696,
-      width: 196,
-      height: 52,
+      width: 220,
+      height: 54,
       label: '← TRANG CHỦ',
       fontSize: 16,
       fillColor: UI_COLORS.cardBg,
@@ -261,9 +286,9 @@ export class SetupScene extends Phaser.Scene {
     });
 
     const startBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 + 95,
+      x: 762,
       y: 696,
-      width: 360,
+      width: 372,
       height: 56,
       lipHeight: 5,
       label: 'TIẾP TỤC: CHỌN CHẾ ĐỘ →',
@@ -283,8 +308,7 @@ export class SetupScene extends Phaser.Scene {
     animateStaggeredEntrance(
       this,
       [
-        header,
-        ...Array.from(this.countButtons.values()).map((b) => b.container),
+        ...topItems,
         mapPrevBtn.container,
         this.mapBtn.container,
         mapNextBtn.container,
@@ -394,14 +418,18 @@ export class SetupScene extends Phaser.Scene {
     this.previewTanks = [];
 
     const s = settingsManager.getSettings();
-    const cardW = 266;
-    const cardH = 382;
-    const startX = DESIGN_WIDTH / 2 - 1.5 * 288;
-    const cardY = 342;
+    const isMobile = settingsManager.isTouchControlsActive();
+    // On Mobile, display ONLY the 2 playable tank cards in wide, thumb-friendly proportions!
+    const slotCount = isMobile ? 2 : 4;
+    const cardW = isMobile ? 436 : 266;
+    const cardH = isMobile ? 404 : 382;
+    const cardStepX = isMobile ? 468 : 288;
+    const startX = DESIGN_WIDTH / 2 - ((slotCount - 1) / 2) * cardStepX;
+    const cardY = isMobile ? 320 : 342;
 
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < slotCount; i++) {
       const pIdx = i as PlayerIndex;
-      const cx = startX + i * 288;
+      const cx = startX + i * cardStepX;
       const isActive = i < s.playerCount;
       const palette = getPaletteById(s.playerColors[i]);
       const bind = s.playerBindings[i];
@@ -433,29 +461,31 @@ export class SetupScene extends Phaser.Scene {
         const title = this.add
           .text(0, -cardH / 2 + 24, isAI ? `XE ${i + 1}  •  MÁY AI` : `XE ${i + 1}`, {
             fontFamily: "'Segoe UI', 'Inter', sans-serif",
-            fontSize: '18px',
+            fontSize: isMobile ? '19px' : '18px',
             fontStyle: '900',
             color: '#FFFFFF',
           })
           .setOrigin(0.5, 0.5);
 
+        const ringY = isMobile ? -100 : -94;
         const ring = this.add
-          .circle(0, -94, 38, isAI ? 0xe3f2fd : 0xf3f4f6, 1)
+          .circle(0, ringY, isMobile ? 42 : 38, isAI ? 0xe3f2fd : 0xf3f4f6, 1)
           .setStrokeStyle(2.2, isAI ? aiDesc.fillColor : 0xd5d8de, 1);
         const tankSprite = this.add
-          .image(0, -94, `tank_${palette.id}_0`)
-          .setScale(1.12)
+          .image(0, ringY, `tank_${palette.id}_0`)
+          .setScale(isMobile ? 1.24 : 1.12)
           .setRotation(-Math.PI / 4 + i * 0.5);
         this.previewTanks.push(tankSprite);
 
+        const innerBtnW = isMobile ? 344 : 210;
         const colorBtn = createArcadeButton(this, {
           x: 0,
-          y: -32,
-          width: 210,
-          height: 33,
+          y: isMobile ? -32 : -32,
+          width: innerBtnW,
+          height: isMobile ? 38 : 33,
           lipHeight: 3,
-          label: `◀  ${palette.name.toUpperCase()}  ▶`,
-          fontSize: 13.5,
+          label: `◀  MÀU SƠN: ${palette.name.toUpperCase()}  ▶`,
+          fontSize: isMobile ? 14 : 13,
           fillColor: UI_COLORS.cardAltBg,
           onClick: () => {
             if (this.activeModal || this.activeSkillModal || this.activeRulesModal) return;
@@ -466,12 +496,12 @@ export class SetupScene extends Phaser.Scene {
 
         const modeToggleBtn = createArcadeButton(this, {
           x: 0,
-          y: 10,
-          width: 210,
-          height: 34,
+          y: isMobile ? 14 : 10,
+          width: innerBtnW,
+          height: isMobile ? 40 : 34,
           lipHeight: 3,
-          label: isAI ? '🤖 CHẾ ĐỘ: MÁY AI (TẮT)' : '👤 NGƯỜI CHƠI  •  BẬT AI',
-          fontSize: 12.5,
+          label: isAI ? '● CHẾ ĐỘ: MÁY AI (BẤM ĐỂ TẮT)' : '● NGƯỜI CHƠI  •  BẬT MÁY AI',
+          fontSize: isMobile ? 13.5 : 12.5,
           fillColor: isAI ? 0x1d2430 : UI_COLORS.cardBg,
           hoverColor: isAI ? 0x2b3648 : 0xe8f0fe,
           textColor: isAI ? '#40C4FF' : UI_COLORS.inkDarkHex,
@@ -486,30 +516,36 @@ export class SetupScene extends Phaser.Scene {
 
         if (isAI) {
           const aiHdr = this.add
-            .text(0, 42, 'CHỌN 4 CẤP ĐỘ AI:', {
+            .text(0, isMobile ? 50 : 42, 'CHỌN 4 CẤP ĐỘ AI:', {
               fontFamily: "'Segoe UI', 'Inter', sans-serif",
-              fontSize: '11.5px',
+              fontSize: isMobile ? '12px' : '11.5px',
               fontStyle: '900',
               color: UI_COLORS.inkMutedHex,
             })
             .setOrigin(0.5, 0.5);
           slotRoot.add(aiHdr);
 
+          const diffOffsetX = isMobile ? 88 : 56;
+          const diffW = isMobile ? 164 : 104;
+          const diffH = isMobile ? 35 : 31;
+          const diffStartY = isMobile ? 80 : 70;
+          const diffStepY = isMobile ? 42 : 38;
+
           AI_DIFFICULTY_DESCRIPTORS.forEach((dDesc, dIdx) => {
             const col = dIdx % 2;
             const row = Math.floor(dIdx / 2);
-            const bx = col === 0 ? -56 : 56;
-            const by = 70 + row * 38;
+            const bx = col === 0 ? -diffOffsetX : diffOffsetX;
+            const by = diffStartY + row * diffStepY;
             const selected = dDesc.id === aiDiff;
 
             const dBtn = createArcadeButton(this, {
               x: bx,
               y: by,
-              width: 104,
-              height: 31,
+              width: diffW,
+              height: diffH,
               lipHeight: 2.5,
               label: dDesc.label,
-              fontSize: 12.5,
+              fontSize: isMobile ? 13.5 : 12.5,
               fillColor: selected ? dDesc.fillColor : UI_COLORS.cardBg,
               hoverColor: selected ? dDesc.hoverColor : 0xf0f4f8,
               textColor: selected ? '#FFFFFF' : UI_COLORS.inkDarkHex,
@@ -522,42 +558,45 @@ export class SetupScene extends Phaser.Scene {
             slotRoot.add(dBtn.container);
           });
 
+          const descBoxW = isMobile ? 352 : 228;
+          const descBoxY = isMobile ? 148 : 134;
           const descBox = this.add.graphics();
           descBox.fillStyle(aiDesc.fillColor, 0.11);
-          descBox.fillRoundedRect(-114, 134, 228, 42, 7);
+          descBox.fillRoundedRect(-descBoxW / 2, descBoxY, descBoxW, 42, 7);
           descBox.lineStyle(1.4, aiDesc.fillColor, 0.55);
-          descBox.strokeRoundedRect(-114, 134, 228, 42, 7);
+          descBox.strokeRoundedRect(-descBoxW / 2, descBoxY, descBoxW, 42, 7);
 
           const descTxt = this.add
-            .text(0, 155, aiDesc.summary, {
+            .text(0, descBoxY + 21, aiDesc.summary, {
               fontFamily: "'Segoe UI', 'Inter', sans-serif",
-              fontSize: '11px',
+              fontSize: isMobile ? '11.5px' : '11px',
               fontStyle: '800',
               color: aiDesc.textHex,
               align: 'center',
-              wordWrap: { width: 214 },
+              wordWrap: { width: descBoxW - 16 },
             })
             .setOrigin(0.5, 0.5);
 
           slotRoot.add([descBox, descTxt]);
-        } else if (settingsManager.isTouchControlsActive()) {
+        } else if (isMobile) {
           const isOpposite2P = i === 1 && !s.playerIsAI[0] && !s.playerIsAI[1];
+          const boxW = 352;
           const mobileBox = this.add.graphics();
           mobileBox.fillStyle(i === 0 ? 0xe8f5e9 : 0xe3f2fd, 1);
-          mobileBox.fillRoundedRect(-114, 48, 228, 92, 9);
+          mobileBox.fillRoundedRect(-boxW / 2, 52, boxW, 96, 9);
           mobileBox.lineStyle(1.8, palette.primary, 0.65);
-          mobileBox.strokeRoundedRect(-114, 48, 228, 92, 9);
+          mobileBox.strokeRoundedRect(-boxW / 2, 52, boxW, 96, 9);
 
           const mobileTitle = this.add
             .text(
               0,
-              74,
+              76,
               i === 0
-                ? '📱 CỤM ĐIỀU KHIỂN BÊN TRÁI'
-                : '📱 CỤM ĐỐI DIỆN (BÊN PHẢI)',
+                ? '✦ CỤM ĐIỀU KHIỂN CẠNH TRÁI'
+                : '✦ CỤM ĐỐI DIỆN (CẠNH PHẢI)',
               {
                 fontFamily: "'Segoe UI', 'Inter', sans-serif",
-                fontSize: '12px',
+                fontSize: '13px',
                 fontStyle: '900',
                 color: palette.primaryHex,
               },
@@ -567,15 +606,15 @@ export class SetupScene extends Phaser.Scene {
           const mobileDesc = this.add
             .text(
               0,
-              108,
+              114,
               isOpposite2P
-                ? 'Ngồi đối diện cạnh phải điện thoại!\nCần gạt + Nút Bắn xoay ngược 180°'
+                ? 'Ngồi đối diện cạnh phải điện thoại!\nCần gạt cỡ lớn + Nút Bắn xoay ngược 180°'
                 : i === 0 && !s.playerIsAI[1]
-                  ? 'Ngồi cạnh trái điện thoại!\nCần gạt trên + Nút Bắn dưới'
-                  : 'Cần Gạt Thông Minh bên trái\n+ Nút Bắn & Lùi bên phải',
+                  ? 'Ngồi cạnh trái điện thoại!\nCần gạt trên + Nút Bắn & Lùi bên dưới'
+                  : 'Cần Gạt Thông Minh cỡ lớn bên trái\n+ Nút Bắn & Lùi bên phải màn hình',
               {
                 fontFamily: "'Segoe UI', 'Inter', sans-serif",
-                fontSize: '11px',
+                fontSize: '12px',
                 fontStyle: '700',
                 color: UI_COLORS.inkDarkHex,
                 align: 'center',
@@ -585,9 +624,9 @@ export class SetupScene extends Phaser.Scene {
             .setOrigin(0.5, 0.5);
 
           const hint = this.add
-            .text(0, 162, 'Tự động nhận diện cảm ứng Mobile', {
+            .text(0, 170, 'Có thể chỉnh cỡ nút & độ nhạy trong mục ⚙ Độ Nhạy', {
               fontFamily: "'Segoe UI', 'Inter', sans-serif",
-              fontSize: '11px',
+              fontSize: '11.5px',
               fontStyle: '700',
               color: UI_COLORS.inkMutedHex,
             })

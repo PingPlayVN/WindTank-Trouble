@@ -21,6 +21,7 @@ import type { GameScene, HudSnapshot } from './GameScene';
 import {
   animateModalOpen,
   createArcadeButton,
+  createModalScrim,
   type ArcadeButtonHandle,
 } from '../../ui/components/ArcadeWidgets';
 import {
@@ -54,6 +55,8 @@ export class UIScene extends Phaser.Scene {
   private portraitHintText!: Phaser.GameObjects.Text;
   private muteBtn!: ArcadeButtonHandle;
   private rulesTopBtn!: ArcadeButtonHandle;
+  private guideTopBtn!: ArcadeButtonHandle;
+  private pauseTopBtn!: ArcadeButtonHandle;
 
   private scoreboardContainer!: Phaser.GameObjects.Container;
   private plaques: Map<PlayerIndex, PlayerPlaqueRefs> = new Map();
@@ -123,7 +126,11 @@ export class UIScene extends Phaser.Scene {
       .setVisible(false);
     this.updatePortraitHint();
 
-    this.onResizeBound = () => this.updatePortraitHint();
+    this.onResizeBound = () => {
+      this.syncTopBarLayout();
+      this.touchOverlay?.redraw();
+      this.updatePortraitHint();
+    };
     window.addEventListener('resize', this.onResizeBound);
 
     this.unsubNet = peerMultiplayer.subscribeLobby((st: LobbySharedState) => {
@@ -178,6 +185,7 @@ export class UIScene extends Phaser.Scene {
   refreshTouchLayout(): void {
     mobileOrientationManager.syncLayout();
     const active = settingsManager.isTouchControlsActive();
+    this.syncTopBarLayout();
     this.touchOverlay?.setVisible(active);
     this.touchOverlay?.redraw();
     this.updatePortraitHint();
@@ -232,21 +240,22 @@ export class UIScene extends Phaser.Scene {
   }
 
   private buildTopBar(): void {
-    const y = 22;
+    const isMobile = settingsManager.isTouchControlsActive();
+    const y = isMobile ? 19 : 22;
+    const btnH = isMobile ? 32 : 30;
 
     this.roundTitleText = this.add
       .text(24, y, 'HIỆP 1', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
-        fontSize: '14.5px',
+        fontSize: isMobile ? '14px' : '14.5px',
         fontStyle: '900',
         color: UI_COLORS.inkDarkHex,
       })
       .setOrigin(0, 0.5)
       .setDepth(30);
 
-    const isMobile = settingsManager.isTouchControlsActive();
     this.goalBadgeText = this.add
-      .text(isMobile ? 454 : DESIGN_WIDTH / 2 - 58, y, 'ĐẠT TRƯỚC 5 ĐIỂM', {
+      .text(DESIGN_WIDTH / 2, y, 'ĐẠT TRƯỚC 5 ĐIỂM', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: isMobile ? '12px' : '13px',
         fontStyle: '800',
@@ -259,7 +268,7 @@ export class UIScene extends Phaser.Scene {
       buttonX: DESIGN_WIDTH - 548,
       buttonY: y,
       buttonWidth: 108,
-      buttonHeight: 30,
+      buttonHeight: btnH,
       compactButton: true,
       showRecommendationBanner: false,
       depth: 30,
@@ -280,10 +289,10 @@ export class UIScene extends Phaser.Scene {
 
     const isGuestOnline = peerMultiplayer.getRole() === 'guest';
     this.rulesTopBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH - 434,
+      x: DESIGN_WIDTH - 422,
       y,
       width: 98,
-      height: 30,
+      height: btnH,
       lipHeight: 2,
       label: '⚙ LUẬT',
       fontSize: 12,
@@ -294,11 +303,11 @@ export class UIScene extends Phaser.Scene {
     });
     this.rulesTopBtn.container.setDepth(30).setVisible(!isGuestOnline);
 
-    const guideBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH - 322,
+    this.guideTopBtn = createArcadeButton(this, {
+      x: DESIGN_WIDTH - 310,
       y,
       width: 108,
-      height: 30,
+      height: btnH,
       lipHeight: 2,
       label: '★ KỸ NĂNG',
       fontSize: 11.5,
@@ -318,14 +327,14 @@ export class UIScene extends Phaser.Scene {
         });
       },
     });
-    guideBtn.container.setDepth(30);
+    this.guideTopBtn.container.setDepth(30);
 
     const s = settingsManager.getSettings();
     this.muteBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH - 202,
+      x: DESIGN_WIDTH - 190,
       y,
       width: 112,
-      height: 30,
+      height: btnH,
       lipHeight: 2,
       label: s.soundEnabled ? 'ÂM: BẬT' : 'ÂM: TẮT',
       fontSize: 12,
@@ -338,11 +347,11 @@ export class UIScene extends Phaser.Scene {
     });
     this.muteBtn.container.setDepth(30);
 
-    const pauseBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH - 78,
+    this.pauseTopBtn = createArcadeButton(this, {
+      x: DESIGN_WIDTH - 68,
       y,
-      width: 108,
-      height: 30,
+      width: 110,
+      height: btnH,
       lipHeight: 2,
       label: peerMultiplayer.isOnlineSession() ? 'MENU' : 'TẠM DỪNG',
       fontSize: 12,
@@ -353,7 +362,42 @@ export class UIScene extends Phaser.Scene {
         gameScene.setPaused(!gameScene.getIsPaused());
       },
     });
-    pauseBtn.container.setDepth(30);
+    this.pauseTopBtn.container.setDepth(30);
+
+    this.syncTopBarLayout();
+  }
+
+  private syncTopBarLayout(): void {
+    const isMobile = settingsManager.isTouchControlsActive();
+    const viewLeft = mobileOrientationManager.getViewLeft();
+    const viewRight = mobileOrientationManager.getViewRight();
+    const y = isMobile ? 19 : 22;
+
+    const hasWindHubBridge =
+      typeof window !== 'undefined' &&
+      typeof document !== 'undefined' &&
+      (Boolean(document.getElementById('windhub-exit-bridge')) || window.parent !== window);
+
+    // Leave clean room on the top-left when embedded inside WindHub so `← Hub` never overlaps `HIỆP 1`!
+    const titleLeftX = viewLeft + (hasWindHubBridge ? 108 : 20);
+    this.roundTitleText?.setPosition(titleLeftX, y);
+    this.netPingText?.setPosition(titleLeftX + 278, y);
+
+    const isGuestOnline = peerMultiplayer.getRole() === 'guest';
+    this.pauseTopBtn?.container.setPosition(viewRight - 68, y);
+    this.muteBtn?.container.setPosition(viewRight - 188, y);
+    this.guideTopBtn?.container.setPosition(viewRight - 306, y);
+    this.rulesTopBtn?.container.setPosition(viewRight - 418, y).setVisible(!isGuestOnline);
+    this.fsControls?.button?.container.setPosition(
+      isGuestOnline ? viewRight - 422 : viewRight - 530,
+      y,
+    );
+
+    const rightControlsLeftEdge = isMobile
+      ? (isGuestOnline ? viewRight - 476 : viewRight - 584)
+      : (isGuestOnline ? viewRight - 360 : viewRight - 468);
+    const centerGoalX = Math.min(DESIGN_WIDTH / 2, rightControlsLeftEdge - 142);
+    this.goalBadgeText?.setPosition(Math.max(titleLeftX + 240, centerGoalX), y);
   }
 
   private buildCenterBanner(): void {
@@ -382,11 +426,25 @@ export class UIScene extends Phaser.Scene {
   }
 
   private formatSkillBadgeCopy(p: HudSnapshot['players'][number]): string {
-    const activeSuit = p.skill ?? (p.shieldRemaining > 0 ? 'shield' : null);
+    const activeSuit =
+      p.skill ??
+      (p.shieldRemaining > 0
+        ? 'shield'
+        : (p.phantomRemaining ?? 0) > 0
+          ? 'phantom'
+          : p.empOrbActive
+            ? 'emp'
+            : null);
     if (!activeSuit) return '';
     const desc = getSkillDescriptor(activeSuit);
+    if (p.empOrbActive) {
+      return 'EMP: BẤM KÍCH NỔ!';
+    }
     if (p.shieldRemaining > 0 && !p.skill) {
       return `KHIÊN ${p.shieldRemaining.toFixed(1)}s`;
+    }
+    if ((p.phantomRemaining ?? 0) > 0 && !p.skill) {
+      return `BÓNG MA ${(p.phantomRemaining ?? 0).toFixed(1)}s`;
     }
     if (p.skill === 'laser') {
       return p.laserChargeProgress !== null
@@ -401,6 +459,11 @@ export class UIScene extends Phaser.Scene {
     if (p.skill === 'scatter') return `PHÁO CHÙM ${p.skillAmmo}/${POWERUP_CONFIG.scatterAmmo}`;
     if (p.skill === 'mine') return `MÌN BÓNG MA ${p.skillAmmo}/${POWERUP_CONFIG.mineAmmo}`;
     if (p.skill === 'drill') return `MŨI KHOAN ${p.skillAmmo}/${POWERUP_CONFIG.drillAmmo}`;
+    if (p.skill === 'cryo') return `HÀN BĂNG ${p.skillAmmo}/${POWERUP_CONFIG.cryoAmmo}`;
+    if (p.skill === 'barrier') return `XÂY TƯỜNG ${p.skillAmmo}/${POWERUP_CONFIG.barrierAmmo}`;
+    if (p.skill === 'warp') return p.warpBeaconPlaced ? 'BẤM: DỊCH CHUYỂN!' : 'MỎ NEO: ĐẶT CỔNG';
+    if (p.skill === 'emp') return 'XUNG EMP: 1 QUẢ';
+    if (p.skill === 'phantom') return 'BÓNG MA: SẴN SÀNG';
     if (p.skill === 'shield') return 'KHIÊN: SẴN SÀNG';
     if (p.skill === 'spike') return 'ĐẠN GAI: 1 VIÊN';
     if (p.skill === 'homing') return 'ĐỊNH VỊ: 1 QUẢ';
@@ -448,7 +511,10 @@ export class UIScene extends Phaser.Scene {
               skillAmmo: pl.skillAmmo,
               laserChargeProgress: pl.laserChargeProgress,
               shieldRemaining: pl.shieldRemaining,
+              phantomRemaining: pl.phantomRemaining,
               reaperActive: pl.reaperActive,
+              warpBeaconPlaced: pl.warpBeaconPlaced,
+              empOrbActive: pl.empOrbActive,
             });
           }
         }
@@ -464,7 +530,10 @@ export class UIScene extends Phaser.Scene {
             skillAmmo: localP.skillAmmo,
             laserChargeProgress: localP.laserChargeProgress,
             shieldRemaining: localP.shieldRemaining,
+            phantomRemaining: localP.phantomRemaining,
             reaperActive: localP.reaperActive,
+            warpBeaconPlaced: localP.warpBeaconPlaced,
+            empOrbActive: localP.empOrbActive,
           });
         }
       }
@@ -525,12 +594,20 @@ export class UIScene extends Phaser.Scene {
       ref.ammoGraphics.clear();
       ref.skillBadgeBg.clear();
 
-      const activeSuit = p.skill ?? (p.shieldRemaining > 0 ? 'shield' : null);
+      const activeSuit =
+        p.skill ??
+        (p.shieldRemaining > 0
+          ? 'shield'
+          : (p.phantomRemaining ?? 0) > 0
+            ? 'phantom'
+            : p.empOrbActive
+              ? 'emp'
+              : null);
       if (activeSuit !== ref.lastSkill) {
         ref.lastSkill = activeSuit;
         if (activeSuit) {
           this.tweens.killTweensOf(ref.tankIcon);
-          const targetScale = ref.compact ? 0.56 : 0.92;
+          const targetScale = ref.compact ? 0.5 : 0.92;
           ref.tankIcon.setScale(targetScale * 1.24);
           this.tweens.add({
             targets: ref.tankIcon,
@@ -543,8 +620,8 @@ export class UIScene extends Phaser.Scene {
 
       if (activeSuit) {
         const desc = getSkillDescriptor(activeSuit);
-        const bw = ref.compact ? 92 : 116;
-        const bh = ref.compact ? 16 : 20;
+        const bw = ref.compact ? 94 : 116;
+        const bh = ref.compact ? 14 : 20;
         ref.skillBadgeBg.fillStyle(desc.accentColor, 0.95);
         ref.skillBadgeBg.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 4);
         ref.skillBadgeBg.lineStyle(1.3, UI_COLORS.inkDark, 0.9);
@@ -713,12 +790,12 @@ export class UIScene extends Phaser.Scene {
    */
   private buildCompactMobileScorePills(snap: HudSnapshot): void {
     const count = snap.players.length;
-    const pillW = count === 4 ? 204 : count === 3 ? 236 : 268;
-    const pillH = 34;
-    const gap = 10;
+    const pillW = count === 4 ? 204 : count === 3 ? 236 : 276;
+    const pillH = 35;
+    const gap = 12;
     const totalW = count * pillW + (count - 1) * gap;
     const startX = DESIGN_WIDTH / 2 - totalW / 2 + pillW / 2;
-    const pillY = 58;
+    const pillY = 53;
 
     snap.players.forEach((p, idx) => {
       const cx = startX + idx * (pillW + gap);
@@ -741,7 +818,7 @@ export class UIScene extends Phaser.Scene {
       const iconX = -pillW / 2 + 24;
       const tankIcon = this.add
         .image(iconX, 0, `tank_icon_${palette.id}`)
-        .setScale(0.56)
+        .setScale(0.5)
         .setRotation(-Math.PI / 2);
 
       const eliminatedCross = this.add.graphics().setVisible(false);
@@ -750,19 +827,19 @@ export class UIScene extends Phaser.Scene {
       eliminatedCross.lineBetween(iconX + 9, -9, iconX - 9, 9);
 
       const nameLbl = this.add
-        .text(-pillW / 2 + 42, -9, `XE ${p.index + 1}`, {
+        .text(-pillW / 2 + 48, -8.5, `XE ${p.index + 1}`, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '10px',
+          fontSize: '10.5px',
           fontStyle: '900',
           color: palette.primaryHex,
         })
         .setOrigin(0, 0.5);
 
-      const hpGraphics = this.add.graphics().setPosition(-pillW / 2 + 42, 0);
-      const ammoGraphics = this.add.graphics().setPosition(-pillW / 2 + 78, 9);
-      const skillBadgeBg = this.add.graphics().setPosition(-pillW / 2 + 92, 8);
+      const hpGraphics = this.add.graphics().setPosition(-pillW / 2 + 48, 0.5);
+      const ammoGraphics = this.add.graphics().setPosition(-pillW / 2 + 82, 8.5);
+      const skillBadgeBg = this.add.graphics().setPosition(-pillW / 2 + 96, 8);
       const skillBadgeText = this.add
-        .text(-pillW / 2 + 92, 8, '', {
+        .text(-pillW / 2 + 96, 8, '', {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
           fontSize: '9px',
           fontStyle: '900',
@@ -913,42 +990,54 @@ export class UIScene extends Phaser.Scene {
     const contentRoot = this.add.container(0, 0);
     this.pauseModalContainer = modal;
 
-    const scrim = this.add
-      .rectangle(DESIGN_WIDTH / 2, DESIGN_HEIGHT / 2, DESIGN_WIDTH, DESIGN_HEIGHT, 0x101215, 0.54)
-      .setInteractive();
+    const scrim = createModalScrim(this, 0x101215, 0.56);
 
-    const pw = 448;
-    const ph = 492;
+    // Spacious 2-Column Pause Panel (`560×412`): Full-width Resume -> 2×2 Action Grid -> Full-width Exit!
+    const pw = 560;
+    const ph = 412;
     const px = DESIGN_WIDTH / 2;
     const py = DESIGN_HEIGHT / 2;
 
     const card = this.add.graphics();
+    card.fillStyle(0x1d1f22, 0.24);
+    card.fillRoundedRect(px - pw / 2 + 5, py - ph / 2 + 7, pw, ph, 16);
     card.fillStyle(UI_COLORS.cardBg, 1);
-    card.fillRoundedRect(px - pw / 2, py - ph / 2, pw, ph, 14);
+    card.fillRoundedRect(px - pw / 2, py - ph / 2, pw, ph, 16);
+    card.fillStyle(UI_COLORS.inkDark, 1);
+    card.fillRoundedRect(px - pw / 2, py - ph / 2, pw, 56, {
+      tl: 16,
+      tr: 16,
+      bl: 0,
+      br: 0,
+    });
     card.lineStyle(3, UI_COLORS.inkDark, 1);
-    card.strokeRoundedRect(px - pw / 2, py - ph / 2, pw, ph, 14);
+    card.strokeRoundedRect(px - pw / 2, py - ph / 2, pw, ph, 16);
 
     const hdr = this.add
       .text(
         px,
-        py - ph / 2 + 36,
+        py - ph / 2 + 28,
         isOnline ? `MENU PHÒNG ${peerMultiplayer.getState().formattedCode}` : 'TẠM DỪNG TRẬN ĐẤU',
         {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '24px',
+          fontSize: '22px',
           fontStyle: '900',
-          color: UI_COLORS.inkDarkHex,
+          color: '#FFFFFF',
         },
       )
       .setOrigin(0.5, 0.5);
 
+    const fullBtnW = 496;
+    const gridBtnW = 240;
+
     const resumeBtn = createArcadeButton(this, {
       x: px,
-      y: py - 144,
-      width: 318,
-      height: 44,
-      label: 'TIẾP TỤC CHƠI (ESC)',
-      fontSize: 15.5,
+      y: py - 98,
+      width: fullBtnW,
+      height: 50,
+      lipHeight: 4,
+      label: '▶ TIẾP TỤC CHƠI (ESC)',
+      fontSize: 17,
       fillColor: 0x43a047,
       hoverColor: 0x4caf50,
       textColor: '#FFFFFF',
@@ -959,12 +1048,12 @@ export class UIScene extends Phaser.Scene {
     });
 
     const rulesBtn = createArcadeButton(this, {
-      x: px,
-      y: py - 88,
-      width: 318,
-      height: 44,
-      label: isGuest ? '⚙ LUẬT DO CHỦ PHÒNG QUẢN LÝ' : '⚙ LUẬT CHƠI & ĐỘ KHÓ AI',
-      fontSize: 14.5,
+      x: px - 128,
+      y: py - 28,
+      width: gridBtnW,
+      height: 48,
+      label: isGuest ? '⚙ LUẬT CHỦ PHÒNG' : '⚙ LUẬT & ĐỘ KHÓ AI',
+      fontSize: 14,
       fillColor: isGuest ? UI_COLORS.cardAltBg : 0xe3f2fd,
       hoverColor: isGuest ? UI_COLORS.cardAltBg : 0xbbdefb,
       textColor: isGuest ? UI_COLORS.inkMutedHex : '#0D47A1',
@@ -974,12 +1063,12 @@ export class UIScene extends Phaser.Scene {
     });
 
     const restartBtn = createArcadeButton(this, {
-      x: px,
-      y: py - 32,
-      width: 318,
-      height: 44,
-      label: isGuest ? 'CHỜ CHỦ PHÒNG ĐẤU LẠI' : 'CHƠI LẠI TỪ ĐẦU',
-      fontSize: 15,
+      x: px + 128,
+      y: py - 28,
+      width: gridBtnW,
+      height: 48,
+      label: isGuest ? '⏳ CHỜ ĐẤU LẠI' : '↻ CHƠI LẠI TỪ ĐẦU',
+      fontSize: 14,
       fillColor: isGuest ? UI_COLORS.cardAltBg : UI_COLORS.cardBg,
       onClick: () => {
         if (this.hasActiveSubModal() || isGuest) return;
@@ -988,12 +1077,12 @@ export class UIScene extends Phaser.Scene {
     });
 
     const skillsBtn = createArcadeButton(this, {
-      x: px,
-      y: py + 24,
-      width: 318,
-      height: 44,
-      label: '★ CẨM NANG 10 KỸ NĂNG',
-      fontSize: 15,
+      x: px - 128,
+      y: py + 34,
+      width: gridBtnW,
+      height: 48,
+      label: '★ CẨM NANG KỸ NĂNG',
+      fontSize: 14,
       fillColor: 0xfff8e1,
       hoverColor: 0xffecb3,
       textColor: '#E65100',
@@ -1008,14 +1097,14 @@ export class UIScene extends Phaser.Scene {
     });
 
     const settingsBtn = createArcadeButton(this, {
-      x: px,
-      y: py + 80,
-      width: 318,
-      height: 44,
+      x: px + 128,
+      y: py + 34,
+      width: gridBtnW,
+      height: 48,
       label: settingsManager.isTouchControlsActive()
-        ? 'CÀI ĐẶT & ĐỘ NHẠY CẢM ỨNG'
-        : 'CÀI ĐẶT & ĐỔI PHÍM',
-      fontSize: 15,
+        ? '⚙ CÀI ĐẶT & ĐỘ NHẠY'
+        : '⚙ CÀI ĐẶT & ĐỔI PHÍM',
+      fontSize: 14,
       fillColor: UI_COLORS.cardBg,
       onClick: () => {
         if (this.hasActiveSubModal()) return;
@@ -1038,11 +1127,11 @@ export class UIScene extends Phaser.Scene {
 
     const menuBtn = createArcadeButton(this, {
       x: px,
-      y: py + 136,
-      width: 318,
-      height: 44,
-      label: isOnline ? 'RỜI PHÒNG ONLINE & VỀ MENU' : 'VỀ TRANG CHỦ',
-      fontSize: 14.5,
+      y: py + 100,
+      width: fullBtnW,
+      height: 48,
+      label: isOnline ? '← RỜI PHÒNG ONLINE & VỀ TRANG CHỦ' : '← VỀ TRANG CHỦ',
+      fontSize: 15,
       fillColor: 0xffebee,
       hoverColor: 0xffcdd2,
       textColor: UI_COLORS.dangerRedHex,

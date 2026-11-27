@@ -88,6 +88,16 @@ export class ProjectileSystem {
     return count;
   }
 
+  hasActiveVariantForPlayer(playerIndex: PlayerIndex, variant: ProjectileVariant): boolean {
+    for (let i = 0; i < this.pool.length; i++) {
+      const k = this.pool[i].kinematics;
+      if (k.active && k.ownerIndex === playerIndex && k.variant === variant) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   spawnCustomProjectile(opts: CustomProjectileSpawnOptions): Projectile | null {
     const slot = this.pool.find((p) => !p.kinematics.active);
     if (!slot) return null;
@@ -164,7 +174,12 @@ export class ProjectileSystem {
     dt: number,
     tanks: readonly Tank[],
     walls: readonly WallRect[],
-    onExpirePuff: (x: number, y: number) => void,
+    onExpirePuff: (
+      x: number,
+      y: number,
+      variant: ProjectileVariant,
+      ownerIndex: PlayerIndex,
+    ) => void,
     onDrillImpact?: (proj: ProjectileKinematics, hitX: number, hitY: number) => boolean,
   ): { bounces: WallBounceEvent[]; hits: ProjectileHitEvent[] } {
     const tankKinematics = tanks.map((t) => t.kinematics);
@@ -188,7 +203,12 @@ export class ProjectileSystem {
         !hitIds.has(proj.kinematics.id) &&
         proj.kinematics.variant !== 'flame'
       ) {
-        onExpirePuff(proj.kinematics.x, proj.kinematics.y);
+        onExpirePuff(
+          proj.kinematics.x,
+          proj.kinematics.y,
+          proj.kinematics.variant ?? 'standard',
+          proj.kinematics.ownerIndex,
+        );
       }
       proj.drawTrail(this.trailGraphics);
     }

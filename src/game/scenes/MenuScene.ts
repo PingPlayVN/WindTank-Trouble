@@ -23,6 +23,8 @@ import { SkillGuideModal } from '../../ui/components/SkillGuideModal';
 
 export class MenuScene extends Phaser.Scene {
   private countButtons: Map<2 | 3 | 4, ArcadeButtonHandle> = new Map();
+  private mobileSoloAiBtn: ArcadeButtonHandle | null = null;
+  private mobileDualHumanBtn: ArcadeButtonHandle | null = null;
   private onlineBtn!: ArcadeButtonHandle;
   private offlineBadgeText!: Phaser.GameObjects.Text;
   private unsubNetwork: (() => void) | null = null;
@@ -37,30 +39,39 @@ export class MenuScene extends Phaser.Scene {
 
   create(): void {
     this.countButtons.clear();
+    this.mobileSoloAiBtn = null;
+    this.mobileDualHumanBtn = null;
     this.activeModal = null;
     this.activeSkillModal = null;
     mobileOrientationManager.syncLayout();
     const isMobile = settingsManager.isTouchControlsActive();
-    if (isMobile && settingsManager.getSettings().playerCount > 2) {
-      settingsManager.setPlayerCount(2);
+    if (isMobile) {
+      const cur = settingsManager.getSettings();
+      if (cur.playerCount > 2) {
+        settingsManager.setPlayerCount(2);
+      }
+      // On Mobile, ensure Tank 1 is ALWAYS controlled by the human player (never stranded as AI!)
+      if (cur.playerIsAI[0]) {
+        settingsManager.setPlayerIsAI(0, false);
+        settingsManager.setPlayerIsAI(1, true);
+      }
     }
 
     this.cameras.main.fadeIn(220, 238, 238, 236);
     drawMazeBackdrop(this, DESIGN_WIDTH, DESIGN_HEIGHT);
     const fsControls = createMobileFullscreenControls(this, {
-      buttonX: DESIGN_WIDTH - 96,
       buttonY: 40,
       showRecommendationBanner: true,
       bannerY: 40,
     });
-    const logo = createLogoHeader(this, DESIGN_WIDTH / 2, 148, 1.04);
+    const logo = createLogoHeader(this, DESIGN_WIDTH / 2, 146, 1.04);
 
     const subHeader = this.add
       .text(
         DESIGN_WIDTH / 2,
-        232,
+        230,
         isMobile
-          ? '📱 CHẾ ĐỘ MOBILE TỰ ĐỘNG XOAY NGANG  •  ĐẤU AI, 2 NGƯỜI ĐỐI DIỆN HOẶC ONLINE 1VS1'
+          ? '✦ TOÀN KHUNG HÌNH NGANG TỰ ĐỘNG  •  ĐẤU AI, 2 NGƯỜI ĐỐI DIỆN HOẶC ONLINE 1VS1'
           : 'ĐẠI CHIẾN XE TĂNG MÊ CUNG CÙNG MÁY AI & BẠN BÈ  •  2 ĐẾN 4 XE',
         {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
@@ -72,19 +83,19 @@ export class MenuScene extends Phaser.Scene {
       )
       .setOrigin(0.5, 0.5);
 
-    this.buildPlayerCountSelector(DESIGN_WIDTH / 2, 294);
+    const topModeItems = this.buildPlayerCountSelector(DESIGN_WIDTH / 2, 294);
 
-    this.previewContainer = this.add.container(DESIGN_WIDTH / 2, 392);
+    this.previewContainer = this.add.container(DESIGN_WIDTH / 2, 394);
     this.refreshTankPreview(false);
 
     const lobbyBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 - 252,
+      x: DESIGN_WIDTH / 2 - 256,
       y: 504,
-      width: 236,
-      height: 56,
+      width: 240,
+      height: 58,
       lipHeight: 5,
       label: 'VÀO SẢNH ĐẤU',
-      fontSize: 19,
+      fontSize: 18.5,
       fillColor: 0xe53935,
       hoverColor: 0xf44336,
       textColor: '#FFFFFF',
@@ -97,10 +108,10 @@ export class MenuScene extends Phaser.Scene {
     const quickBtn = createArcadeButton(this, {
       x: DESIGN_WIDTH / 2,
       y: 504,
-      width: 236,
-      height: 56,
+      width: 244,
+      height: 58,
       lipHeight: 5,
-      label: 'ĐẤU NHANH',
+      label: '▶ ĐẤU NHANH',
       fontSize: 19,
       fillColor: 0x43a047,
       hoverColor: 0x4caf50,
@@ -112,10 +123,10 @@ export class MenuScene extends Phaser.Scene {
     });
 
     this.onlineBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 + 252,
+      x: DESIGN_WIDTH / 2 + 256,
       y: 504,
-      width: 236,
-      height: 56,
+      width: 240,
+      height: 58,
       lipHeight: 5,
       label: '🌐 ONLINE 1VS1',
       fontSize: 18,
@@ -131,8 +142,8 @@ export class MenuScene extends Phaser.Scene {
 
     this.offlineBadgeText = this.add
       .text(
-        DESIGN_WIDTH / 2 + 252,
-        544,
+        DESIGN_WIDTH / 2 + 256,
+        547,
         '📴 Chế độ Offline • Vẫn chơi mượt với AI & Nội Bộ!',
         {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
@@ -149,38 +160,38 @@ export class MenuScene extends Phaser.Scene {
       this.syncOnlineButtonAvailability();
     });
 
+    // Clean, aligned 3-button utility row directly matching the 3 primary CTA columns above!
     const guideBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 - 125,
-      y: 584,
-      width: 235,
-      height: 46,
+      x: DESIGN_WIDTH / 2 - 256,
+      y: 598,
+      width: 240,
+      height: 48,
       label: 'HƯỚNG DẪN CHƠI',
-      fontSize: 15.5,
+      fontSize: 15,
       fillColor: UI_COLORS.cardBg,
       hoverColor: 0xf4f6f8,
       onClick: () => this.openModal('controls'),
     });
 
     const settingsBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 + 125,
-      y: 584,
-      width: 235,
-      height: 46,
-      label: isMobile ? 'CÀI ĐẶT & ĐỘ NHẠY' : 'CÀI ĐẶT & ĐỔI PHÍM',
-      fontSize: 15.5,
+      x: DESIGN_WIDTH / 2,
+      y: 598,
+      width: 244,
+      height: 48,
+      label: isMobile ? '⚙ CÀI ĐẶT & ĐỘ NHẠY' : '⚙ CÀI ĐẶT & ĐỔI PHÍM',
+      fontSize: 15,
       fillColor: UI_COLORS.cardBg,
       hoverColor: 0xf4f6f8,
       onClick: () => this.openModal('settings'),
     });
 
     const codexBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2,
-      y: 644,
-      width: 485,
-      height: 42,
-      lipHeight: 3,
-      label: '★ CẨM NANG 10 KỸ NĂNG & THÙNG GỖ BÍ ẨN ★',
-      fontSize: 15,
+      x: DESIGN_WIDTH / 2 + 256,
+      y: 598,
+      width: 240,
+      height: 48,
+      label: '★ CẨM NANG 15 KỸ NĂNG',
+      fontSize: 14.5,
       fillColor: 0xfff8e1,
       hoverColor: 0xffecb3,
       textColor: '#E65100',
@@ -190,9 +201,9 @@ export class MenuScene extends Phaser.Scene {
     const footer = this.add
       .text(
         DESIGN_WIDTH / 2,
-        714,
+        704,
         isMobile
-          ? '📱 Mobile 2 Người: Đặt điện thoại nằm ngang ở giữa — Người 1 cầm cạnh Trái, Người 2 ngồi đối diện cầm cạnh Phải!'
+          ? '✦ Mobile 2 Người: Đặt điện thoại nằm ngang ở giữa — Người 1 cầm cạnh Trái, Người 2 ngồi đối diện cầm cạnh Phải!'
           : 'Xe 1: WASD + Space   |   Xe 2: Mũi Tên + Enter   |   Xe 3: IJKL + U   |   Xe 4: Phím Số 8546 + 0',
         {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
@@ -208,7 +219,7 @@ export class MenuScene extends Phaser.Scene {
       [
         logo,
         subHeader,
-        ...Array.from(this.countButtons.values()).map((b) => b.container),
+        ...topModeItems,
         this.previewContainer,
         lobbyBtn.container,
         quickBtn.container,
@@ -266,14 +277,56 @@ export class MenuScene extends Phaser.Scene {
     }
   }
 
-  private buildPlayerCountSelector(centerX: number, y: number): void {
+  private buildPlayerCountSelector(centerX: number, y: number): Phaser.GameObjects.Container[] {
+    if (settingsManager.isTouchControlsActive()) {
+      // On Mobile, replace dead locked 3P/4P buttons with 2 instant playable mode pills!
+      this.mobileSoloAiBtn = createArcadeButton(this, {
+        x: centerX - 152,
+        y,
+        width: 288,
+        height: 46,
+        label: '✦ 1 NGƯỜI ĐẤU MÁY AI',
+        fontSize: 15,
+        onClick: () => {
+          if (this.activeModal || this.activeSkillModal) return;
+          settingsManager.setPlayerCount(2);
+          settingsManager.setPlayerIsAI(0, false);
+          settingsManager.setPlayerIsAI(1, true);
+          audioManager.playUiClick(true);
+          this.refreshCountButtons();
+          this.refreshTankPreview(true);
+        },
+      });
+
+      this.mobileDualHumanBtn = createArcadeButton(this, {
+        x: centerX + 152,
+        y,
+        width: 288,
+        height: 46,
+        label: '✦ 2 NGƯỜI ĐỐI DIỆN',
+        fontSize: 15,
+        onClick: () => {
+          if (this.activeModal || this.activeSkillModal) return;
+          settingsManager.setPlayerCount(2);
+          settingsManager.setPlayerIsAI(0, false);
+          settingsManager.setPlayerIsAI(1, false);
+          audioManager.playUiClick(true);
+          this.refreshCountButtons();
+          this.refreshTankPreview(true);
+        },
+      });
+
+      this.refreshCountButtons();
+      return [this.mobileSoloAiBtn.container, this.mobileDualHumanBtn.container];
+    }
+
     const counts: Array<2 | 3 | 4> = [2, 3, 4];
     counts.forEach((cnt, idx) => {
-      const bx = centerX + (idx - 1) * 165;
+      const bx = centerX + (idx - 1) * 168;
       const btn = createArcadeButton(this, {
         x: bx,
         y,
-        width: 152,
+        width: 156,
         height: 44,
         label: `${cnt} XE THAM CHIẾN`,
         fontSize: 15,
@@ -285,6 +338,7 @@ export class MenuScene extends Phaser.Scene {
       this.countButtons.set(cnt, btn);
     });
     this.refreshCountButtons();
+    return Array.from(this.countButtons.values()).map((b) => b.container);
   }
 
   private selectCount(cnt: 2 | 3 | 4): void {
@@ -297,18 +351,29 @@ export class MenuScene extends Phaser.Scene {
 
   private refreshCountButtons(): void {
     const isMobile = settingsManager.isTouchControlsActive();
-    if (isMobile && settingsManager.getSettings().playerCount > 2) {
+    const s = settingsManager.getSettings();
+    if (isMobile && s.playerCount > 2) {
       settingsManager.setPlayerCount(2);
     }
+
+    if (this.mobileSoloAiBtn && this.mobileDualHumanBtn) {
+      const soloVsAi = Boolean(s.playerIsAI[1]) && !s.playerIsAI[0];
+      const dualOpposite = !s.playerIsAI[0] && !s.playerIsAI[1];
+      this.mobileSoloAiBtn.setFill(
+        soloVsAi ? UI_COLORS.inkDark : UI_COLORS.cardBg,
+        soloVsAi ? 0x2c3036 : 0xf4f6f8,
+        soloVsAi ? '#FFFFFF' : UI_COLORS.inkDarkHex,
+      );
+      this.mobileDualHumanBtn.setFill(
+        dualOpposite ? UI_COLORS.inkDark : UI_COLORS.cardBg,
+        dualOpposite ? 0x2c3036 : 0xf4f6f8,
+        dualOpposite ? '#FFFFFF' : UI_COLORS.inkDarkHex,
+      );
+      return;
+    }
+
     const activeCnt = settingsManager.getSettings().playerCount;
     for (const [cnt, btn] of this.countButtons.entries()) {
-      const lockedOnMobile = isMobile && cnt > 2;
-      if (lockedOnMobile) {
-        btn.setLabel(`🔒 ${cnt} XE (CHỈ PC)`);
-        btn.setFill(0xe0e3e7, 0xe0e3e7, '#8D939C');
-        btn.setEnabled(false);
-        continue;
-      }
       btn.setEnabled(true);
       btn.setLabel(`${cnt} XE THAM CHIẾN`);
       const isSelected = cnt === activeCnt;

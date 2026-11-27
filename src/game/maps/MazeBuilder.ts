@@ -105,9 +105,9 @@ export function buildArenaLayout(
 ): BuiltArenaLayout {
   const { cols, rows } = grid;
 
-  const rawCellW = Math.floor((viewport.maxWidth - 24) / cols);
-  const rawCellH = Math.floor((viewport.maxHeight - 20) / rows);
-  const cellSize = Math.max(24, Math.min(92, rawCellW, rawCellH));
+  const rawCellW = Math.floor((viewport.maxWidth - 14) / cols);
+  const rawCellH = Math.floor((viewport.maxHeight - 12) / rows);
+  const cellSize = Math.max(24, Math.min(96, rawCellW, rawCellH));
   const scaleRatio = cellSize / BASE_GAMEPLAY.referenceCellSize;
   const wallThickness = Math.max(3, Math.round(BASE_GAMEPLAY.wallThickness * scaleRatio));
 

@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   ARENA_VIEWPORT,
   BASE_GAMEPLAY,
+  computeMobileLogicalWidth,
   CROSS_PLATFORM_ARENA_VIEWPORT,
   DESIGN_HEIGHT,
   DESIGN_WIDTH,
@@ -13,6 +14,7 @@ import {
   parseCustomIntervalInput,
   parseCustomScoreInput,
   POWERUP_CONFIG,
+  resolveLocalMobileArenaViewport,
   resolveOnlineArenaViewport,
   stepCrateSpawnInterval,
   stepWinningScore,
@@ -60,16 +62,24 @@ import {
 } from '../src/game/systems/MazeSystem';
 import {
   canPickupCrate,
+  computeArenaPerimeterWalls,
+  computeEmpBlastImpact,
   computeLaserBeam,
   computeReaperBlades,
   computeScatterAngles,
+  computeWarpBlastVictims,
   createSpikeBurstPayload,
   deflectProjectilesAgainstShields,
+  deployEnergyBarrierAhead,
   drillMazeWallAtPoint,
+  ejectTankFromInteriorWalls,
+  findBarriersHitByPolyline,
   findGroundSpikeVictims,
+  findTanksInCryoZones,
   findTriggeredMines,
   incinerateProjectilesWithFlames,
   pickMysteryCrateCell,
+  removeEnergyBarrierFromArena,
   rollWeightedSkill,
   steerHomingMissile,
   stepFlameThermodynamics,
@@ -369,18 +379,23 @@ test('Weighted crate drops match 36/28/22/14 power distribution and place crates
     const sk = rollWeightedSkill(rng);
     counts[sk] = (counts[sk] ?? 0) + 1;
   }
-  // All 10 skills must appear and match their configured drop weights (15/14/13/12/11/10/9/8/5/3)
+  // All 15 skills must appear and match their configured drop weights summing to 100%
   const expected: Record<string, number> = {
-    scatter: 0.15,
-    gatling: 0.14,
-    mine: 0.13,
-    flame: 0.12,
-    spike: 0.11,
-    drill: 0.1,
-    shield: 0.09,
-    homing: 0.08,
-    laser: 0.05,
-    reaper: 0.03,
+    scatter: 0.11,
+    gatling: 0.1,
+    mine: 0.09,
+    cryo: 0.08,
+    flame: 0.08,
+    barrier: 0.08,
+    spike: 0.07,
+    emp: 0.07,
+    drill: 0.07,
+    shield: 0.06,
+    phantom: 0.06,
+    homing: 0.05,
+    warp: 0.04,
+    laser: 0.02,
+    reaper: 0.02,
   };
   for (const [id, ratio] of Object.entries(expected)) {
     const actual = (counts[id] ?? 0) / total;
@@ -541,7 +556,7 @@ test('Spike burst spawns 16 shrapnel vectors and wall-occluded lethal ground spi
   assert.deepEqual(victims, [0], 'Spikes kill tank on blast side (including shooter) but never through a solid wall');
 });
 
-test('Homing missile bounces for 4s then navigates shortest maze path, targeting nearest maze tank (including shooter) and sliding off walls', () => {
+test('Homing missile bounces for 2.5s then navigates shortest maze path, targeting nearest maze tank (including shooter) and sliding off walls', () => {
   // 4x2 U-shaped corridor:
   // Row 0: (0,0) | (1,0) - (2,0) - (3,0)   [solid wall between (0,0) and (1,0)!]
   //          open    closed  closed   open
@@ -603,8 +618,8 @@ test('Homing missile bounces for 4s then navigates shortest maze path, targeting
     vx: 260, // Initially aimed straight right into the solid wall vWalls[0][1]!
     vy: 0,
     radius: 4.8 * arena.scaleRatio,
-    age: 3.5,
-    maxLifetime: 16,
+    age: POWERUP_CONFIG.homingBallisticSec - 0.3,
+    maxLifetime: POWERUP_CONFIG.homingTotalLifetimeSec,
     bounces: 13,
     maxBounces: 14,
     graceTimer: 0,
@@ -613,16 +628,16 @@ test('Homing missile bounces for 4s then navigates shortest maze path, targeting
     bounceBehavior: 'reflect',
   };
 
-  // At age 3.5s (< 4.0s), seeker must NOT engage yet
-  const before4s = steerHomingMissile(missile, [shooter, rival], arena, 1 / 60);
-  assert.equal(before4s.seeking, false);
+  // Before homingBallisticSec (1.5s), seeker must NOT engage yet
+  const beforeLock = steerHomingMissile(missile, [shooter, rival], arena, 1 / 60);
+  assert.equal(beforeLock.seeking, false);
 
-  // Advance missile past 4.0s -> seeker activates, chooses Shooter P0 (2 maze cells vs Rival's 6 maze cells!),
+  // Advance missile past 1.5s -> seeker activates, chooses Shooter P0 (2 maze cells vs Rival's 6 maze cells!),
   // switches bounceBehavior to 'slide' so hitting walls despite bounces=13/14 never deactivates it!
-  missile.age = 4.05;
-  const at4s = steerHomingMissile(missile, [shooter, rival], arena, 1 / 60);
-  assert.equal(at4s.seeking, true);
-  assert.equal(at4s.targetIndex, 0, 'Must target shooter P0 who is closer via open maze path than wall-blocked P1');
+  missile.age = POWERUP_CONFIG.homingBallisticSec + 0.05;
+  const atLock = steerHomingMissile(missile, [shooter, rival], arena, 1 / 60);
+  assert.equal(atLock.seeking, true);
+  assert.equal(atLock.targetIndex, 0, 'Must target shooter P0 who is closer via open maze path than wall-blocked P1');
 
   // Now simulate until it reaches and hits Shooter P0 around the corner!
   let hitVictim: number | null = null;
@@ -2121,6 +2136,804 @@ test('Online PC vs Mobile cross-platform sync: authoritative viewport clears BOT
     );
   }
 });
+
+test('Widescreen Mobile viewport & arena scaling: reclaims 20:9 phone sidebars, enlarges map, and preserves thumb control gutters', () => {
+  // Desktop always stays 1280
+  assert.equal(computeMobileLogicalWidth(1920, 1080, false), DESIGN_WIDTH);
+
+  // Modern 20:9 / 19.5:9 phone (844x390 landscape) expands cleanly to an even logical width > 1600
+  const phoneLogicalW = computeMobileLogicalWidth(844, 390, true);
+  assert.equal(phoneLogicalW % 2, 0);
+  assert.ok(phoneLogicalW >= 1640 && phoneLogicalW <= 1680);
+
+  const viewLeft = -(phoneLogicalW - DESIGN_WIDTH) / 2;
+  const viewRight = DESIGN_WIDTH + (phoneLogicalW - DESIGN_WIDTH) / 2;
+  assert.equal(viewLeft + viewRight, DESIGN_WIDTH, 'Screen center must remain at world x = 640');
+
+  const widescreenVp = resolveLocalMobileArenaViewport(phoneLogicalW);
+  assert.ok(widescreenVp.maxWidth > MOBILE_ARENA_VIEWPORT.maxWidth);
+
+  for (const mode of MAP_MODES) {
+    const grid = resolveMazeForRound(mode.id, 1, 2, 13579);
+    const wideArena = buildArenaLayout(grid, 2, 13579, widescreenVp);
+
+    // Must never overlap the left/right 2P Opposite or Solo enlarged thumb zones (`viewLeft + 234`, `viewRight - 234`)
+    assert.ok(
+      wideArena.originX >= viewLeft + 236,
+      `${mode.id} overlapped left widescreen control cluster: originX=${wideArena.originX}, leftZoneEnd=${viewLeft + 234}`,
+    );
+    assert.ok(
+      wideArena.originX + wideArena.width <= viewRight - 236,
+      `${mode.id} overlapped right widescreen control cluster`,
+    );
+    assert.ok(
+      wideArena.originY >= widescreenVp.topBarHeight,
+      `${mode.id} overlapped compact mobile top HUD`,
+    );
+  }
+
+  // Wide maps (e.g., 14x9 `procedural_large`) render noticeably larger on widescreen phones than 1280 baseline!
+  const citadelGrid = resolveMazeForRound('procedural_large', 1, 2, 2468);
+  const oldNarrowArena = buildArenaLayout(citadelGrid, 2, 2468, {
+    maxWidth: 856,
+    maxHeight: 644,
+    centerX: 640,
+    centerY: 414,
+  });
+  const newWidescreenArena = buildArenaLayout(citadelGrid, 2, 2468, widescreenVp);
+  assert.ok(
+    newWidescreenArena.cellSize > oldNarrowArena.cellSize,
+    `Expected larger cellSize on widescreen mobile (${newWidescreenArena.cellSize} vs ${oldNarrowArena.cellSize})`,
+  );
+});
+
+test('AI Navigation & 10-Skill Mastery: zero tail-first reverse navigation and dedicated tactics for Shield, Scatter, Flame, Mine, Drill, Homing & Reaper', () => {
+  // 1. Corridor maze test: 6x2 grid where row 0 is a straight corridor (cols 0..5) and (0,1) is a 1-exit dead-end!
+  const grid = createEmptySolidGrid('ai_mastery', 'AI Mastery', 6, 2, 1);
+  for (let c = 0; c < 5; c++) {
+    grid.vWalls[0][c + 1] = false; // Open straight corridor along row 0: (0,0)-(5,0)
+  }
+  grid.hWalls[1][0] = false; // (0,1) only connects North to (0,0) -> 1-exit dead-end!
+  grid.hWalls[1][2] = false; // (2,1) connects North to (2,0)
+  grid.vWalls[1][3] = false; // (2,1)-(3,1) open
+
+  const arena = buildArenaLayout(grid, 2, 42);
+  const cc = (col: number, row: number) => ({
+    x: arena.originX + (col + 0.5) * arena.cellSize,
+    y: arena.originY + (row + 0.5) * arena.cellSize,
+  });
+
+  // A. Bug regression ("lâu lâu AI có dấu hiệu đi lùi"):
+  // Bot at (4,0) facing EAST (angle = 0), while Crate & Enemy are WEST at (1,0) & (0,0) (180 deg behind bot!).
+  // Hard & Super Hard AI MUST pivot-turn its nose around (`backward === false`), NEVER lock into tail-first reverse!
+  const eastFacingBot: TankKinematics = {
+    index: 0,
+    ...cc(4, 0),
+    vx: 0,
+    vy: 0,
+    angle: 0, // Facing East, away from West goal!
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+  const westEnemy: TankKinematics = {
+    index: 1,
+    ...cc(0, 0),
+    vx: 0,
+    vy: 0,
+    angle: 0,
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+  const westCrate = {
+    id: 99,
+    col: 2,
+    row: 0,
+    ...cc(2, 0),
+    radius: 13 * arena.scaleRatio,
+    spawnAge: 1,
+  };
+
+  for (const diff of ['hard', 'super_hard'] as const) {
+    const navDecision = computeBotDecision(
+      {
+        difficulty: diff,
+        dt: 1 / 60,
+        self: eastFacingBot,
+        selfSkill: null,
+        selfSkillAmmo: 0,
+        selfAmmo: 10,
+        selfShielded: false,
+        selfReaperSweeping: false,
+        selfChargingLaser: false,
+        canFire: false,
+        tanks: [eastFacingBot, westEnemy],
+        shieldedTankIndices: new Set(),
+        reaperTankIndices: new Set(),
+        projectiles: [],
+        crates: [westCrate],
+        spikeZones: [],
+        mines: [],
+        arena,
+      },
+      createAISlotMemory(0),
+      new SeededRng(7),
+    );
+    assert.equal(
+      navDecision.backward,
+      false,
+      `${diff} AI must pivot-turn nose-first toward behind-tank objectives instead of driving in reverse`,
+    );
+    assert.equal(navDecision.left || navDecision.right, true, `${diff} AI must rotate nose toward corridor goal`);
+  }
+
+  // B. SHIELD: Pops Aegis Shield immediately when an enemy across walls is charging a 2s Laser aimed at the AI!
+  const laserEnemy: TankKinematics = {
+    index: 1,
+    ...cc(5, 1), // Behind solid walls!
+    vx: 0,
+    vy: 0,
+    angle: Math.atan2(eastFacingBot.y - cc(5, 1).y, eastFacingBot.x - cc(5, 1).x),
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+  const antiLaserShield = computeBotDecision(
+    {
+      difficulty: 'hard',
+      dt: 1 / 60,
+      self: eastFacingBot,
+      selfSkill: 'shield',
+      selfSkillAmmo: 1,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [eastFacingBot, laserEnemy],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      laserChargingTankIndices: new Set([1]),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(8),
+  );
+  assert.equal(antiLaserShield.firePressed, true, 'AI with Shield must pop Aegis Shield when targeted by enemy Laser charge');
+
+  // C. MINE: Never drops mine inside 1-exit dead-end `(0,1)`, DOES drop mine at multi-exit intersection `(2,0)` and drives forward away!
+  const deadEndBot: TankKinematics = { ...eastFacingBot, ...cc(0, 1), angle: -Math.PI / 2 };
+  const closeChaser: TankKinematics = { ...westEnemy, ...cc(1, 0) };
+  const mineDeadEndDecision = computeBotDecision(
+    {
+      difficulty: 'hard',
+      dt: 1 / 60,
+      self: deadEndBot,
+      selfSkill: 'mine',
+      selfSkillAmmo: 3,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [deadEndBot, closeChaser],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(9),
+  );
+  assert.equal(mineDeadEndDecision.firePressed, false, 'AI must not trap itself with a Proximity Mine inside a 1-exit dead-end');
+
+  const junctionBot: TankKinematics = { ...eastFacingBot, ...cc(2, 0), angle: 0 };
+  const mineMem = createAISlotMemory(0);
+  const mineJunctionDecision = computeBotDecision(
+    {
+      difficulty: 'hard',
+      dt: 1 / 60,
+      self: junctionBot,
+      selfSkill: 'mine',
+      selfSkillAmmo: 3,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [junctionBot, closeChaser],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    mineMem,
+    new SeededRng(10),
+  );
+  assert.equal(mineJunctionDecision.firePressed, true, 'AI must plant Mine at 3-way corridor junction when enemy is pursuing');
+  assert.ok(mineMem.mineClearTimer > 0, 'AI must engage forward mine-clearance timer after dropping a mine');
+
+  // D. DRILL: Fires through interior wall between (3,0) and (3,1), but refuses to fire into outer East border wall!
+  const drillBotSouth: TankKinematics = { ...eastFacingBot, ...cc(3, 0), angle: Math.PI / 2 };
+  const enemyBehindInteriorWall: TankKinematics = { ...westEnemy, ...cc(3, 1) };
+  const drillInterior = computeBotDecision(
+    {
+      difficulty: 'hard',
+      dt: 1 / 60,
+      self: drillBotSouth,
+      selfSkill: 'drill',
+      selfSkillAmmo: 2,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [drillBotSouth, enemyBehindInteriorWall],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(11),
+  );
+  assert.equal(drillInterior.firePressed, true, 'AI with Drill must breach interior maze wall directly onto enemy');
+
+  // E. FLAME: Pre-fires dragon flame around 90-degree doorway corner `(2,0) -> (2,1)` AND incinerates front-cone enemy shell!
+  const flameCornerBot: TankKinematics = { ...eastFacingBot, ...cc(2, 0), angle: Math.PI / 2 };
+  const enemyAroundCorner: TankKinematics = { ...westEnemy, ...cc(3, 1) }; // Occluded by hWalls[1][3], 2 steps via (2,1)!
+  const flameCorner = computeBotDecision(
+    {
+      difficulty: 'super_hard',
+      dt: 1 / 60,
+      self: flameCornerBot,
+      selfSkill: 'flame',
+      selfSkillAmmo: 80,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [flameCornerBot, enemyAroundCorner],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(12),
+  );
+  assert.equal(flameCorner.firePressed, true, 'AI with Flame must pre-spray sliding fire through open corner doorway');
+
+  // F. SCATTER: Fires 5-pellet fan when an outer +17.8 deg pellet hits an off-axis enemy in open space!
+  const openGrid = createEmptySolidGrid('scatter_open', 'Scatter Open', 4, 3, 1);
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 4; c++) {
+      if (r > 0) openGrid.hWalls[r][c] = false;
+      if (c > 0) openGrid.vWalls[r][c] = false;
+    }
+  }
+  const openArena = buildArenaLayout(openGrid, 2, 1);
+  const scatterBot: TankKinematics = {
+    index: 0,
+    x: openArena.originX + openArena.cellSize * 0.8,
+    y: openArena.originY + openArena.cellSize * 1.5,
+    vx: 0,
+    vy: 0,
+    angle: 0,
+    radius: 14.5 * openArena.scaleRatio,
+    alive: true,
+  };
+  const outerFanAng = POWERUP_CONFIG.scatterSpreadStepRad * 2; // +17.8 deg outer pellet!
+  const offAxisDist = openArena.cellSize * 2.1;
+  const offAxisEnemy: TankKinematics = {
+    index: 1,
+    x: scatterBot.x + Math.cos(outerFanAng) * offAxisDist,
+    y: scatterBot.y + Math.sin(outerFanAng) * offAxisDist,
+    vx: 0,
+    vy: 0,
+    angle: Math.PI,
+    radius: 14.5 * openArena.scaleRatio,
+    alive: true,
+  };
+  const scatterVolley = computeBotDecision(
+    {
+      difficulty: 'hard',
+      dt: 1 / 60,
+      self: scatterBot,
+      selfSkill: 'scatter',
+      selfSkillAmmo: 3,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [scatterBot, offAxisEnemy],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena: openArena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(13),
+  );
+  assert.equal(scatterVolley.firePressed, true, 'AI with Scatter must recognize hits from outer +-17.8 deg fan pellets');
+
+  // G. REAPER: Holds Reaper when enemy is too far in open sight (4.2 cells > 3.1 cells), then triggers inside lethal range (2.8 cells)!
+  const farReaperEnemy: TankKinematics = {
+    ...offAxisEnemy,
+    x: scatterBot.x + openArena.cellSize * 3.9,
+    y: scatterBot.y,
+  };
+  const holdReaper = computeBotDecision(
+    {
+      difficulty: 'super_hard',
+      dt: 1 / 60,
+      self: scatterBot,
+      selfSkill: 'reaper',
+      selfSkillAmmo: 1,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [scatterBot, farReaperEnemy],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena: openArena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(14),
+  );
+  assert.equal(holdReaper.firePressed, false, 'AI with Reaper must rush closer instead of wasting Reaper at max edge where enemy walks out');
+  assert.equal(holdReaper.forward, true, 'AI with Reaper must rush forward toward target');
+
+  const closeReaperEnemy: TankKinematics = {
+    ...offAxisEnemy,
+    x: scatterBot.x + openArena.cellSize * 2.6,
+    y: scatterBot.y,
+  };
+  const fireReaper = computeBotDecision(
+    {
+      difficulty: 'super_hard',
+      dt: 1 / 60,
+      self: scatterBot,
+      selfSkill: 'reaper',
+      selfSkillAmmo: 1,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [scatterBot, closeReaperEnemy],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena: openArena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(15),
+  );
+  assert.equal(fireReaper.firePressed, true, 'AI with Reaper must trigger scythe once safely deep inside lethal radius');
+
+  // H. HOMING MISSILE TACTICS (2.5s lock + slower flight + Dual-BFS launch + Fire-and-Disengage peel-off!):
+  assert.equal(POWERUP_CONFIG.homingBallisticSec, 2.5, 'Homing lock delay should be 2.5s');
+  assert.ok(
+    POWERUP_CONFIG.homingBallisticSpeedMultiplier < 0.85 &&
+      POWERUP_CONFIG.homingSeekSpeedMultiplier < 1.0,
+    'Homing missile should fly slower and more tactically in both ballistic and seeking phases',
+  );
+
+  // H1. Trap pocket rejection: In a U-maze where shooting South into dead-end pocket `(0,1)` puts 2.5s lock-point
+  //     closer in BFS steps to AI `(0,0)` than to Enemy `(3,1)`, AI MUST NOT fire south — instead it aims East down row 0!
+  const hmBot: TankKinematics = {
+    index: 0,
+    ...cc(0, 0),
+    vx: 0,
+    vy: 0,
+    angle: Math.PI / 2, // Facing South straight into the 1-exit dead-end `(0,1)`!
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+  const hmEnemy: TankKinematics = {
+    index: 1,
+    ...cc(3, 1), // Reachable via East corridor `(0,0)->(1,0)->(2,0)->(2,1)->(3,1)` (5 steps)!
+    vx: 0,
+    vy: 0,
+    angle: Math.PI,
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+  const hmTrapCheck = computeBotDecision(
+    {
+      difficulty: 'super_hard',
+      dt: 1 / 60,
+      self: hmBot,
+      selfSkill: 'homing',
+      selfSkillAmmo: 1,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [hmBot, hmEnemy],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    createAISlotMemory(0),
+    new SeededRng(16),
+  );
+  assert.equal(
+    hmTrapCheck.firePressed,
+    false,
+    'AI with Homing must refuse to fire into a dead-end pocket where 2.5s BFS lock would target itself',
+  );
+  assert.equal(hmTrapCheck.left, true, 'AI with Homing must rotate nose from South (+90 deg) toward East (0 deg) corridor');
+
+  // H2. Starting facing South (`angle = +90 deg`), let AI rotate & pick its optimal corridor/bank angle toward `(3,1)`
+  //     behind walls — within <= 30 frames (0.5s), it aligns onto the East corridor and FIRES!
+  const simBot: TankKinematics = { ...hmBot };
+  const hmMem = createAISlotMemory(0);
+  const hmRng = new SeededRng(17);
+  let launchedBehindWalls = false;
+  for (let step = 0; step < 35; step++) {
+    const dec = computeBotDecision(
+      {
+        difficulty: 'super_hard',
+        dt: 1 / 60,
+        self: simBot,
+        selfSkill: 'homing',
+        selfSkillAmmo: 1,
+        selfAmmo: 10,
+        selfShielded: false,
+        selfReaperSweeping: false,
+        selfChargingLaser: false,
+        canFire: true,
+        tanks: [simBot, hmEnemy],
+        shieldedTankIndices: new Set(),
+        reaperTankIndices: new Set(),
+        projectiles: [],
+        crates: [],
+        spikeZones: [],
+        mines: [],
+        arena,
+      },
+      hmMem,
+      hmRng,
+    );
+    if (dec.left) simBot.angle -= BASE_GAMEPLAY.tankTurnSpeedRad * (1 / 60);
+    if (dec.right) simBot.angle += BASE_GAMEPLAY.tankTurnSpeedRad * (1 / 60);
+    if (dec.firePressed) {
+      launchedBehindWalls = true;
+      break;
+    }
+  }
+  assert.equal(launchedBehindWalls, true, 'AI with Homing must rotate out of dead-end aim and launch down corridor behind walls');
+  assert.ok(hmMem.homingRetreatTimer > 2.5, 'AI must set post-launch disengage timer');
+
+  // H3. Fire-and-Disengage ("bắn xong tách ngã rẽ, không chạy đuổi theo sau tên lửa"):
+  //     Suppose AI at `(2,0)` just fired a Homing Missile East (`vx > 0` at `(2.4, 0)`), and `selfSkill` is now `null`.
+  //     Instead of driving East into `(3,0)` right behind its own slower missile, AI MUST peel off West toward `(0,0)`!
+  const postLaunchBot: TankKinematics = {
+    index: 0,
+    ...cc(2, 0),
+    vx: 0,
+    vy: 0,
+    angle: Math.PI, // Facing West (away from the missile flying East!)
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+  const liveMissile: ProjectileKinematics = {
+    id: 777,
+    ownerIndex: 0,
+    x: cc(2, 0).x + arena.cellSize * 0.4,
+    y: cc(2, 0).y,
+    prevX: cc(2, 0).x,
+    prevY: cc(2, 0).y,
+    vx: BASE_GAMEPLAY.projectileSpeed * POWERUP_CONFIG.homingBallisticSpeedMultiplier * arena.scaleRatio,
+    vy: 0,
+    radius: 4.8 * arena.scaleRatio,
+    age: 0.2, // Early in 2.5s ballistic phase!
+    maxLifetime: POWERUP_CONFIG.homingTotalLifetimeSec,
+    bounces: 0,
+    maxBounces: 24,
+    graceTimer: 0,
+    active: true,
+    variant: 'homing_missile',
+    bounceBehavior: 'reflect',
+  };
+  const peelOffDecision = computeBotDecision(
+    {
+      difficulty: 'super_hard',
+      dt: 1 / 60,
+      self: postLaunchBot,
+      selfSkill: null, // Suit already reverted to standard after firing Homing!
+      selfSkillAmmo: 0,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: false,
+      tanks: [postLaunchBot, { ...hmEnemy, ...cc(5, 0) }],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [liveMissile],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    hmMem,
+    new SeededRng(18),
+  );
+  assert.equal(
+    peelOffDecision.forward,
+    true,
+    'After firing Homing East, AI facing West must drive forward West away from its own missile instead of following it East!',
+  );
+  assert.equal(peelOffDecision.backward, false);
+});
+
+test('5 New Skills (#2 EMP, #3 Phantom, #4 Cryo, #5 Barrier, #6 Warp) physics & AI mastery work cleanly', () => {
+  const grid = createEmptySolidGrid('new5', 'New 5 Skills Lab', 6, 4, 42);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 1; c < 6; c++) grid.vWalls[r][c] = false;
+  }
+  for (let r = 1; r < 4; r++) {
+    for (let c = 0; c < 6; c++) grid.hWalls[r][c] = false;
+  }
+  // Place a solid interior vertical wall between col 2 and col 3 at row 1
+  grid.vWalls[1][3] = true;
+
+  const arena = buildArenaLayout(grid, 2, 42);
+  const cc = (col: number, row: number) => ({
+    x: arena.originX + (col + 0.5) * arena.cellSize,
+    y: arena.originY + (row + 0.5) * arena.cellSize,
+  });
+
+  // 1. Phantom Phase (`phantom`): bypasses interior walls, clamps outer perimeter, and ejects cleanly on expiry!
+  const perimeterWalls = computeArenaPerimeterWalls(arena);
+  assert.equal(perimeterWalls.length, 4);
+  const wallX = arena.originX + 3 * arena.cellSize;
+  const wallY = arena.originY + 1.5 * arena.cellSize;
+  const ghostTank: TankKinematics = {
+    index: 0,
+    x: wallX,
+    y: wallY,
+    vx: 0,
+    vy: 0,
+    angle: 0,
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+  const normalBlockedTank: TankKinematics = {
+    ...ghostTank,
+    index: 1,
+    y: arena.originY + 0.5 * arena.cellSize,
+  };
+  resolveAllTankCollisions(
+    [ghostTank, normalBlockedTank],
+    arena.walls,
+    new Set([0]),
+    perimeterWalls,
+  );
+  assert.equal(
+    Math.abs(ghostTank.x - wallX) < 0.01,
+    true,
+    'Phantom tank must stand freely inside an interior wall without being pushed out while phased',
+  );
+  const ejected = ejectTankFromInteriorWalls(ghostTank, arena);
+  assert.equal(ejected, true, 'Expiring Phantom mid-wall must smoothly eject tank clear of the wall');
+  assert.ok(
+    Math.abs(ghostTank.x - wallX) >= ghostTank.radius * 0.9,
+    'Ejected tank must no longer overlap interior wall',
+  );
+
+  // 2. Energy Barrier (`barrier`): seals open interior grid edge ahead, updates `arena.walls`, and shatters via Laser/EMP!
+  const architect: TankKinematics = {
+    index: 0,
+    ...cc(1, 1),
+    vx: 0,
+    vy: 0,
+    angle: 0, // Facing East toward open edge `vWalls[1][2]`
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+  const rival: TankKinematics = {
+    index: 1,
+    ...cc(4, 1),
+    vx: 0,
+    vy: 0,
+    angle: Math.PI,
+    radius: 14.5 * arena.scaleRatio,
+    alive: true,
+  };
+  const wallsBefore = arena.walls.length;
+  const barrier = deployEnergyBarrierAhead(architect, arena, [architect, rival], 501, 8.0);
+  assert.ok(barrier !== null, 'Barrier must deploy on open interior edge ahead of tank');
+  assert.equal(barrier!.kind, 'v');
+  assert.equal(barrier!.c, 2);
+  assert.equal(arena.grid.vWalls[1][2], true);
+  assert.ok(arena.walls.length >= wallsBefore, 'Barrier must rebuild solid arena walls');
+
+  const laserHitIds = findBarriersHitByPolyline(
+    [cc(0, 1), cc(5, 1)],
+    5.5 * arena.scaleRatio,
+    [barrier!],
+  );
+  assert.deepEqual(laserHitIds, [501], 'Cross-map Laser beam must detect and shatter Energy Barrier');
+
+  // 3. EMP Pulse (`emp`): pierces walls to hit enemy tanks, clears mines, and clears barriers!
+  const enemyMine: ProximityMineState = {
+    id: 99,
+    ownerIndex: 1,
+    x: barrier!.x0 + 8,
+    y: barrier!.y0,
+    age: 2.0,
+    armingSec: 1.6,
+    duration: 28,
+    triggerRadius: 24,
+    blastRadius: 44,
+  };
+  const empImpact = computeEmpBlastImpact(
+    barrier!.x0,
+    barrier!.y0,
+    arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius,
+    0,
+    [architect, { ...rival, ...cc(2, 1) }],
+    [enemyMine],
+    [barrier!],
+  );
+  assert.deepEqual(empImpact.hitEnemyIndices, [1], 'EMP shockwave must hit rival tank without hitting owner');
+  assert.deepEqual(empImpact.clearedMineIds, [99], 'EMP shockwave must neutralize mines in radius');
+  assert.deepEqual(empImpact.clearedBarrierIds, [501], 'EMP shockwave must shatter Energy Barriers in radius');
+
+  removeEnergyBarrierFromArena(barrier!, arena);
+  assert.equal(arena.grid.vWalls[1][2], false);
+
+  // 4. Cryo Zone (`cryo`): affects rival tanks inside ice radius while sparing the owner!
+  const cryoZone = {
+    id: 301,
+    ownerIndex: 0 as const,
+    ...cc(2, 2),
+    radius: arena.cellSize * POWERUP_CONFIG.cryoZoneCellsRadius,
+    age: 0.5,
+    duration: 6.0,
+  };
+  const sliding = findTanksInCryoZones(
+    [cryoZone],
+    [
+      { ...architect, ...cc(2, 2) },
+      { ...rival, ...cc(2, 2) },
+    ],
+  );
+  assert.equal(sliding.has(0), false, 'Owner must not suffer self-inflicted ice drift on own Cryo Zone');
+  assert.equal(sliding.has(1), true, 'Rival tank inside Cryo Zone must suffer ice drift');
+
+  // 5. Spatial Warp (`warp`): departure rift shockwave catches point-blank pursuer!
+  const warpVictims = computeWarpBlastVictims(
+    architect.x,
+    architect.y,
+    0,
+    POWERUP_CONFIG.warpBlastRadius * arena.scaleRatio,
+    [architect, { ...rival, x: architect.x + 24 * arena.scaleRatio, y: architect.y }],
+  );
+  assert.deepEqual(warpVictims, [1]);
+
+  // 6. AI Mastery of New Skills: remote EMP detonation & Warp recall under point-blank pursuit!
+  const aiMem = createAISlotMemory(0);
+  const empDetDecision = computeBotDecision(
+    {
+      difficulty: 'super_hard',
+      dt: 1 / 60,
+      self: architect,
+      selfSkill: null,
+      selfSkillAmmo: 0,
+      selfAmmo: 10,
+      selfShielded: false,
+      hasActiveEmpOrb: true,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [architect, rival],
+      shieldedTankIndices: new Set([1]),
+      reaperTankIndices: new Set(),
+      projectiles: [
+        {
+          id: 12,
+          ownerIndex: 0,
+          x: rival.x - 20,
+          y: rival.y,
+          prevX: rival.x - 25,
+          prevY: rival.y,
+          vx: 180,
+          vy: 0,
+          radius: 5,
+          age: 0.35,
+          maxLifetime: 2.0,
+          bounces: 1,
+          maxBounces: 8,
+          graceTimer: 0,
+          active: true,
+          variant: 'emp_orb',
+        },
+      ],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    aiMem,
+    new SeededRng(9),
+  );
+  assert.equal(
+    empDetDecision.firePressed,
+    true,
+    'AI must remotely detonate its flying EMP orb as soon as it enters blast range of a shielded enemy!',
+  );
+
+  const warpRecallDecision = computeBotDecision(
+    {
+      difficulty: 'super_hard',
+      dt: 1 / 60,
+      self: architect,
+      selfSkill: 'warp',
+      selfSkillAmmo: 1,
+      selfAmmo: 10,
+      selfShielded: false,
+      selfWarpBeaconPlaced: true,
+      selfReaperSweeping: false,
+      selfChargingLaser: false,
+      canFire: true,
+      tanks: [architect, { ...rival, x: architect.x + 22 * arena.scaleRatio, y: architect.y }],
+      shieldedTankIndices: new Set(),
+      reaperTankIndices: new Set(),
+      projectiles: [],
+      crates: [],
+      spikeZones: [],
+      mines: [],
+      arena,
+    },
+    aiMem,
+    new SeededRng(11),
+  );
+  assert.equal(
+    warpRecallDecision.firePressed,
+    true,
+    'AI with an active Warp Beacon must trigger instant recall + rift blast when an unshielded enemy closes to point-blank!',
+  );
+});
+
+
 
 
 

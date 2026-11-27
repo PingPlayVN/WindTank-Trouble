@@ -57,7 +57,10 @@ export class AssetFactory {
     AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_0', 46, 36, 0);
     AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_1', 46, 36, 1);
     AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_2', 46, 36, 2);
+    AssetFactory.createEmpOrbTexture(tex, 'projectile_emp_orb', 24);
+    AssetFactory.createCryoOrbTexture(tex, 'projectile_cryo_orb', 22);
     AssetFactory.createMineTexture(tex, 'pickup_mine', 26);
+    AssetFactory.createWarpBeaconTexture(tex, 'pickup_warp_beacon', 36);
     AssetFactory.createWoodenCrateTexture(tex, 'pickup_wood_crate', 44);
     AssetFactory.createTntBarrelTexture(tex, 'prop_tnt_barrel', 40);
     AssetFactory.createGroundSpikeTexture(tex, 'decal_ground_spike', 24);
@@ -84,7 +87,7 @@ export class AssetFactory {
     onProgress?: (progress01: number, stageLabel: string) => void,
   ): Promise<void> {
     const tex = scene.textures;
-    if (tex.exists('tank_red_0') && tex.exists('skill_emblem_reaper')) {
+    if (tex.exists('tank_red_0') && tex.exists('skill_emblem_warp')) {
       onProgress?.(1, 'Sẵn sàng xuất kích!');
       return;
     }
@@ -138,7 +141,7 @@ export class AssetFactory {
           AssetFactory.createTankTexture(tex, skIconKey, palette, 0, 56, 46, skill);
         }
       }
-      report(`Đang rèn chiến xa & 10 Giáp Siêu Nhân (${palette.name})…`);
+      report(`Đang rèn chiến xa & 15 Giáp Siêu Nhân (${palette.name})…`);
       await yieldFrame();
     }
 
@@ -150,6 +153,8 @@ export class AssetFactory {
     if (!tex.exists('projectile_spike_shard')) AssetFactory.createSpikeShardTexture(tex, 'projectile_spike_shard', 18, 10);
     if (!tex.exists('projectile_missile')) AssetFactory.createMissileTexture(tex, 'projectile_missile', 28, 16);
     if (!tex.exists('projectile_drill')) AssetFactory.createDrillProjectileTexture(tex, 'projectile_drill', 38, 22);
+    if (!tex.exists('projectile_emp_orb')) AssetFactory.createEmpOrbTexture(tex, 'projectile_emp_orb', 24);
+    if (!tex.exists('projectile_cryo_orb')) AssetFactory.createCryoOrbTexture(tex, 'projectile_cryo_orb', 22);
     report('Đang chế tạo kho vũ khí, mũi khoan & tên lửa định vị…');
     await yieldFrame();
 
@@ -158,6 +163,7 @@ export class AssetFactory {
     if (!tex.exists('projectile_flame_1')) AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_1', 46, 36, 1);
     if (!tex.exists('projectile_flame_2')) AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_2', 46, 36, 2);
     if (!tex.exists('pickup_mine')) AssetFactory.createMineTexture(tex, 'pickup_mine', 26);
+    if (!tex.exists('pickup_warp_beacon')) AssetFactory.createWarpBeaconTexture(tex, 'pickup_warp_beacon', 36);
     if (!tex.exists('pickup_wood_crate')) AssetFactory.createWoodenCrateTexture(tex, 'pickup_wood_crate', 44);
     if (!tex.exists('prop_tnt_barrel')) AssetFactory.createTntBarrelTexture(tex, 'prop_tnt_barrel', 40);
     if (!tex.exists('decal_ground_spike')) AssetFactory.createGroundSpikeTexture(tex, 'decal_ground_spike', 24);
@@ -310,6 +316,75 @@ export class AssetFactory {
       ctx.arc(-20.5, 0, 3.2, 0, Math.PI * 2);
       ctx.fillStyle = '#FF1744';
       ctx.fill();
+    } else if (skill === 'emp') {
+      // Twin Tesla induction coil pylons flanking rear chassis
+      for (const sign of [-1, 1]) {
+        AssetFactory.roundRectPath(ctx, -21, sign > 0 ? 11.5 : -19.5, 14, 8, 2.5);
+        ctx.fillStyle = '#311B92';
+        ctx.fill();
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = outline;
+        ctx.stroke();
+        ctx.strokeStyle = '#00E5FF';
+        ctx.lineWidth = 1.6;
+        for (const cxOff of [-17.5, -14, -10.5]) {
+          ctx.beginPath();
+          ctx.moveTo(cxOff, sign * 12);
+          ctx.lineTo(cxOff, sign * 19);
+          ctx.stroke();
+        }
+      }
+    } else if (skill === 'phantom') {
+      // Swept ethereal wraith tail-fins
+      for (const sign of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(-6, sign * 11);
+        ctx.quadraticCurveTo(-26, sign * 24, -12, sign * 14);
+        ctx.lineTo(8, sign * 12);
+        ctx.closePath();
+        ctx.fillStyle = '#D1C4E9';
+        ctx.fill();
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = '#4527A0';
+        ctx.stroke();
+      }
+    } else if (skill === 'cryo') {
+      // Faceted glacial ice-crystal shoulder shards
+      for (const sign of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(-12, sign * 13);
+        ctx.lineTo(-4, sign * 22);
+        ctx.lineTo(7, sign * 19);
+        ctx.lineTo(12, sign * 13);
+        ctx.closePath();
+        ctx.fillStyle = '#B2EBF2';
+        ctx.fill();
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = outline;
+        ctx.stroke();
+      }
+    } else if (skill === 'barrier') {
+      // Front-flanking holographic force-field projector bumpers
+      for (const sign of [-1, 1]) {
+        AssetFactory.roundRectPath(ctx, 11, sign > 0 ? 10 : -18, 8.5, 8, 2);
+        ctx.fillStyle = '#1B5E20';
+        ctx.fill();
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = outline;
+        ctx.stroke();
+        ctx.fillStyle = '#69F0AE';
+        ctx.fillRect(16, sign > 0 ? 11.5 : -16.5, 2.5, 5);
+      }
+    } else if (skill === 'warp') {
+      // Rear chrono-portal ring stabilizer
+      ctx.beginPath();
+      ctx.arc(-18, 0, 8.5, Math.PI * 0.55, Math.PI * 1.45);
+      ctx.lineWidth = 3.6;
+      ctx.strokeStyle = '#E040FB';
+      ctx.stroke();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = outline;
+      ctx.stroke();
     }
 
     // 1. Left & Right Treads
@@ -441,6 +516,42 @@ export class AssetFactory {
       ctx.fill();
       ctx.strokeStyle = '#FF1744';
       ctx.lineWidth = 2.4;
+      ctx.stroke();
+    } else if (skill === 'emp') {
+      ctx.strokeStyle = '#00E5FF';
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.moveTo(-13, -7);
+      ctx.lineTo(-2, -1);
+      ctx.lineTo(-6, 4);
+      ctx.lineTo(12, 8);
+      ctx.stroke();
+    } else if (skill === 'phantom') {
+      ctx.strokeStyle = 'rgba(237, 231, 246, 0.85)';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 11.5, -1.1, 1.1);
+      ctx.stroke();
+    } else if (skill === 'cryo') {
+      ctx.strokeStyle = '#E0F7FA';
+      ctx.lineWidth = 2.2;
+      for (const a of [0, Math.PI / 3, -Math.PI / 3]) {
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * -10, Math.sin(a) * -10);
+        ctx.lineTo(Math.cos(a) * 10, Math.sin(a) * 10);
+        ctx.stroke();
+      }
+    } else if (skill === 'barrier') {
+      ctx.fillStyle = '#69F0AE';
+      ctx.fillRect(9, -10, 4, 20);
+      ctx.fillStyle = 'rgba(105, 240, 174, 0.45)';
+      ctx.fillRect(-12, -8, 16, 2.5);
+      ctx.fillRect(-12, 5.5, 16, 2.5);
+    } else if (skill === 'warp') {
+      ctx.strokeStyle = '#EA80FC';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 9.5, 0, Math.PI * 2);
       ctx.stroke();
     } else {
       ctx.fillStyle = 'rgba(20, 22, 25, 0.38)';
@@ -677,6 +788,71 @@ export class AssetFactory {
         ctx.strokeStyle = '#FF1744';
         ctx.stroke();
       }
+    } else if (skill === 'emp') {
+      // Twin-forked electromagnetic Tesla arc launcher
+      for (const py of [-4.8, 2.0]) {
+        AssetFactory.roundRectPath(ctx, 2, py, 24, 2.8, 1.2);
+        ctx.fillStyle = '#311B92';
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = outline;
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(24, 0, 4.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#00E5FF';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#651FFF';
+      ctx.stroke();
+    } else if (skill === 'phantom') {
+      AssetFactory.roundRectPath(ctx, 2, -3.4, 25, 6.8, 2.2);
+      ctx.fillStyle = '#EDE7F6';
+      ctx.fill();
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = '#4527A0';
+      ctx.stroke();
+      ctx.fillStyle = '#B388FF';
+      ctx.fillRect(19, -4.0, 6, 8.0);
+    } else if (skill === 'cryo') {
+      AssetFactory.roundRectPath(ctx, 2, -4.4, 23, 8.8, 2.2);
+      ctx.fillStyle = '#E0F7FA';
+      ctx.fill();
+      ctx.lineWidth = 1.9;
+      ctx.strokeStyle = outline;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(22, -6.2);
+      ctx.lineTo(29.5, 0);
+      ctx.lineTo(22, 6.2);
+      ctx.closePath();
+      ctx.fillStyle = '#00E5FF';
+      ctx.fill();
+      ctx.stroke();
+    } else if (skill === 'barrier') {
+      // Wide flat force-wall projector emitter bar
+      AssetFactory.roundRectPath(ctx, 2, -3.5, 19, 7.0, 1.8);
+      ctx.fillStyle = '#263238';
+      ctx.fill();
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = outline;
+      ctx.stroke();
+      AssetFactory.roundRectPath(ctx, 19.5, -8.5, 6.5, 17, 2);
+      ctx.fillStyle = '#00E676';
+      ctx.fill();
+      ctx.stroke();
+    } else if (skill === 'warp') {
+      AssetFactory.roundRectPath(ctx, 2, -3.6, 22, 7.2, 2);
+      ctx.fillStyle = '#4A148C';
+      ctx.fill();
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = outline;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(24.5, 0, 4.6, 0, Math.PI * 2);
+      ctx.fillStyle = '#EA80FC';
+      ctx.fill();
+      ctx.stroke();
     } else {
       AssetFactory.roundRectPath(ctx, 2, -3.6, 25, 7.2, 2.0);
       const barrelGrad = ctx.createLinearGradient(2, -3.6, 2, 3.6);
@@ -722,6 +898,11 @@ export class AssetFactory {
         drill: '#FFD600',
         shield: '#1DE9B6',
         reaper: '#FF1744',
+        emp: '#00E5FF',
+        phantom: '#EA80FC',
+        cryo: '#84FFFF',
+        barrier: '#69F0AE',
+        warp: '#E040FB',
       };
       const visorColor = visorColorMap[skill];
 
@@ -1420,8 +1601,188 @@ export class AssetFactory {
       ctx.beginPath();
       ctx.arc(0, 0, 3.2, 0, Math.PI * 2);
       ctx.fill();
+    } else if (skill === 'emp') {
+      ctx.strokeStyle = '#00E5FF';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 12.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = '#FFEA00';
+      ctx.beginPath();
+      ctx.moveTo(2, -13);
+      ctx.lineTo(-7, 1);
+      ctx.lineTo(0, 1);
+      ctx.lineTo(-3, 13);
+      ctx.lineTo(8, -2);
+      ctx.lineTo(1, -2);
+      ctx.closePath();
+      ctx.fill();
+    } else if (skill === 'phantom') {
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.beginPath();
+      ctx.arc(0, -2, 10.5, Math.PI, 0, false);
+      ctx.lineTo(10.5, 11);
+      ctx.lineTo(5, 7.5);
+      ctx.lineTo(0, 11.5);
+      ctx.lineTo(-5, 7.5);
+      ctx.lineTo(-10.5, 11);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#311B92';
+      ctx.beginPath();
+      ctx.arc(-3.6, -2.5, 2.1, 0, Math.PI * 2);
+      ctx.arc(3.6, -2.5, 2.1, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (skill === 'cryo') {
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2.6;
+      for (let i = 0; i < 3; i++) {
+        const a = (i * Math.PI) / 3;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * -13, Math.sin(a) * -13);
+        ctx.lineTo(Math.cos(a) * 13, Math.sin(a) * 13);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#84FFFF';
+      ctx.beginPath();
+      ctx.arc(0, 0, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (skill === 'barrier') {
+      ctx.fillStyle = '#B9F6CA';
+      AssetFactory.roundRectPath(ctx, -13, -7, 26, 14, 3);
+      ctx.fill();
+      ctx.strokeStyle = '#18191B';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+      ctx.strokeStyle = '#1B5E20';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-13, 0);
+      ctx.lineTo(13, 0);
+      ctx.moveTo(-3, -7);
+      ctx.lineTo(-3, 0);
+      ctx.moveTo(4, 0);
+      ctx.lineTo(4, 7);
+      ctx.stroke();
+    } else if (skill === 'warp') {
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.arc(0, 0, 12, 0.3, Math.PI * 1.8);
+      ctx.stroke();
+      ctx.strokeStyle = '#80D8FF';
+      ctx.beginPath();
+      ctx.arc(0, 0, 6.8, Math.PI * 0.8, Math.PI * 2.3);
+      ctx.stroke();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(0, 0, 2.8, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
+
+    tex.addCanvas(key, canvas);
+  }
+
+  private static createEmpOrbTexture(
+    tex: Phaser.Textures.TextureManager,
+    key: string,
+    size: number,
+  ): void {
+    const { canvas, ctx } = AssetFactory.makeCanvas(size, size);
+    const c = size / 2;
+    const r = size * 0.42;
+
+    const glow = ctx.createRadialGradient(c, c, 1, c, c, r * 1.12);
+    glow.addColorStop(0, '#FFFFFF');
+    glow.addColorStop(0.45, '#00E5FF');
+    glow.addColorStop(0.8, '#651FFF');
+    glow.addColorStop(1, 'rgba(49, 27, 146, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(c, c, r * 1.12, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(c, c, r * 0.72, 0, Math.PI * 2);
+    ctx.strokeStyle = '#18191B';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    ctx.strokeStyle = '#FFEA00';
+    ctx.lineWidth = 1.7;
+    ctx.beginPath();
+    ctx.moveTo(c - 4, c - 2);
+    ctx.lineTo(c + 1, c - 5);
+    ctx.lineTo(c - 1, c + 2);
+    ctx.lineTo(c + 4, c + 4);
+    ctx.stroke();
+
+    tex.addCanvas(key, canvas);
+  }
+
+  private static createCryoOrbTexture(
+    tex: Phaser.Textures.TextureManager,
+    key: string,
+    size: number,
+  ): void {
+    const { canvas, ctx } = AssetFactory.makeCanvas(size, size);
+    const c = size / 2;
+    const r = size * 0.42;
+
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const px = c + Math.cos(a) * r;
+      const py = c + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    const grad = ctx.createRadialGradient(c - 2, c - 2, 1, c, c, r);
+    grad.addColorStop(0, '#FFFFFF');
+    grad.addColorStop(0.55, '#84FFFF');
+    grad.addColorStop(1, '#00838F');
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = '#0D2933';
+    ctx.stroke();
+
+    tex.addCanvas(key, canvas);
+  }
+
+  private static createWarpBeaconTexture(
+    tex: Phaser.Textures.TextureManager,
+    key: string,
+    size: number,
+  ): void {
+    const { canvas, ctx } = AssetFactory.makeCanvas(size, size);
+    const c = size / 2;
+    const r = size * 0.42;
+
+    ctx.beginPath();
+    ctx.arc(c, c, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(74, 20, 140, 0.88)';
+    ctx.fill();
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = '#EA80FC';
+    ctx.stroke();
+
+    ctx.strokeStyle = '#80D8FF';
+    ctx.lineWidth = 1.8;
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2 + Math.PI / 4;
+      ctx.beginPath();
+      ctx.moveTo(c + Math.cos(a) * (r * 0.42), c + Math.sin(a) * (r * 0.42));
+      ctx.lineTo(c + Math.cos(a) * (r * 0.92), c + Math.sin(a) * (r * 0.92));
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.arc(c, c, r * 0.34, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
 
     tex.addCanvas(key, canvas);
   }

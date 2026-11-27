@@ -35,10 +35,10 @@ export function createMobileFullscreenControls(
 
   const depth = opts.depth ?? 95;
   const compact = Boolean(opts.compactButton);
-  const bx = opts.buttonX ?? DESIGN_WIDTH - 96;
-  const by = opts.buttonY ?? 36;
-  const bw = opts.buttonWidth ?? (compact ? 104 : 156);
-  const bh = opts.buttonHeight ?? (compact ? 30 : 38);
+  const bx = opts.buttonX ?? mobileOrientationManager.getViewRight() - 92;
+  const by = opts.buttonY ?? 38;
+  const bw = opts.buttonWidth ?? (compact ? 108 : 164);
+  const bh = opts.buttonHeight ?? (compact ? 31 : 40);
 
   let bannerContainer: Phaser.GameObjects.Container | null = null;
   let fallbackToast: Phaser.GameObjects.Text | null = null;
@@ -71,9 +71,13 @@ export function createMobileFullscreenControls(
   };
 
   const hideBanner = () => {
-    if (!bannerContainer) return;
+    if (!bannerContainer) {
+      btn.container.setVisible(true);
+      return;
+    }
     const target = bannerContainer;
     bannerContainer = null;
+    btn.container.setVisible(true);
     scene.tweens.add({
       targets: target,
       y: target.y - 24,
@@ -127,6 +131,8 @@ export function createMobileFullscreenControls(
 
   // Show encouraging Fullscreen Recommendation Notification Banner when not yet in Fullscreen!
   if (opts.showRecommendationBanner && !mobileOrientationManager.hasDismissedFullscreenPrompt()) {
+    // Hide the duplicate top-right button while the wide recommendation banner is visible!
+    btn.container.setVisible(false);
     const targetY = opts.bannerY ?? 44;
     const cardW = 852;
     const cardH = 48;
@@ -146,9 +152,9 @@ export function createMobileFullscreenControls(
 
     const msgText = scene.add
       .text(
-        -cardW / 2 + 18,
+        -cardW / 2 + 20,
         0,
-        '📱 Khuyến khích bật TOÀN MÀN HÌNH để ẩn thanh trình duyệt & lái xe rộng rãi nhất!',
+        '★ Khuyến khích bật TOÀN MÀN HÌNH để ẩn thanh trình duyệt & lái xe rộng rãi nhất!',
         {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
           fontSize: '13px',

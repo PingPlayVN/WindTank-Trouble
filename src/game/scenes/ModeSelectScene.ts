@@ -11,6 +11,7 @@ import {
   type BattleModeDescriptor,
 } from '../config/constants';
 import { audioManager } from '../managers/AudioManager';
+import { mobileOrientationManager } from '../managers/MobileOrientationManager';
 import { settingsManager } from '../managers/SettingsManager';
 import type { BattleModeId } from '../types/gameTypes';
 import {
@@ -67,12 +68,12 @@ export class ModeSelectScene extends Phaser.Scene {
   }
 
   create(): void {
+    mobileOrientationManager.syncLayout();
     this.cameras.main.setBackgroundColor(UI_COLORS.menuBgHex);
     drawMazeBackdrop(this, DESIGN_WIDTH, DESIGN_HEIGHT);
     this.ensureDioramaTextures();
 
     const fsControls = createMobileFullscreenControls(this, {
-      buttonX: DESIGN_WIDTH - 96,
       buttonY: 36,
       showRecommendationBanner: false,
     });
@@ -104,12 +105,12 @@ export class ModeSelectScene extends Phaser.Scene {
       this.modeCards.push(card);
     });
 
-    // Tactical Modifiers Bar (`y = 556`)
+    // Tactical Modifiers Bar (`y = 556`, exact 1176px outer span matching the 4 mode cards above!)
     this.tntOptionBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 - 392,
+      x: DESIGN_WIDTH / 2 - 398,
       y: 556,
-      width: 356,
-      height: 44,
+      width: 380,
+      height: 46,
       lipHeight: 3,
       label: '',
       fontSize: 13.5,
@@ -122,8 +123,8 @@ export class ModeSelectScene extends Phaser.Scene {
     this.armorHpBtn = createArcadeButton(this, {
       x: DESIGN_WIDTH / 2,
       y: 556,
-      width: 382,
-      height: 44,
+      width: 380,
+      height: 46,
       lipHeight: 3,
       label: '',
       fontSize: 13.5,
@@ -141,10 +142,10 @@ export class ModeSelectScene extends Phaser.Scene {
     });
 
     this.aiTacticBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 + 392,
+      x: DESIGN_WIDTH / 2 + 398,
       y: 556,
-      width: 356,
-      height: 44,
+      width: 380,
+      height: 46,
       lipHeight: 3,
       label: '',
       fontSize: 13.5,
@@ -163,11 +164,12 @@ export class ModeSelectScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0.5);
 
+    // Symmetrically centered navigation pair (`x = 322 .. 958`, exact center = 640!)
     const backBtn = createArcadeButton(this, {
-      x: 250,
+      x: 444,
       y: 696,
-      width: 236,
-      height: 52,
+      width: 244,
+      height: 54,
       label: '← QUAY LẠI CHỌN XE',
       fontSize: 15.5,
       fillColor: UI_COLORS.cardBg,
@@ -177,9 +179,9 @@ export class ModeSelectScene extends Phaser.Scene {
     });
 
     const startBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 + 95,
+      x: 774,
       y: 696,
-      width: 360,
+      width: 368,
       height: 56,
       lipHeight: 5,
       label: 'BẮT ĐẦU TRẬN ĐẤU →',

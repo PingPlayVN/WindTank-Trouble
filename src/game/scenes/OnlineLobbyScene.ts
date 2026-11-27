@@ -69,7 +69,6 @@ export class OnlineLobbyScene extends Phaser.Scene {
 
     drawMazeBackdrop(this, DESIGN_WIDTH, DESIGN_HEIGHT);
     const fsControls = createMobileFullscreenControls(this, {
-      buttonX: DESIGN_WIDTH - 96,
       buttonY: 42,
       showRecommendationBanner: true,
       bannerY: 42,
@@ -127,7 +126,7 @@ export class OnlineLobbyScene extends Phaser.Scene {
     this.roomPanelContainer = this.add.container(0, 0);
 
     this.pingBadgeText = this.add
-      .text(DESIGN_WIDTH - 36, 118, 'PING: -- ms', {
+      .text(mobileOrientationManager.getViewRight() - 32, 118, 'PING: -- ms', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: '13.5px',
         fontStyle: '900',

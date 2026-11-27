@@ -18,6 +18,8 @@ const VARIANT_TEXTURE: Record<ProjectileVariant, string> = {
   homing_missile: 'projectile_missile',
   drill: 'projectile_drill',
   flame: 'projectile_flame',
+  emp_orb: 'projectile_emp_orb',
+  cryo_orb: 'projectile_cryo_orb',
 };
 
 export class Projectile {
@@ -131,6 +133,14 @@ export class Projectile {
       } else {
         this.sprite.clearTint().setScale(scaleRatio);
       }
+    } else if (variant === 'emp_orb') {
+      this.sprite.rotation += 0.28;
+      const pulse = 1 + Math.sin(k.age * 26) * 0.12;
+      this.sprite.setScale(scaleRatio * pulse).setAlpha(1);
+    } else if (variant === 'cryo_orb') {
+      this.sprite.rotation += 0.18;
+      const pulse = 1 + Math.sin(k.age * 16) * 0.06;
+      this.sprite.setScale(scaleRatio * pulse).setAlpha(0.96);
     } else if (variant === 'drill') {
       const ang = Math.atan2(k.vy, k.vx);
       const spinPulse = 1 + Math.sin(k.age * 70) * 0.08;
@@ -242,6 +252,86 @@ export class Projectile {
       const ny = Math.cos(ang) * this.kinematics.radius * 1.45;
       graphics.lineStyle(1.8, 0xffd54f, 0.78);
       graphics.lineBetween(rx - nx, ry - ny, rx + nx, ry + ny);
+      return;
+    }
+
+    if (variant === 'emp_orb') {
+      const k = this.kinematics;
+      const r = k.radius;
+      // 1. Dual-core jagged lightning wake behind flying EMP Orb!
+      for (let i = 1; i < this.trailPoints.length; i++) {
+        const p0 = this.trailPoints[i - 1];
+        const p1 = this.trailPoints[i];
+        const frac = i / this.trailPoints.length;
+        const dx = p1.x - p0.x;
+        const dy = p1.y - p0.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+        const jag = Math.sin(k.age * 48 + i * 2.7) * r * 0.65 * frac;
+        const mx = (p0.x + p1.x) * 0.5 + nx * jag;
+        const my = (p0.y + p1.y) * 0.5 + ny * jag;
+
+        graphics.lineStyle(r * 1.6 * frac, 0x651fff, 0.42 * frac);
+        graphics.lineBetween(p0.x, p0.y, mx, my);
+        graphics.lineBetween(mx, my, p1.x, p1.y);
+
+        graphics.lineStyle(r * 0.72 * frac, 0x00e5ff, 0.92 * frac);
+        graphics.lineBetween(p0.x, p0.y, mx, my);
+        graphics.lineBetween(mx, my, p1.x, p1.y);
+      }
+
+      // 2. Live crackling Tesla corona + 2.0s shrinking detonation halo around orb!
+      const lifeLeft01 = Math.max(0.08, 1 - k.age / Math.max(0.2, k.maxLifetime));
+      graphics.fillStyle(0x651fff, 0.18);
+      graphics.fillCircle(k.x, k.y, r * 2.15);
+      graphics.lineStyle(1.8, 0x00e5ff, 0.85);
+      graphics.strokeCircle(k.x, k.y, r * (1.35 + lifeLeft01 * 0.85));
+
+      for (let b = 0; b < 4; b++) {
+        const a0 = k.age * 16 + (b * Math.PI) / 2;
+        const midR = r * 1.65;
+        const tipR = r * (2.25 + Math.sin(k.age * 38 + b) * 0.4);
+        const mx = k.x + Math.cos(a0 + 0.24) * midR;
+        const my = k.y + Math.sin(a0 + 0.24) * midR;
+        const tx = k.x + Math.cos(a0 - 0.18) * tipR;
+        const ty = k.y + Math.sin(a0 - 0.18) * tipR;
+        graphics.lineStyle(1.6, b % 2 === 0 ? 0x00e5ff : 0xffea00, 0.9);
+        graphics.lineBetween(k.x, k.y, mx, my);
+        graphics.lineBetween(mx, my, tx, ty);
+      }
+      return;
+    }
+
+    if (variant === 'cryo_orb') {
+      const k = this.kinematics;
+      const r = k.radius;
+      // 1. Shimmering glacial frost-mist wake
+      for (let i = 1; i < this.trailPoints.length; i++) {
+        const p0 = this.trailPoints[i - 1];
+        const p1 = this.trailPoints[i];
+        const frac = i / this.trailPoints.length;
+        graphics.lineStyle(r * 1.55 * frac, 0x00acc1, 0.34 * frac);
+        graphics.lineBetween(p0.x, p0.y, p1.x, p1.y);
+        graphics.lineStyle(r * 0.68 * frac, 0xe0f7fa, 0.85 * frac);
+        graphics.lineBetween(p0.x, p0.y, p1.x, p1.y);
+      }
+
+      // 2. Spinning 6-pointed frost snowflake halo around Cryo Orb!
+      graphics.fillStyle(0x84ffff, 0.2);
+      graphics.fillCircle(k.x, k.y, r * 1.85);
+      graphics.lineStyle(1.5, 0xffffff, 0.82);
+      const rot = k.age * 6.5;
+      for (let sIdx = 0; sIdx < 3; sIdx++) {
+        const a = rot + (sIdx * Math.PI) / 3;
+        const span = r * 1.95;
+        graphics.lineBetween(
+          k.x - Math.cos(a) * span,
+          k.y - Math.sin(a) * span,
+          k.x + Math.cos(a) * span,
+          k.y + Math.sin(a) * span,
+        );
+      }
       return;
     }
 

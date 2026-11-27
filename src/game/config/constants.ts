@@ -10,6 +10,20 @@ import type {
 
 export const DESIGN_WIDTH = 1280;
 export const DESIGN_HEIGHT = 760;
+export const MAX_MOBILE_LOGICAL_WIDTH = 1680;
+
+export function computeMobileLogicalWidth(
+  availW: number,
+  availH: number,
+  isMobile: boolean,
+): number {
+  if (!isMobile || availW <= 0 || availH <= 0) {
+    return DESIGN_WIDTH;
+  }
+  const rawW = Math.round((availW / availH) * DESIGN_HEIGHT);
+  const evenW = rawW + (rawW % 2);
+  return Math.max(DESIGN_WIDTH, Math.min(MAX_MOBILE_LOGICAL_WIDTH, evenW));
+}
 
 export const ARENA_VIEWPORT = {
   topBarHeight: 46,
@@ -21,29 +35,57 @@ export const ARENA_VIEWPORT = {
 } as const;
 
 /**
- * Expanded vertical maze viewport with safe left/right thumb gutters (`x: 0..224` and `x: 1056..1280`)
- * and top compact score-pill header (`y: 0..96`) for Mobile Touch mode!
+ * Deterministic Mobile-vs-Mobile Online viewport & baseline Mobile arena bounds:
+ * clean top compact header (`74px`) and generous `872×668` playfield.
  */
 export const MOBILE_ARENA_VIEWPORT = {
-  topBarHeight: 76,
-  bottomBarHeight: 16,
-  maxWidth: 856,
-  maxHeight: 644,
+  topBarHeight: 74,
+  bottomBarHeight: 12,
+  maxWidth: 872,
+  maxHeight: 668,
   centerX: DESIGN_WIDTH / 2,
-  centerY: 414,
+  centerY: 415,
 } as const;
 
 /**
+ * Computes the expanded local Mobile arena viewport for a phone's actual landscape logical width
+ * (`1280 .. 1680`), reclaiming widescreen space for both larger thumb controls AND a larger map
+ * while keeping at least ~40-80px clean clearance from the Stick, Fire, and Reverse buttons!
+ */
+export function resolveLocalMobileArenaViewport(logicalWidth: number): {
+  readonly topBarHeight: number;
+  readonly bottomBarHeight: number;
+  readonly maxWidth: number;
+  readonly maxHeight: number;
+  readonly centerX: number;
+  readonly centerY: number;
+} {
+  const safeLogicalW = Number.isFinite(logicalWidth)
+    ? Math.max(DESIGN_WIDTH, Math.min(MAX_MOBILE_LOGICAL_WIDTH, Math.round(logicalWidth)))
+    : DESIGN_WIDTH;
+  // Reserve 248px on each wing so even 24x14 maps never touch the enlarged Stick, Fire, or Reverse buttons
+  const dynamicMaxW = Math.max(824, Math.min(1096, safeLogicalW - 496));
+  return {
+    topBarHeight: MOBILE_ARENA_VIEWPORT.topBarHeight,
+    bottomBarHeight: MOBILE_ARENA_VIEWPORT.bottomBarHeight,
+    maxWidth: dynamicMaxW,
+    maxHeight: 668,
+    centerX: DESIGN_WIDTH / 2,
+    centerY: 415,
+  };
+}
+
+/**
  * Shared Online Cross-Platform Viewport when one player is on PC and the other is on Mobile:
- * - Horizontally (`maxWidth: 856`, `x: 212..1068`) preserves Mobile's left/right thumb joystick gutters!
- * - Vertically (`maxHeight: 536`, `centerY: 368`, `y: 100..636`) clears BOTH Mobile's top compact score
- *   pills (`y: 0..76`) AND PC's bottom full scoreboard plaques (`y: 648..760`) with zero overlap!
+ * - Horizontally (`maxWidth: 872`, `x: 204..1076`) preserves Mobile's left/right thumb joystick gutters!
+ * - Vertically (`maxHeight: 540`, `centerY: 368`, `y: 98..638`) clears BOTH Mobile's top compact score
+ *   pills (`y: 0..66`) AND PC's bottom full scoreboard plaques (`y: 648..760`) with zero overlap!
  */
 export const CROSS_PLATFORM_ARENA_VIEWPORT = {
-  topBarHeight: 88,
-  bottomBarHeight: 116,
-  maxWidth: 856,
-  maxHeight: 536,
+  topBarHeight: 86,
+  bottomBarHeight: 114,
+  maxWidth: 872,
+  maxHeight: 540,
   centerX: DESIGN_WIDTH / 2,
   centerY: 368,
 } as const;
@@ -429,7 +471,7 @@ export const AI_DIFFICULTY_DESCRIPTORS: readonly AIDifficultyDescriptor[] = [
     fillColor: 0xe53935,
     hoverColor: 0xf44336,
     textHex: '#C62828',
-    summary: 'Nảy 3 góc chuẩn xác • Né đạn vây • Làm chủ 10 kỹ năng',
+    summary: 'Nảy 3 góc chuẩn xác • Né đạn vây • Làm chủ 15 kỹ năng',
   },
 ] as const;
 
@@ -480,13 +522,13 @@ export const POWERUP_CONFIG = {
   gatlingLifetimeSec: 8.5,
   gatlingRecoilImpulse: 22,
   gatlingSpreadRad: 0.068, // ~+-3.9 deg recoil bloom
-  // 4. Homing
-  homingBallisticSec: 4.0,
-  homingTotalLifetimeSec: 16.0,
+  // 4. Homing (2.5s ballistic bounce -> slower, tactical shortest-path maze seeker!)
+  homingBallisticSec: 2.5,
+  homingTotalLifetimeSec: 16.5,
   homingRadiusMultiplier: 1.08,
-  homingBallisticSpeedMultiplier: 0.95,
-  homingSeekSpeedMultiplier: 1.14,
-  homingTurnRateRad: 11.5,
+  homingBallisticSpeedMultiplier: 0.78,
+  homingSeekSpeedMultiplier: 0.94,
+  homingTurnRateRad: 10.8,
   // 5. Scatter (Pháo Chùm Hải Tặc)
   scatterAmmo: 3,
   scatterPelletCount: 5,
@@ -536,6 +578,37 @@ export const POWERUP_CONFIG = {
   reaperSpinDurationSec: Math.PI / 0.8375,
   reaperBladeCellsLength: 4.7,
   reaperBladeHalfWidth: 7.5,
+  // 11. EMP Grenade (Lựu Đạn Xung Điện EMP)
+  empOrbSpeedMultiplier: 0.88,
+  empOrbRadiusMultiplier: 1.24,
+  empOrbMaxBounces: 8,
+  empFlightDetonateSec: 2.0,
+  empBlastCellsRadius: 2.75,
+  empJamDurationSec: 2.2,
+  empMoveSpeedMultiplier: 0.5,
+  // 12. Phantom Phase (Giáp Bóng Ma Xuyên Tường)
+  phantomDurationSec: 3.5,
+  phantomSpeedMultiplier: 1.2,
+  // 13. Cryo Cannon (Pháo Đóng Băng Hàn Băng)
+  cryoAmmo: 2,
+  cryoCooldownSec: 0.34,
+  cryoOrbSpeedMultiplier: 0.92,
+  cryoOrbRadiusMultiplier: 1.18,
+  cryoOrbMaxBounces: 4,
+  cryoOrbLifetimeSec: 4.5,
+  cryoFreezeDurationSec: 1.8,
+  cryoZoneDurationSec: 6.0,
+  cryoZoneCellsRadius: 1.45,
+  cryoDriftVelocityLerp: 2.1,
+  cryoDriftTurnMultiplier: 0.4,
+  cryoDriftSpeedMultiplier: 0.78,
+  // 14. Energy Barrier (Súng Xây Tường Năng Lượng)
+  barrierAmmo: 3,
+  barrierCooldownSec: 0.28,
+  barrierDurationSec: 8.0,
+  // 15. Spatial Warp Beacon (Mỏ Neo Không Gian)
+  warpBeaconDurationSec: 12.0,
+  warpBlastRadius: 48,
 } as const;
 
 export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
@@ -544,8 +617,8 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     name: 'PHÁO CHÙM HẢI TẶC',
     hudShort: 'PHÁO CHÙM',
     suitTitle: 'Giáp Hải Tặc Pháo Chùm',
-    weight: 15,
-    dropPercent: 15,
+    weight: 11,
+    dropPercent: 11,
     ammo: POWERUP_CONFIG.scatterAmmo,
     ammoLabel: '3 LOẠT × 5 VIÊN',
     accentColor: 0x2979ff,
@@ -562,8 +635,8 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     name: 'ĐẠN LIÊN THANH',
     hudShort: 'LIÊN THANH',
     suitTitle: 'Giáp Chiến Binh Bão Đạn',
-    weight: 14,
-    dropPercent: 14,
+    weight: 10,
+    dropPercent: 10,
     ammo: POWERUP_CONFIG.gatlingAmmo,
     ammoLabel: '20 VIÊN',
     accentColor: 0xfb8c00,
@@ -580,8 +653,8 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     name: 'MÌN BÓNG MA',
     hudShort: 'MÌN TÀNG HÌNH',
     suitTitle: 'Giáp Đặc Công Bóng Đêm',
-    weight: 13,
-    dropPercent: 13,
+    weight: 9,
+    dropPercent: 9,
     ammo: POWERUP_CONFIG.mineAmmo,
     ammoLabel: '3 QUẢ MÌN',
     accentColor: 0x455a64,
@@ -594,12 +667,30 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     ],
   },
   {
+    id: 'cryo',
+    name: 'PHÁO ĐÓNG BĂNG',
+    hudShort: 'HÀN BĂNG',
+    suitTitle: 'Giáp Bắc Cực Hàn Băng',
+    weight: 8,
+    dropPercent: 8,
+    ammo: POWERUP_CONFIG.cryoAmmo,
+    ammoLabel: '2 CẦU BĂNG',
+    accentColor: 0x00acc1,
+    accentHex: '#00838F',
+    summary: 'Bắn cầu hàn băng nảy tường đóng băng cứng mục tiêu và phủ thảm băng trơn trượt.',
+    traits: [
+      '2 viên cầu băng • Nảy tối đa 4 góc tường rồi vỡ tung thành vùng băng lạnh 6s',
+      'Trúng trực diện xe địch không khiên sẽ ĐÓNG BĂNG CỨNG 1.8s (khóa di chuyển & bắn!)',
+      'Xe địch đi vào vùng băng trên sàn bị trượt quán tính (drift) & giảm 60% tốc xoay',
+    ],
+  },
+  {
     id: 'flame',
     name: 'HỎA LONG PHUN LỬA',
     hudShort: 'PHUN LỬA',
     suitTitle: 'Giáp Hỏa Long Nhiệt Hạch',
-    weight: 12,
-    dropPercent: 12,
+    weight: 8,
+    dropPercent: 8,
     ammo: POWERUP_CONFIG.flameAmmo,
     ammoLabel: '80 LUỒNG LỬA DÀY',
     accentColor: 0xff3d00,
@@ -612,12 +703,30 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     ],
   },
   {
+    id: 'barrier',
+    name: 'TƯỜNG NĂNG LƯỢNG',
+    hudShort: 'XÂY TƯỜNG',
+    suitTitle: 'Giáp Kiến Trúc Chiến Trường',
+    weight: 8,
+    dropPercent: 8,
+    ammo: POWERUP_CONFIG.barrierAmmo,
+    ammoLabel: '3 VÁCH CHẮN',
+    accentColor: 0x2e7d32,
+    accentHex: '#2E7D32',
+    summary: 'Dựng vách ngăn năng lượng ngay trước mặt để bịt kín cửa ngõ, nhốt địch hoặc nảy đạn.',
+    traits: [
+      '3 vách chắn năng lượng • Tồn tại 8.0s khóa chặt ô cửa mê cung ngay trước mũi xe',
+      'Chặn đứng xe tăng, khóa đường Tên Lửa Định Vị & bật nảy đạn vật lý y như tường thật!',
+      'Có thể bị phá hủy sớm bởi Mũi Khoan, Laser, Thùng nổ TNT hoặc xung điện EMP',
+    ],
+  },
+  {
     id: 'spike',
     name: 'ĐẠN GAI SẮT',
     hudShort: 'ĐẠN GAI',
     suitTitle: 'Giáp Thiết Giáp Gai Sắt',
-    weight: 11,
-    dropPercent: 11,
+    weight: 7,
+    dropPercent: 7,
     ammo: 1,
     ammoLabel: '1 CẦU GAI',
     accentColor: 0x6d4c41,
@@ -630,12 +739,30 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     ],
   },
   {
+    id: 'emp',
+    name: 'XUNG ĐIỆN EMP',
+    hudShort: 'XUNG EMP',
+    suitTitle: 'Giáp Lôi Thần Điện Từ',
+    weight: 7,
+    dropPercent: 7,
+    ammo: 1,
+    ammoLabel: '1 CẦU KÍCH NỔ',
+    accentColor: 0x651fff,
+    accentHex: '#6200EA',
+    summary: 'Phóng cầu điện từ nảy tường, bấm BẮN lần 2 để kích nổ xung điện phá Khiên & kẹt súng!',
+    traits: [
+      'Bấm BẮN lần 2 khi cầu đang bay (hoặc sau 2.0s) để phát xung điện từ xuyên tường 2.75 ô',
+      'PHÁ VỠ NGAY Khiên Từ Trường, ngắt tụ lực Laser/Lưỡi Hái & vô hiệu hóa Mìn/Tường chắn!',
+      'Làm tê liệt hệ thống điện địch trong 2.2s: giảm 50% tốc chạy & KẸT CÒ SÚNG không thể bắn',
+    ],
+  },
+  {
     id: 'drill',
     name: 'MŨI KHOAN ĐỊA CHẤN',
     hudShort: 'MŨI KHOAN',
     suitTitle: 'Giáp Khoan Phá Địa Chấn',
-    weight: 10,
-    dropPercent: 10,
+    weight: 7,
+    dropPercent: 7,
     ammo: POWERUP_CONFIG.drillAmmo,
     ammoLabel: '2 MŨI KHOAN',
     accentColor: 0xf9a825,
@@ -652,8 +779,8 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     name: 'KHIÊN TỪ TRƯỜNG',
     hudShort: 'KHIÊN HỘ THỂ',
     suitTitle: 'Giáp Hộ Vệ Từ Trường',
-    weight: 9,
-    dropPercent: 9,
+    weight: 6,
+    dropPercent: 6,
     ammo: 1,
     ammoLabel: '5.5 GIÂY HỘ THỂ',
     accentColor: 0x00bfa5,
@@ -666,21 +793,57 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     ],
   },
   {
+    id: 'phantom',
+    name: 'BÓNG MA XUYÊN TƯỜNG',
+    hudShort: 'XUYÊN TƯỜNG',
+    suitTitle: 'Giáp Bóng Ma Hư Không',
+    weight: 6,
+    dropPercent: 6,
+    ammo: 1,
+    ammoLabel: '3.5 GIÂY HÓA MA',
+    accentColor: 0x7e57c2,
+    accentHex: '#5E35B1',
+    summary: 'Hóa thể bóng ma bán trong suốt 3.5s, tăng 20% tốc chạy và đi xuyên tường mê cung!',
+    traits: [
+      'Bấm bắn để hóa Bóng Ma 3.5s • Vẫn bắn đạn thường tự do trong lúc xuyên tường!',
+      'Tăng +20% tốc độ lướt đi xuyên qua mọi bức tường nội khu mê cung để tập kích sau lưng',
+      'Hết 3.5s nếu đang kẹt giữa tường sẽ tự động đẩy mượt ra hành lang gần nhất (đạn vẫn bắn trúng!)',
+    ],
+  },
+  {
     id: 'homing',
     name: 'ĐẠN ĐỊNH VỊ',
     hudShort: 'ĐỊNH VỊ',
     suitTitle: 'Giáp Chiến Cơ Tầm Nhiệt',
-    weight: 8,
-    dropPercent: 8,
+    weight: 5,
+    dropPercent: 5,
     ammo: 1,
     ammoLabel: '1 TÊN LỬA',
     accentColor: 0xe53935,
     accentHex: '#E53935',
-    summary: 'Tên lửa nảy tường 4s đầu rồi bật radar tìm đường ngắn nhất qua mê cung.',
+    summary: 'Tên lửa nảy tường 2.5s đầu rồi bật radar tìm đường ngắn nhất qua mê cung.',
     traits: [
-      '4s đầu nảy tường như đạn vật lý • Sau 4s kích hoạt động cơ dò tìm',
+      '2.5s đầu bay đằm & nảy tường vượt góc khuất • Sau 2.5s bật động cơ dò tìm',
       'Tự luồn lách theo đường ngắn nhất mê cung tới xe gần nhất (KỂ CẢ NGƯỜI BẮN!)',
       'Tự động đổi mục tiêu ngay lập tức nếu có xe khác tiến lại gần hơn',
+    ],
+  },
+  {
+    id: 'warp',
+    name: 'MỎ NEO KHÔNG GIAN',
+    hudShort: 'DỊCH CHUYỂN',
+    suitTitle: 'Giáp Lữ Khách Thời Không',
+    weight: 4,
+    dropPercent: 4,
+    ammo: 1,
+    ammoLabel: 'ĐẶT CỔNG → BIẾN VỀ',
+    accentColor: 0xab47bc,
+    accentHex: '#8E24AA',
+    summary: 'Đặt cổng không gian trên sàn, lao lên câu kéo rồi bấm lần 2 dịch chuyển tức thời về cổng!',
+    traits: [
+      'Bấm BẮN lần 1: Cắm Mỏ Neo Không Gian tại vị trí hiện tại (duy trì tối đa 12s)',
+      'Bấm BẮN lần 2: Dịch chuyển tức thời về Mỏ Neo để thoát hiểm hoặc úp sọt ngoạn mục!',
+      'Vị trí vừa biến đi phát nổ Xung Không Gian tiêu diệt ngay kẻ địch truy đuổi sát đuôi',
     ],
   },
   {
@@ -688,8 +851,8 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     name: 'LASER SIÊU CẤP',
     hudShort: 'LASER',
     suitTitle: 'Giáp Quang Năng Tối Thượng',
-    weight: 5,
-    dropPercent: 5,
+    weight: 2,
+    dropPercent: 2,
     ammo: 1,
     ammoLabel: '1 TIA XUYÊN MAP',
     accentColor: 0x0091ea,
@@ -706,8 +869,8 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     name: 'LƯỠI HÁI TỬ THẦN',
     hudShort: 'LƯỠI HÁI ĐỎ',
     suitTitle: 'Giáp Tử Thần Huyết Ảnh',
-    weight: 3,
-    dropPercent: 3,
+    weight: 2,
+    dropPercent: 2,
     ammo: 1,
     ammoLabel: 'QUÉT 180° ĐỎ-ĐEN',
     accentColor: 0xd50000,
@@ -874,6 +1037,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   powerUpSpawnIntervalSec: POWERUP_CONFIG.spawnIntervalSec,
   maxCratesOnFloor: POWERUP_CONFIG.maxCratesOnFloor,
   enabledSkills: [...ALL_SKILL_IDS],
+  skillsPoolVersion: 2,
   playerIsAI: [false, false, false, false],
   playerAIDifficulty: ['normal', 'normal', 'normal', 'normal'],
   touchScheme: 'vector_stick',

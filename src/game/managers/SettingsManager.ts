@@ -437,7 +437,18 @@ export class SettingsManager {
         merged.enabledSkills = parsed.enabledSkills.filter((id): id is SkillId =>
           VALID_SKILLS.has(id as SkillId),
         );
+        const savedPoolVersion =
+          typeof parsed.skillsPoolVersion === 'number' ? parsed.skillsPoolVersion : 1;
+        if (savedPoolVersion < 2 && merged.enabledSkills.length > 0) {
+          const newPack: SkillId[] = ['emp', 'phantom', 'cryo', 'barrier', 'warp'];
+          for (const sk of newPack) {
+            if (!merged.enabledSkills.includes(sk)) {
+              merged.enabledSkills.push(sk);
+            }
+          }
+        }
       }
+      merged.skillsPoolVersion = 2;
       if (Array.isArray(parsed.playerIsAI) && parsed.playerIsAI.length === 4) {
         merged.playerIsAI = parsed.playerIsAI.map((v) => Boolean(v)) as [
           boolean,
@@ -470,7 +481,7 @@ export class SettingsManager {
         merged.touchAimZone = Math.max(0.22, Math.min(0.6, parsed.touchAimZone));
       }
       if (typeof parsed.touchButtonScale === 'number' && Number.isFinite(parsed.touchButtonScale)) {
-        merged.touchButtonScale = Math.max(0.85, Math.min(1.25, parsed.touchButtonScale));
+        merged.touchButtonScale = Math.max(0.8, Math.min(1.35, parsed.touchButtonScale));
       }
       if (typeof parsed.touchFloatingStick === 'boolean') {
         merged.touchFloatingStick = parsed.touchFloatingStick;

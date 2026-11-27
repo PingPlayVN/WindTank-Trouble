@@ -18,7 +18,9 @@ export type DamageSourceKind =
   | 'reaper'
   | 'mine'
   | 'ground_spike'
-  | 'tnt_barrel';
+  | 'tnt_barrel'
+  | 'emp_blast'
+  | 'warp_blast';
 
 export const BATTLE_MODE_DAMAGE_TABLE: Record<DamageSourceKind, number> = {
   standard: 25,
@@ -34,6 +36,10 @@ export const BATTLE_MODE_DAMAGE_TABLE: Record<DamageSourceKind, number> = {
   laser: 80,
   reaper: 34,
   tnt_barrel: 48,
+  emp_orb: 24,
+  emp_blast: 24,
+  cryo_orb: 35,
+  warp_blast: 68,
 };
 
 export interface EffectiveBattleModeRules {

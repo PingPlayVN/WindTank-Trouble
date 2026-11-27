@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { mobileOrientationManager } from '../managers/MobileOrientationManager';
 import { settingsManager } from '../managers/SettingsManager';
 import type { BuiltArenaLayout, TankColorPalette } from '../types/gameTypes';
 
@@ -1129,6 +1130,642 @@ export class EffectsSystem {
     this.addTrauma(0.82);
   }
 
+  emitEmpMuzzle(worldX: number, worldY: number, angleRad: number): void {
+    const s = this.scaleRatio;
+    this.sparkEmitter.setParticleTint([0x00e5ff, 0x651fff, 0xffea00, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 14);
+    const arc = this.scene.add
+      .circle(
+        worldX + Math.cos(angleRad) * 4 * s,
+        worldY + Math.sin(angleRad) * 4 * s,
+        11 * s,
+        0x00e5ff,
+        0.92,
+      )
+      .setStrokeStyle(2.5 * s, 0x651fff, 0.95)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(23);
+    this.scene.tweens.add({
+      targets: arc,
+      scale: 2.1,
+      alpha: 0,
+      duration: 140,
+      ease: 'Quad.easeOut',
+      onComplete: () => arc.destroy(),
+    });
+    this.addTrauma(0.18);
+  }
+
+  emitEmpOrbFlightTick(worldX: number, worldY: number): void {
+    const ox = (Math.random() - 0.5) * 8 * this.scaleRatio;
+    const oy = (Math.random() - 0.5) * 8 * this.scaleRatio;
+    this.sparkEmitter.setParticleTint([0x00e5ff, 0x7c4dff, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(worldX + ox, worldY + oy, 2);
+  }
+
+  emitEmpJammedTick(worldX: number, worldY: number): void {
+    const ox = (Math.random() - 0.5) * 16 * this.scaleRatio;
+    const oy = (Math.random() - 0.5) * 16 * this.scaleRatio;
+    this.sparkEmitter.setParticleTint([0x00e5ff, 0xffea00, 0x7c4dff, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(worldX + ox, worldY + oy, 3);
+    if (Math.random() < 0.35) {
+      this.smokeEmitter.emitParticleAt(worldX + ox * 0.5, worldY + oy * 0.5, 1);
+    }
+  }
+
+  emitEmpBlast(worldX: number, worldY: number, blastRadius: number): void {
+    const s = this.scaleRatio;
+    this.sparkEmitter.setParticleTint([0x00e5ff, 0x651fff, 0xffea00, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 34);
+    this.starEmitter.setParticleTint([0x00e5ff, 0xb388ff, 0xffffff]);
+    this.starEmitter.emitParticleAt(worldX, worldY, 20);
+    this.shardEmitter.setParticleTint([0x651fff, 0x00e5ff, 0xffffff]);
+    this.shardEmitter.emitParticleAt(worldX, worldY, 12);
+
+    // 1. Blinding electromagnetic inverter dome + dual concentric shockwaves
+    const coreFlash = this.scene.add
+      .circle(worldX, worldY, blastRadius * 0.36, 0xffffff, 0.95)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(25);
+    const plasmaDome = this.scene.add
+      .circle(worldX, worldY, blastRadius * 0.48, 0x651fff, 0.42)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(24);
+    const outerWave = this.scene.add
+      .circle(worldX, worldY, blastRadius * 0.18)
+      .setStrokeStyle(5.2 * s, 0x651fff, 0.96)
+      .setDepth(24);
+    const innerWave = this.scene.add
+      .circle(worldX, worldY, blastRadius * 0.12)
+      .setStrokeStyle(3.4 * s, 0x00e5ff, 0.98)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(25);
+
+    // 2. Procedural 12-branch Jagged Radial Lightning Web snapping across the full EMP sphere!
+    const boltWeb = this.scene.add
+      .graphics()
+      .setPosition(worldX, worldY)
+      .setScale(0.35)
+      .setDepth(25)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    const branches = 12;
+    for (let b = 0; b < branches; b++) {
+      const baseAng = (b / branches) * Math.PI * 2 + (Math.random() - 0.5) * 0.2;
+      const isCyan = b % 2 === 0;
+      boltWeb.lineStyle((isCyan ? 2.8 : 2.1) * s, isCyan ? 0x00e5ff : 0xb388ff, 0.96);
+      boltWeb.beginPath();
+      boltWeb.moveTo(0, 0);
+      const segs = 5;
+      let prevX = 0;
+      let prevY = 0;
+      for (let k = 1; k <= segs; k++) {
+        const frac = k / segs;
+        const r = blastRadius * frac * (0.9 + Math.random() * 0.14);
+        const jitter = k < segs ? (Math.random() - 0.5) * 0.34 : 0;
+        const px = Math.cos(baseAng + jitter) * r;
+        const py = Math.sin(baseAng + jitter) * r;
+        boltWeb.lineTo(px, py);
+        if (k === 3 && b % 3 === 0) {
+          const forkAng = baseAng + (b % 2 === 0 ? 0.42 : -0.42);
+          const fx = prevX + Math.cos(forkAng) * (blastRadius * 0.34);
+          const fy = prevY + Math.sin(forkAng) * (blastRadius * 0.34);
+          boltWeb.moveTo(px, py);
+          boltWeb.lineTo(fx, fy);
+          boltWeb.moveTo(px, py);
+        }
+        prevX = px;
+        prevY = py;
+      }
+      boltWeb.strokePath();
+    }
+    // Hexagonal electromagnetic cage outline inside boltWeb
+    boltWeb.lineStyle(2.2 * s, 0xffea00, 0.72);
+    boltWeb.beginPath();
+    for (let h = 0; h < 6; h++) {
+      const ha = (h / 6) * Math.PI * 2;
+      const hx = Math.cos(ha) * (blastRadius * 0.86);
+      const hy = Math.sin(ha) * (blastRadius * 0.86);
+      if (h === 0) boltWeb.moveTo(hx, hy);
+      else boltWeb.lineTo(hx, hy);
+    }
+    boltWeb.closePath();
+    boltWeb.strokePath();
+
+    this.scene.tweens.add({
+      targets: coreFlash,
+      scale: 2.3,
+      alpha: 0,
+      duration: 180,
+      ease: 'Cubic.easeOut',
+      onComplete: () => coreFlash.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: plasmaDome,
+      scale: 2.15,
+      alpha: 0,
+      duration: 290,
+      ease: 'Quad.easeOut',
+      onComplete: () => plasmaDome.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: boltWeb,
+      scale: 1.04,
+      rotation: (Math.random() - 0.5) * 0.25,
+      alpha: 0,
+      duration: 310,
+      ease: 'Cubic.easeOut',
+      onComplete: () => boltWeb.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: [outerWave, innerWave],
+      radius: blastRadius,
+      alpha: 0,
+      duration: 340,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        outerWave.destroy();
+        innerWave.destroy();
+      },
+    });
+    this.addTrauma(0.68);
+  }
+
+  emitPhantomActivate(worldX: number, worldY: number): void {
+    const s = this.scaleRatio;
+    this.starEmitter.setParticleTint([0xea80fc, 0xb388ff, 0x80d8ff, 0xffffff]);
+    this.starEmitter.emitParticleAt(worldX, worldY, 16);
+    this.sparkEmitter.setParticleTint([0xea80fc, 0xd1c4e9, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 14);
+
+    const implode = this.scene.add
+      .circle(worldX, worldY, 34 * s)
+      .setStrokeStyle(3.0 * s, 0x7c4dff, 0.88)
+      .setDepth(23);
+    const ring = this.scene.add
+      .circle(worldX, worldY, 12 * s, 0xede7f6, 0.45)
+      .setStrokeStyle(3.6 * s, 0xea80fc, 0.96)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(24);
+
+    this.scene.tweens.add({
+      targets: implode,
+      scale: 0.25,
+      alpha: 0,
+      duration: 200,
+      ease: 'Quad.easeIn',
+      onComplete: () => implode.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: ring,
+      scale: 3.4,
+      alpha: 0,
+      duration: 310,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+    this.addTrauma(0.24);
+  }
+
+  emitPhantomAfterimage(
+    worldX: number,
+    worldY: number,
+    angleRad: number,
+    paletteId: string,
+  ): void {
+    const texKey = `tank_${paletteId}_phantom_0`;
+    if (!this.scene.textures.exists(texKey)) return;
+
+    const ghost = this.scene.add
+      .image(worldX, worldY, texKey)
+      .setOrigin(0.44, 0.5)
+      .setScale(this.scaleRatio * 1.02)
+      .setRotation(angleRad)
+      .setTint(0xd1c4e9)
+      .setAlpha(0.42)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(12.5);
+
+    this.scene.tweens.add({
+      targets: ghost,
+      scaleX: this.scaleRatio * 0.88,
+      scaleY: this.scaleRatio * 0.88,
+      alpha: 0,
+      duration: 280,
+      ease: 'Quad.easeOut',
+      onComplete: () => ghost.destroy(),
+    });
+  }
+
+  emitPhantomExit(worldX: number, worldY: number): void {
+    const s = this.scaleRatio;
+    this.sparkEmitter.setParticleTint([0xd1c4e9, 0xea80fc, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 12);
+    const ring = this.scene.add
+      .circle(worldX, worldY, 26 * s)
+      .setStrokeStyle(3.0 * s, 0xb388ff, 0.9)
+      .setDepth(23);
+    this.scene.tweens.add({
+      targets: ring,
+      scale: 0.45,
+      alpha: 0,
+      duration: 210,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  emitCryoMuzzle(worldX: number, worldY: number, angleRad: number): void {
+    const s = this.scaleRatio;
+    this.shardEmitter.setParticleTint([0xffffff, 0x84ffff, 0x00e5ff]);
+    this.shardEmitter.emitParticleAt(worldX, worldY, 6);
+    this.sparkEmitter.setParticleTint([0xe0f7fa, 0x84ffff, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 10);
+    const puff = this.scene.add
+      .circle(
+        worldX + Math.cos(angleRad) * 5 * s,
+        worldY + Math.sin(angleRad) * 5 * s,
+        10 * s,
+        0x84ffff,
+        0.85,
+      )
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(23);
+    this.scene.tweens.add({
+      targets: puff,
+      scale: 2.0,
+      alpha: 0,
+      duration: 150,
+      ease: 'Quad.easeOut',
+      onComplete: () => puff.destroy(),
+    });
+  }
+
+  emitCryoOrbFlightTick(worldX: number, worldY: number): void {
+    const ox = (Math.random() - 0.5) * 7 * this.scaleRatio;
+    const oy = (Math.random() - 0.5) * 7 * this.scaleRatio;
+    this.sparkEmitter.setParticleTint([0xffffff, 0x84ffff, 0xb2ebf2]);
+    this.sparkEmitter.emitParticleAt(worldX + ox, worldY + oy, 1);
+  }
+
+  emitIceDriftSpray(worldX: number, worldY: number, angleRad: number): void {
+    const rearX = worldX - Math.cos(angleRad) * (13 * this.scaleRatio);
+    const rearY = worldY - Math.sin(angleRad) * (13 * this.scaleRatio);
+    this.sparkEmitter.setParticleTint([0xffffff, 0xe0f7fa, 0x84ffff]);
+    this.sparkEmitter.emitParticleAt(rearX, rearY, 2);
+  }
+
+  emitCryoShatter(worldX: number, worldY: number, zoneRadius: number): void {
+    const s = this.scaleRatio;
+    this.shardEmitter.setParticleTint([0xffffff, 0x84ffff, 0x00bcd4, 0xb2ebf2]);
+    this.shardEmitter.emitParticleAt(worldX, worldY, 24);
+    this.sparkEmitter.setParticleTint([0xffffff, 0x84ffff, 0x00e5ff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 20);
+    this.starEmitter.setParticleTint([0xffffff, 0x84ffff]);
+    this.starEmitter.emitParticleAt(worldX, worldY, 12);
+
+    const flash = this.scene.add
+      .circle(worldX, worldY, zoneRadius * 0.34, 0xe0f7fa, 0.92)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(24);
+    const ring = this.scene.add
+      .circle(worldX, worldY, zoneRadius * 0.22, 0x84ffff, 0.38)
+      .setStrokeStyle(3.8 * s, 0x00acc1, 0.96)
+      .setDepth(23);
+
+    // Procedural 8-point crystalline frost-starburst expanding across the ice zone!
+    const crystalBurst = this.scene.add
+      .graphics()
+      .setPosition(worldX, worldY)
+      .setScale(0.28)
+      .setDepth(24)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    crystalBurst.lineStyle(2.6 * s, 0xffffff, 0.95);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const len = zoneRadius * (i % 2 === 0 ? 0.98 : 0.68);
+      const tx = Math.cos(a) * len;
+      const ty = Math.sin(a) * len;
+      crystalBurst.lineBetween(0, 0, tx, ty);
+      const barbR = len * 0.58;
+      const bx = Math.cos(a) * barbR;
+      const by = Math.sin(a) * barbR;
+      for (const side of [-0.52, 0.52]) {
+        crystalBurst.lineBetween(
+          bx,
+          by,
+          bx + Math.cos(a + side) * (zoneRadius * 0.24),
+          by + Math.sin(a + side) * (zoneRadius * 0.24),
+        );
+      }
+    }
+
+    this.scene.tweens.add({
+      targets: flash,
+      scale: 2.3,
+      alpha: 0,
+      duration: 190,
+      ease: 'Quad.easeOut',
+      onComplete: () => flash.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: ring,
+      radius: zoneRadius * 1.06,
+      alpha: 0,
+      duration: 300,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: crystalBurst,
+      scale: 1.02,
+      rotation: 0.22,
+      alpha: 0,
+      duration: 340,
+      ease: 'Cubic.easeOut',
+      onComplete: () => crystalBurst.destroy(),
+    });
+    this.addTrauma(0.38);
+  }
+
+  emitBarrierDeploy(x0: number, y0: number, x1: number, y1: number): void {
+    const s = this.scaleRatio;
+    const mx = (x0 + x1) * 0.5;
+    const my = (y0 + y1) * 0.5;
+    this.sparkEmitter.setParticleTint([0x69f0ae, 0x00e676, 0x84ffff, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(x0, y0, 8);
+    this.sparkEmitter.emitParticleAt(mx, my, 12);
+    this.sparkEmitter.emitParticleAt(x1, y1, 8);
+
+    const g = this.scene.add.graphics().setDepth(24).setBlendMode(Phaser.BlendModes.ADD);
+    g.lineStyle(18 * s, 0x00e676, 0.55);
+    g.lineBetween(x0, y0, x1, y1);
+    g.lineStyle(7 * s, 0xffffff, 0.96);
+    g.lineBetween(x0, y0, x1, y1);
+    g.fillStyle(0xffffff, 0.95);
+    g.fillCircle(x0, y0, 7 * s);
+    g.fillCircle(x1, y1, 7 * s);
+
+    for (const [px, py] of [
+      [x0, y0],
+      [x1, y1],
+    ]) {
+      const pylonWave = this.scene.add
+        .circle(px, py, 7 * s)
+        .setStrokeStyle(2.6 * s, 0x69f0ae, 0.92)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(24);
+      this.scene.tweens.add({
+        targets: pylonWave,
+        scale: 2.8,
+        alpha: 0,
+        duration: 240,
+        ease: 'Cubic.easeOut',
+        onComplete: () => pylonWave.destroy(),
+      });
+    }
+
+    this.scene.tweens.add({
+      targets: g,
+      alpha: 0,
+      duration: 260,
+      ease: 'Quad.easeOut',
+      onComplete: () => g.destroy(),
+    });
+    this.addTrauma(0.24);
+  }
+
+  emitBarrierImpactRipple(worldX: number, worldY: number): void {
+    const s = this.scaleRatio;
+    this.sparkEmitter.setParticleTint([0x69f0ae, 0x00e676, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 8);
+
+    const ripple = this.scene.add
+      .circle(worldX, worldY, 6 * s)
+      .setStrokeStyle(2.8 * s, 0x69f0ae, 0.95)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(24);
+    this.scene.tweens.add({
+      targets: ripple,
+      scale: 2.9,
+      alpha: 0,
+      duration: 190,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ripple.destroy(),
+    });
+  }
+
+  emitBarrierShatter(x0: number, y0: number, x1: number, y1: number): void {
+    const s = this.scaleRatio;
+    this.shardEmitter.setParticleTint([0x69f0ae, 0x00e676, 0x84ffff, 0xffffff]);
+    this.sparkEmitter.setParticleTint([0xb9f6ca, 0x00e676, 0xffffff]);
+    for (const t of [0.15, 0.5, 0.85]) {
+      const px = x0 + (x1 - x0) * t;
+      const py = y0 + (y1 - y0) * t;
+      this.shardEmitter.emitParticleAt(px, py, 7);
+      this.sparkEmitter.emitParticleAt(px, py, 6);
+    }
+
+    const flash = this.scene.add.graphics().setDepth(23).setBlendMode(Phaser.BlendModes.ADD);
+    flash.lineStyle(12 * s, 0x69f0ae, 0.78);
+    flash.lineBetween(x0, y0, x1, y1);
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: 200,
+      ease: 'Quad.easeOut',
+      onComplete: () => flash.destroy(),
+    });
+  }
+
+  emitWarpBeaconPlant(worldX: number, worldY: number): void {
+    const s = this.scaleRatio;
+    this.starEmitter.setParticleTint([0xea80fc, 0x80d8ff, 0xffffff]);
+    this.starEmitter.emitParticleAt(worldX, worldY, 16);
+    this.sparkEmitter.setParticleTint([0xe040fb, 0x00e5ff, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 12);
+
+    const outerRune = this.scene.add
+      .circle(worldX, worldY, 9 * s, 0xe040fb, 0.35)
+      .setStrokeStyle(3.4 * s, 0xe040fb, 0.96)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(23);
+    const innerRune = this.scene.add
+      .circle(worldX, worldY, 26 * s)
+      .setStrokeStyle(2.4 * s, 0x80d8ff, 0.9)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(23);
+
+    this.scene.tweens.add({
+      targets: outerRune,
+      scale: 3.1,
+      alpha: 0,
+      duration: 280,
+      ease: 'Cubic.easeOut',
+      onComplete: () => outerRune.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: innerRune,
+      scale: 0.4,
+      alpha: 0,
+      duration: 240,
+      ease: 'Quad.easeIn',
+      onComplete: () => innerRune.destroy(),
+    });
+    this.addTrauma(0.2);
+  }
+
+  emitWarpTeleport(
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+    blastRadius: number,
+  ): void {
+    const s = this.scaleRatio;
+    this.scorchStamp.setRotation(Math.random() * Math.PI * 2);
+    this.scorchStamp.setScale(s * 0.85);
+    this.floorDecalRT.draw(
+      this.scorchStamp,
+      fromX - this.arenaOriginX,
+      fromY - this.arenaOriginY,
+    );
+    this.scorchStamp.setScale(s);
+
+    this.starEmitter.setParticleTint([0xe040fb, 0x80d8ff, 0xffffff]);
+    this.starEmitter.emitParticleAt(fromX, fromY, 24);
+    this.starEmitter.emitParticleAt(toX, toY, 18);
+    this.sparkEmitter.setParticleTint([0xea80fc, 0x00e5ff, 0xffffff]);
+    this.sparkEmitter.emitParticleAt(fromX, fromY, 26);
+    this.sparkEmitter.emitParticleAt(toX, toY, 16);
+    this.shardEmitter.setParticleTint([0xaa00ff, 0xe040fb, 0x80d8ff]);
+    this.shardEmitter.emitParticleAt(fromX, fromY, 14);
+
+    // 1. Departure Spatial Rift Tear + Dual Shockwave Rings
+    const riftCore = this.scene.add
+      .circle(fromX, fromY, blastRadius * 0.34, 0xffffff, 0.96)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(25);
+    const riftWave = this.scene.add
+      .circle(fromX, fromY, blastRadius * 0.22, 0xaa00ff, 0.45)
+      .setStrokeStyle(4.8 * s, 0xe040fb, 0.98)
+      .setDepth(24);
+    const cyanWave = this.scene.add
+      .circle(fromX, fromY, blastRadius * 0.14)
+      .setStrokeStyle(3.0 * s, 0x80d8ff, 0.96)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(25);
+
+    const riftStar = this.scene.add
+      .graphics()
+      .setPosition(fromX, fromY)
+      .setScale(0.32)
+      .setDepth(25)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    riftStar.lineStyle(2.8 * s, 0xea80fc, 0.95);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const r = blastRadius * (i % 2 === 0 ? 1.04 : 0.66);
+      riftStar.lineBetween(0, 0, Math.cos(a) * r, Math.sin(a) * r);
+    }
+
+    // 2. Arrival Dimensional Portal Flash
+    const arriveFlash = this.scene.add
+      .circle(toX, toY, 16 * s, 0xffffff, 0.94)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(25);
+    const arriveRing = this.scene.add
+      .circle(toX, toY, 34 * s)
+      .setStrokeStyle(4.0 * s, 0x80d8ff, 0.98)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(25);
+
+    // 3. Multi-strand Jagged Chrono-Lightning Bridge from Departure -> Arrival!
+    const streak = this.scene.add.graphics().setDepth(24).setBlendMode(Phaser.BlendModes.ADD);
+    const dx = toX - fromX;
+    const dy = toY - fromY;
+    const dist = Math.hypot(dx, dy) || 1;
+    const nx = -dy / dist;
+    const ny = dx / dist;
+    const steps = Math.max(5, Math.min(18, Math.round(dist / (28 * s))));
+    const pts: Array<{ x: number; y: number }> = [{ x: fromX, y: fromY }];
+    for (let i = 1; i < steps; i++) {
+      const f = i / steps;
+      const offset = (Math.random() - 0.5) * 24 * s;
+      pts.push({
+        x: fromX + dx * f + nx * offset,
+        y: fromY + dy * f + ny * offset,
+      });
+    }
+    pts.push({ x: toX, y: toY });
+
+    for (const [width, col, alpha] of [
+      [11 * s, 0xaa00ff, 0.44],
+      [5 * s, 0xe040fb, 0.88],
+      [2.2 * s, 0x80d8ff, 0.98],
+    ] as const) {
+      streak.lineStyle(width, col, alpha);
+      streak.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        if (i === 0) streak.moveTo(pts[i].x, pts[i].y);
+        else streak.lineTo(pts[i].x, pts[i].y);
+      }
+      streak.strokePath();
+    }
+
+    this.scene.tweens.add({
+      targets: riftCore,
+      scale: 2.5,
+      alpha: 0,
+      duration: 190,
+      ease: 'Quad.easeOut',
+      onComplete: () => riftCore.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: [riftWave, cyanWave],
+      radius: blastRadius,
+      alpha: 0,
+      duration: 320,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        riftWave.destroy();
+        cyanWave.destroy();
+      },
+    });
+    this.scene.tweens.add({
+      targets: riftStar,
+      scale: 1.05,
+      rotation: -0.35,
+      alpha: 0,
+      duration: 300,
+      ease: 'Cubic.easeOut',
+      onComplete: () => riftStar.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: arriveFlash,
+      scale: 2.6,
+      alpha: 0,
+      duration: 210,
+      ease: 'Cubic.easeOut',
+      onComplete: () => arriveFlash.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: arriveRing,
+      scale: 0.3,
+      alpha: 0,
+      duration: 250,
+      ease: 'Cubic.easeIn',
+      onComplete: () => arriveRing.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: streak,
+      alpha: 0,
+      duration: 260,
+      ease: 'Quad.easeOut',
+      onComplete: () => streak.destroy(),
+    });
+    this.addTrauma(0.74);
+  }
+
   addTrauma(amount: number): void {
     if (!settingsManager.getSettings().screenShake) return;
     this.trauma = Math.min(1, this.trauma + amount);
@@ -1136,10 +1773,11 @@ export class EffectsSystem {
 
   update(dt: number): void {
     const cam = this.scene.cameras.main;
+    const baseScrollX = mobileOrientationManager.getViewLeft();
     if (!settingsManager.getSettings().screenShake || this.trauma <= 0.001) {
       if (this.trauma !== 0) {
         this.trauma = 0;
-        cam.setScroll(0, 0);
+        cam.setScroll(baseScrollX, 0);
       }
       return;
     }
@@ -1150,11 +1788,11 @@ export class EffectsSystem {
     const maxPx = 8.0;
     const ox = Math.sin(this.shakeClock * 1.7) * maxPx * shake;
     const oy = Math.cos(this.shakeClock * 2.3) * maxPx * shake;
-    cam.setScroll(ox, oy);
+    cam.setScroll(baseScrollX + ox, oy);
 
     if (this.trauma <= 0.001) {
       this.trauma = 0;
-      cam.setScroll(0, 0);
+      cam.setScroll(baseScrollX, 0);
     }
   }
 

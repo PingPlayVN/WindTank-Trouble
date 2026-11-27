@@ -3,10 +3,13 @@ import type { TntBarrelState } from './BattleModeSim';
 import { sweepCircleAgainstWall } from './CollisionSystem';
 import { getAccessibleNeighbors, type SeededRng } from './MazeSystem';
 import {
+  computeScatterAngles,
   wrapAngleRad,
+  type CryoZoneState,
   type GroundSpikeZone,
   type MysteryCrateState,
   type ProximityMineState,
+  type WarpBeaconState,
 } from './PowerUpSim';
 import type {
   AIDifficulty,
@@ -96,9 +99,13 @@ export interface AISlotMemory {
   fireCooldownTimer: number;
   cachedAimAngle: number | null;
   aimHoldTimer: number;
+  gatlingSuppressTimer: number;
+  mineClearTimer: number;
+  homingRetreatTimer: number;
   stuckTimer: number;
   unstuckTimer: number;
-  unstuckTurnSign: 1 | -1;
+  unstuckTargetAngle: number | null;
+  unstuckUseForward: boolean;
   lastProgressX: number;
   lastProgressY: number;
   wanderCell: GridCell | null;
@@ -111,9 +118,13 @@ export function createAISlotMemory(playerIndex: PlayerIndex): AISlotMemory {
     fireCooldownTimer: 0,
     cachedAimAngle: null,
     aimHoldTimer: 0,
+    gatlingSuppressTimer: 0,
+    mineClearTimer: 0,
+    homingRetreatTimer: 0,
     stuckTimer: 0,
     unstuckTimer: 0,
-    unstuckTurnSign: playerIndex % 2 === 0 ? 1 : -1,
+    unstuckTargetAngle: null,
+    unstuckUseForward: false,
     lastProgressX: 0,
     lastProgressY: 0,
     wanderCell: null,
@@ -314,7 +325,6 @@ export function traceBallisticShot(
         }
       }
 
-      // Shell terminates on barrel without hitting an enemy
       return {
         hitsEnemy: false,
         selfHitRisk: false,
@@ -429,6 +439,89 @@ function wallClearanceInDirection(
   return minT * maxProbeDist;
 }
 
+function simulateBallisticEndpoint(
+  startX: number,
+  startY: number,
+  angle: number,
+  speed: number,
+  durationSec: number,
+  bulletRadius: number,
+  walls: readonly WallRect[],
+  maxBounces = 14,
+): { x: number; y: number; bounces: number } {
+  let curX = startX;
+  let curY = startY;
+  let ux = Math.cos(angle);
+  let uy = Math.sin(angle);
+  let remainingDist = speed * durationSec;
+  let bounces = 0;
+
+  for (let b = 0; b <= maxBounces && remainingDist > 1; b++) {
+    let earliestWall: { t: number; nx: number; ny: number } | null = null;
+    const dx = ux * remainingDist;
+    const dy = uy * remainingDist;
+    for (let w = 0; w < walls.length; w++) {
+      const hit = sweepCircleAgainstWall(curX, curY, dx, dy, bulletRadius, walls[w]);
+      if (hit && (!earliestWall || hit.t < earliestWall.t)) {
+        earliestWall = hit;
+      }
+    }
+    if (!earliestWall || b === maxBounces) {
+      curX += ux * remainingDist;
+      curY += uy * remainingDist;
+      break;
+    }
+    const segLen = earliestWall.t * remainingDist;
+    curX += ux * segLen + earliestWall.nx * 0.4;
+    curY += uy * segLen + earliestWall.ny * 0.4;
+    const dot = ux * earliestWall.nx + uy * earliestWall.ny;
+    ux -= 2 * dot * earliestWall.nx;
+    uy -= 2 * dot * earliestWall.ny;
+    const norm = Math.hypot(ux, uy) || 1;
+    ux /= norm;
+    uy /= norm;
+    remainingDist -= segLen;
+    bounces++;
+  }
+
+  return { x: curX, y: curY, bounces };
+}
+
+function isOuterBoundaryWallHit(
+  x0: number,
+  y0: number,
+  angle: number,
+  maxDist: number,
+  radius: number,
+  arena: BuiltArenaLayout,
+): boolean {
+  const dx = Math.cos(angle) * maxDist;
+  const dy = Math.sin(angle) * maxDist;
+  let earliestWall: WallRect | null = null;
+  let earliestT = 1.01;
+  for (let i = 0; i < arena.walls.length; i++) {
+    const w = arena.walls[i];
+    const hit = sweepCircleAgainstWall(x0, y0, dx, dy, radius, w);
+    if (hit && hit.t < earliestT) {
+      earliestT = hit.t;
+      earliestWall = w;
+    }
+  }
+  if (!earliestWall) return false;
+  const eps = arena.wallThickness + 2;
+  const onLeftBorder =
+    Math.abs(earliestWall.x - arena.originX) <= eps && earliestWall.height > earliestWall.width;
+  const onRightBorder =
+    Math.abs(earliestWall.x - (arena.originX + arena.width)) <= eps &&
+    earliestWall.height > earliestWall.width;
+  const onTopBorder =
+    Math.abs(earliestWall.y - arena.originY) <= eps && earliestWall.width > earliestWall.height;
+  const onBottomBorder =
+    Math.abs(earliestWall.y - (arena.originY + arena.height)) <= eps &&
+    earliestWall.width > earliestWall.height;
+  return onLeftBorder || onRightBorder || onTopBorder || onBottomBorder;
+}
+
 export interface DangerAssessment {
   threatLevel: number;
   dodgeX: number;
@@ -487,6 +580,20 @@ export function evaluateDangerVector(
     const toSelfX = self.x - px;
     const toSelfY = self.y - py;
     const along = toSelfX * ux + toSelfY * uy;
+
+    // Detect incoming physical bullets inside the tank's front flame-incineration cone (`+-44 deg`, `< 168px`)
+    const toBulletDist = Math.hypot(px - self.x, py - self.y) || 1;
+    if (along > 0 && toBulletDist < 168 * scale) {
+      const dotFront =
+        ((px - self.x) / toBulletDist) * selfFwdX + ((py - self.y) / toBulletDist) * selfFwdY;
+      if (
+        dotFront > 0.72 &&
+        !hasWallOcclusion(self.x, self.y, px, py, pRadius * 0.8, arena.walls)
+      ) {
+        bulletInFrontCone = true;
+      }
+    }
+
     if (along < -self.radius || along > speed * lookaheadSec) return;
 
     const tti = Math.max(0.02, along / speed);
@@ -503,14 +610,8 @@ export function evaluateDangerVector(
       return;
     }
 
-    if (tti < imminentBulletTimeSec && perpDist <= self.radius + pRadius + 8 * scale) {
+    if (tti < imminentBulletTimeSec && perpDist <= self.radius + pRadius + 10 * scale) {
       imminentBulletTimeSec = tti;
-      const toBulletDist = Math.hypot(px - self.x, py - self.y) || 1;
-      const dotFront =
-        ((px - self.x) / toBulletDist) * selfFwdX + ((py - self.y) / toBulletDist) * selfFwdY;
-      if (dotFront > 0.75 && toBulletDist < 120 * scale) {
-        bulletInFrontCone = true;
-      }
     }
 
     const n1x = -uy;
@@ -577,6 +678,74 @@ export function evaluateDangerVector(
         }
       }
     }
+
+    // Homing Missile maze-corridor awareness: steer through open doorways AWAY from impending/active seeker lock!
+    if (p.variant === 'homing_missile') {
+      const remBallistic = Math.max(0, POWERUP_CONFIG.homingBallisticSec - p.age);
+      const lockPt =
+        remBallistic > 0.03
+          ? simulateBallisticEndpoint(
+              p.x,
+              p.y,
+              Math.atan2(p.vy, p.vx),
+              Math.max(10, Math.hypot(p.vx, p.vy)),
+              remBallistic,
+              p.radius,
+              arena.walls,
+              8,
+            )
+          : { x: p.x, y: p.y, bounces: 0 };
+
+      const mCell = worldToGridCell(lockPt.x, lockPt.y, arena);
+      const mField = computeMazeDistanceField(mCell, [], [], arena, [], false);
+      const selfCellNow = worldToGridCell(self.x, self.y, arena);
+      const selfIdxNow = selfCellNow.row * mField.cols + selfCellNow.col;
+      const selfStepsFromM = mField.dist[selfIdxNow];
+
+      let minOtherStepsFromM = 99;
+      for (const t of tanks) {
+        if (!t.alive || t.index === self.index) continue;
+        const tc = worldToGridCell(t.x, t.y, arena);
+        const d = mField.dist[tc.row * mField.cols + tc.col];
+        if (d >= 0 && d < minOtherStepsFromM) minOtherStepsFromM = d;
+      }
+
+      // If we are dangerously close to being the nearest maze target, flee through the doorway that increases BFS distance!
+      if (
+        selfStepsFromM >= 0 &&
+        (selfStepsFromM <= 3 || selfStepsFromM <= minOtherStepsFromM + 1)
+      ) {
+        let bestEscapeDoor: { x: number; y: number } | null = null;
+        let bestEscapeScore = selfStepsFromM * arena.cellSize;
+        for (const nb of getAccessibleNeighbors(arena.grid, selfCellNow)) {
+          const nbSteps = mField.dist[nb.row * mField.cols + nb.col];
+          if (nbSteps < 0) continue;
+          const door = doorwayWorldPoint(selfCellNow, nb, arena);
+          const score =
+            nbSteps * arena.cellSize + Math.hypot(door.x - lockPt.x, door.y - lockPt.y) * 0.25;
+          if (score > bestEscapeScore) {
+            bestEscapeScore = score;
+            bestEscapeDoor = door;
+          }
+        }
+        if (bestEscapeDoor) {
+          const edx = bestEscapeDoor.x - self.x;
+          const edy = bestEscapeDoor.y - self.y;
+          const edLen = Math.hypot(edx, edy) || 1;
+          const urgency = p.age >= POWERUP_CONFIG.homingBallisticSec ? 2.6 : 1.7;
+          dodgeX += (edx / edLen) * urgency;
+          dodgeY += (edy / edLen) * urgency;
+          threatLevel = Math.max(threatLevel, urgency * 0.45);
+        } else {
+          const hmDx = self.x - lockPt.x;
+          const hmDy = self.y - lockPt.y;
+          const hmDist = Math.hypot(hmDx, hmDy) || 1;
+          dodgeX += (hmDx / hmDist) * 2.0;
+          dodgeY += (hmDy / hmDist) * 2.0;
+          threatLevel = Math.max(threatLevel, 0.9);
+        }
+      }
+    }
   }
 
   // Ground Spike Zones repulsion
@@ -612,7 +781,7 @@ export function evaluateDangerVector(
     }
   }
 
-  // Fusing or Bullet-Threatened TNT Barrels repulsion!
+  // Fusing or Bullet-Threatened TNT Barrels repulsion
   for (const br of barrels) {
     if (!br.active) continue;
     const dx = self.x - br.x;
@@ -788,16 +957,17 @@ function resolveWaypointFromField(
   field: MazeDistanceField,
   fallbackField: MazeDistanceField | null,
   arena: BuiltArenaLayout,
-): { x: number; y: number; cellSteps: number } {
+): { x: number; y: number; cellSteps: number; firstDoorway: { x: number; y: number } | null } {
   const startCell = worldToGridCell(self.x, self.y, arena);
   const goalCell = worldToGridCell(goalX, goalY, arena);
-  const clearance = self.radius * 0.88;
+  // Use clearance strictly WIDER than tank hull (`1.18x`) so tanks NEVER clip doorway wall corners!
+  const safeHullClearance = self.radius * 1.18;
 
   if (
     (startCell.col === goalCell.col && startCell.row === goalCell.row) ||
-    !hasWallOcclusion(self.x, self.y, goalX, goalY, clearance, arena.walls)
+    !hasWallOcclusion(self.x, self.y, goalX, goalY, self.radius * 1.24, arena.walls)
   ) {
-    return { x: goalX, y: goalY, cellSteps: 0 };
+    return { x: goalX, y: goalY, cellSteps: 0, firstDoorway: null };
   }
 
   const goalIdx = goalCell.row * field.cols + goalCell.col;
@@ -806,7 +976,7 @@ function resolveWaypointFromField(
     activeField = fallbackField;
   }
   if (activeField.dist[goalIdx] < 0) {
-    return { x: goalX, y: goalY, cellSteps: 99 };
+    return { x: goalX, y: goalY, cellSteps: 99, firstDoorway: null };
   }
 
   const pathIndices: number[] = [];
@@ -834,15 +1004,26 @@ function resolveWaypointFromField(
   }
   waypoints.push({ x: goalX, y: goalY });
 
+  const firstDoorway = waypoints[0] ?? null;
   let aim = waypoints[0];
-  for (let i = Math.min(waypoints.length - 1, 7); i >= 0; i--) {
-    if (!hasWallOcclusion(self.x, self.y, waypoints[i].x, waypoints[i].y, clearance, arena.walls)) {
+  // Tight 3-node corridor lookahead (`doorway -> cellCenter -> nextDoorway`) keeps tank centered in hallways!
+  for (let i = Math.min(waypoints.length - 1, 2); i >= 0; i--) {
+    if (
+      !hasWallOcclusion(
+        self.x,
+        self.y,
+        waypoints[i].x,
+        waypoints[i].y,
+        safeHullClearance,
+        arena.walls,
+      )
+    ) {
       aim = waypoints[i];
       break;
     }
   }
 
-  return { x: aim.x, y: aim.y, cellSteps: Math.max(0, cells.length - 1) };
+  return { x: aim.x, y: aim.y, cellSteps: Math.max(0, cells.length - 1), firstDoorway };
 }
 
 export function computeMazeNavigationPoint(
@@ -863,7 +1044,8 @@ export function computeMazeNavigationPoint(
       ? computeMazeDistanceField(startCell, spikeZones, mines, arena, barrels, false)
       : null;
 
-  return resolveWaypointFromField(self, goalX, goalY, safeField, fallbackField, arena);
+  const wp = resolveWaypointFromField(self, goalX, goalY, safeField, fallbackField, arena);
+  return { x: wp.x, y: wp.y, cellSteps: wp.cellSteps };
 }
 
 export interface AIWorldContext {
@@ -875,26 +1057,38 @@ export interface AIWorldContext {
   selfSkillAmmo: number;
   selfAmmo: number;
   selfShielded: boolean;
+  selfPhantom?: boolean;
+  selfWarpBeaconPlaced?: boolean;
+  hasActiveEmpOrb?: boolean;
   selfReaperSweeping: boolean;
   selfChargingLaser: boolean;
   canFire: boolean;
   tanks: readonly TankKinematics[];
   shieldedTankIndices: ReadonlySet<PlayerIndex>;
   reaperTankIndices: ReadonlySet<PlayerIndex>;
+  laserChargingTankIndices?: ReadonlySet<PlayerIndex>;
   projectiles: readonly ProjectileKinematics[];
   crates: readonly MysteryCrateState[];
   spikeZones: readonly GroundSpikeZone[];
   mines: readonly ProximityMineState[];
+  cryoZones?: readonly CryoZoneState[];
+  warpBeacons?: readonly WarpBeaconState[];
   barrels?: readonly TntBarrelState[];
   arena: BuiltArenaLayout;
 }
 
+/**
+ * Nose-first corridor driving with front wall-whisker centering so tanks NEVER lock into
+ * tail-first reverse driving during navigation! `allowEmergencyReverse` is ONLY enabled during
+ * acute bullet/explosion evasion when backing up has verified rear wall clearance.
+ */
 function driveTankTowardVector(
   self: TankKinematics,
   desiredX: number,
   desiredY: number,
   turnDeadbandRad: number,
-  allowReverseDodge: boolean,
+  allowEmergencyReverse: boolean,
+  arena?: BuiltArenaLayout,
 ): { forward: boolean; backward: boolean; left: boolean; right: boolean } {
   const mag = Math.hypot(desiredX, desiredY);
   if (mag < 1e-4) {
@@ -902,21 +1096,63 @@ function driveTankTowardVector(
   }
 
   const targetAngle = Math.atan2(desiredY, desiredX);
-  const fwdDiff = wrapAngleRad(targetAngle - self.angle);
+  let fwdDiff = wrapAngleRad(targetAngle - self.angle);
 
-  if (allowReverseDodge && Math.abs(fwdDiff) > (Math.PI * 2) / 3) {
-    const revAngle = wrapAngleRad(targetAngle + Math.PI);
-    const revDiff = wrapAngleRad(revAngle - self.angle);
-    return {
-      forward: false,
-      backward: true,
-      left: revDiff < -turnDeadbandRad,
-      right: revDiff > turnDeadbandRad,
-    };
+  if (allowEmergencyReverse && Math.abs(fwdDiff) > (Math.PI * 2) / 3) {
+    const rearClear = arena
+      ? wallClearanceInDirection(
+          self.x,
+          self.y,
+          -Math.cos(self.angle),
+          -Math.sin(self.angle),
+          self.radius * 0.9,
+          self.radius * 2.4,
+          arena.walls,
+        )
+      : 999;
+    if (rearClear > self.radius * 1.35) {
+      const revAngle = wrapAngleRad(targetAngle + Math.PI);
+      const revDiff = wrapAngleRad(revAngle - self.angle);
+      return {
+        forward: false,
+        backward: true,
+        left: revDiff < -turnDeadbandRad,
+        right: revDiff > turnDeadbandRad,
+      };
+    }
+  }
+
+  const wantForward = Math.abs(fwdDiff) < Math.PI * 0.42;
+
+  // Front ±36° wall-whisker feelers gently nudge steering away from doorway wall corners while moving forward!
+  if (wantForward && arena) {
+    const whiskerLen = self.radius * 1.72;
+    const leftWhisker = wallClearanceInDirection(
+      self.x,
+      self.y,
+      Math.cos(self.angle - 0.62),
+      Math.sin(self.angle - 0.62),
+      self.radius * 0.55,
+      whiskerLen,
+      arena.walls,
+    );
+    const rightWhisker = wallClearanceInDirection(
+      self.x,
+      self.y,
+      Math.cos(self.angle + 0.62),
+      Math.sin(self.angle + 0.62),
+      self.radius * 0.55,
+      whiskerLen,
+      arena.walls,
+    );
+    if (leftWhisker < whiskerLen * 0.85 || rightWhisker < whiskerLen * 0.85) {
+      const nudge = ((rightWhisker - leftWhisker) / whiskerLen) * 0.28;
+      fwdDiff += nudge;
+    }
   }
 
   return {
-    forward: Math.abs(fwdDiff) < Math.PI * 0.48,
+    forward: wantForward,
     backward: false,
     left: fwdDiff < -turnDeadbandRad,
     right: fwdDiff > turnDeadbandRad,
@@ -926,11 +1162,11 @@ function driveTankTowardVector(
 /**
  * Prioritized 6-branch tactical AI Behavior Tree producing standard `PlayerInputState` commands:
  * 1. Unified Grid BFS Sensor (true corridor distances across large 22×13 & 24×14 mazes)
- * 2. Emergency Survival Reflex (Aegis Shield + Urgent Bullet/Hazard/TNT Evasion)
+ * 2. Emergency Survival Reflex (Aegis Shield vs Bullets/Laser/Reaper + Urgent Evasion)
  * 3. Maze-Path Target & Crate Objective Selector
- * 4. Weapon Mastery & Opportunistic TNT Trap Detonation
- * 5. Clearance-Guided Corner Unstuck Recovery
- * 6. Tactic Spacing & Corridor Navigation (`balanced`, `rusher`, `sniper`, `camper`)
+ * 4. Dedicated 10-Skill Weapon Mastery & Opportunistic TNT Trap Detonation
+ * 5. Doorway-Guided Short Unstuck Recovery
+ * 6. 100% Nose-First Corridor Navigation & Tactic Spacing (`balanced`, `rusher`, `sniper`, `camper`)
  */
 export function computeBotDecision(
   ctx: AIWorldContext,
@@ -960,6 +1196,15 @@ export function computeBotDecision(
   if (mem.aimHoldTimer > 0) {
     mem.aimHoldTimer = Math.max(0, mem.aimHoldTimer - dt);
     if (mem.aimHoldTimer <= 0) mem.cachedAimAngle = null;
+  }
+  if (mem.gatlingSuppressTimer > 0) {
+    mem.gatlingSuppressTimer = Math.max(0, mem.gatlingSuppressTimer - dt);
+  }
+  if (mem.mineClearTimer > 0) {
+    mem.mineClearTimer = Math.max(0, mem.mineClearTimer - dt);
+  }
+  if (mem.homingRetreatTimer > 0) {
+    mem.homingRetreatTimer = Math.max(0, mem.homingRetreatTimer - dt);
   }
 
   const profile = AI_DIFFICULTY_PROFILES[difficulty];
@@ -1020,10 +1265,66 @@ export function computeBotDecision(
     barrels,
   );
 
-  // Branch 2: Defensive Aegis Shield Reflex (only pops on imminent projectile/blast OR unoccluded close enemy!)
+  // Branch 2: Defensive Aegis Shield / Phantom / Warp Recall / Remote EMP Detonation Reflexes!
+  if (ctx.hasActiveEmpOrb) {
+    const empOrb = ctx.projectiles.find(
+      (p) => p.active && p.ownerIndex === self.index && p.variant === 'emp_orb' && p.age >= 0.08,
+    );
+    if (empOrb) {
+      const blastR = arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius * 0.94;
+      const catchesEnemy = enemies.some(
+        (e) => Math.hypot(e.x - empOrb.x, e.y - empOrb.y) <= blastR,
+      );
+      if (catchesEnemy) {
+        return {
+          ...idle,
+          firePressed: true,
+          fireHeld: false,
+          fireBufferedUntil: mem.clock + 0.12,
+        };
+      }
+    }
+  }
+
+  // Enemy Cryo Zones & Enemy Warp Beacons mild avoidance
+  if (difficulty !== 'easy') {
+    for (const cz of ctx.cryoZones ?? []) {
+      if (cz.age >= cz.duration || cz.ownerIndex === self.index) continue;
+      const dx = self.x - cz.x;
+      const dy = self.y - cz.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const avoidR = cz.radius + self.radius + 10 * scale;
+      if (d < avoidR) {
+        const push = ((avoidR - d) / avoidR) * 1.4;
+        danger.dodgeX += (dx / d) * push;
+        danger.dodgeY += (dy / d) * push;
+      }
+    }
+  }
+
+  if (ctx.selfSkill === 'warp' && ctx.selfWarpBeaconPlaced && ctx.canFire) {
+    const riftKillReady = enemies.some(
+      (e) =>
+        !ctx.shieldedTankIndices.has(e.index) &&
+        Math.hypot(e.x - self.x, e.y - self.y) <= POWERUP_CONFIG.warpBlastRadius * scale * 0.95,
+    );
+    const emergencyEscape = danger.imminentBulletTimeSec < 0.52 || danger.threatLevel >= 0.92;
+    if (riftKillReady || emergencyEscape) {
+      return {
+        ...idle,
+        firePressed: true,
+        fireHeld: false,
+        fireBufferedUntil: mem.clock + 0.12,
+      };
+    }
+  }
+
   if (ctx.selfSkill === 'shield' && ctx.canFire) {
     let closeUnoccludedEnemy = false;
-    const proxThreshold = arena.cellSize * (difficulty === 'easy' ? 1.2 : 1.65);
+    let enemySuperThreat = false;
+    const proxThreshold = arena.cellSize * (difficulty === 'easy' ? 1.25 : 1.75);
+    const reaperThreatR = arena.cellSize * (POWERUP_CONFIG.reaperBladeCellsLength + 0.55);
+
     for (const e of enemies) {
       const d = Math.hypot(e.x - self.x, e.y - self.y);
       if (
@@ -1031,11 +1332,22 @@ export function computeBotDecision(
         !hasWallOcclusion(self.x, self.y, e.x, e.y, bulletRadius, arena.walls)
       ) {
         closeUnoccludedEnemy = true;
-        break;
+      }
+      if (difficulty !== 'easy') {
+        if (ctx.reaperTankIndices.has(e.index) && d < reaperThreatR) {
+          enemySuperThreat = true;
+        }
+        if (ctx.laserChargingTankIndices?.has(e.index)) {
+          const beamAng = Math.atan2(self.y - e.y, self.x - e.x);
+          const coneRad = ((POWERUP_CONFIG.laserAutoAimConeDeg + 5) * Math.PI) / 180;
+          if (Math.abs(wrapAngleRad(beamAng - e.angle)) <= coneRad) {
+            enemySuperThreat = true;
+          }
+        }
       }
     }
 
-    if (danger.imminentBulletTimeSec < 0.48 || closeUnoccludedEnemy) {
+    if (danger.imminentBulletTimeSec < 0.52 || closeUnoccludedEnemy || enemySuperThreat) {
       return {
         ...idle,
         firePressed: true,
@@ -1055,7 +1367,9 @@ export function computeBotDecision(
     const pathMetric =
       ctx.selfSkill === 'laser' || ctx.selfSkill === 'reaper'
         ? euclid
-        : steps * arena.cellSize * 0.78 + euclid * 0.22;
+        : ctx.selfSkill === 'drill' && euclid < arena.cellSize * 5.5
+          ? euclid * 0.65 + steps * arena.cellSize * 0.35
+          : steps * arena.cellSize * 0.78 + euclid * 0.22;
     const shieldPenalty = ctx.shieldedTankIndices.has(e.index) ? arena.cellSize * 5 : 0;
     const score = pathMetric + shieldPenalty;
     if (score < bestEnemyScore) {
@@ -1065,52 +1379,97 @@ export function computeBotDecision(
     }
   }
   const distToEnemy = Math.hypot(primaryEnemy.x - self.x, primaryEnemy.y - self.y);
+  const primaryNavPreview = resolveWaypointFromField(
+    self,
+    primaryEnemy.x,
+    primaryEnemy.y,
+    safeField,
+    rawField,
+    arena,
+  );
 
-  // Branch 4: Specialized Weapon Mastery & Opportunistic TNT Detonation
+  // Branch 4: Specialized 10-Skill Weapon Mastery & Opportunistic TNT Detonation
   let wantFirePressed = false;
   let wantFireHeld = false;
   let desiredAimAngle: number | null = null;
+  const enemyShielded = ctx.shieldedTankIndices.has(primaryEnemy.index);
 
   if (ctx.selfSkill === 'laser') {
-    const angleToEnemy = Math.atan2(primaryEnemy.y - muzzleY, primaryEnemy.x - muzzleX);
-    desiredAimAngle = angleToEnemy;
-    const coneLimit = ((POWERUP_CONFIG.laserAutoAimConeDeg - 2) * Math.PI) / 180;
-    const diff = Math.abs(wrapAngleRad(angleToEnemy - self.angle));
-    const safeToFreeze = danger.imminentBulletTimeSec > 0.9;
-    if (
-      ctx.canFire &&
-      diff <= coneLimit &&
-      safeToFreeze &&
-      !ctx.shieldedTankIndices.has(primaryEnemy.index)
-    ) {
-      wantFirePressed = true;
+    // 1. LASER SIÊU CẤP: Cross-map wall-piercing beam with +-15 deg parabolic auto-aim (`2.0s` immobile charge!)
+    if (!enemyShielded) {
+      const angleToEnemy = Math.atan2(primaryEnemy.y - muzzleY, primaryEnemy.x - muzzleX);
+      const wallsBetween = countWallIntersections(
+        muzzleX,
+        muzzleY,
+        primaryEnemy.x,
+        primaryEnemy.y,
+        bulletRadius,
+        arena.walls,
+      );
+      const safeToFreeze =
+        danger.imminentBulletTimeSec > 1.15 &&
+        (wallsBetween >= 1 || distToEnemy > arena.cellSize * 2.2 || difficulty === 'easy');
+
+      if (safeToFreeze && danger.threatLevel < 0.4) {
+        desiredAimAngle = angleToEnemy;
+        const coneLimit = ((POWERUP_CONFIG.laserAutoAimConeDeg - 2.5) * Math.PI) / 180;
+        const diff = Math.abs(wrapAngleRad(angleToEnemy - self.angle));
+        if (ctx.canFire && diff <= coneLimit) {
+          wantFirePressed = true;
+        }
+      }
     }
   } else if (ctx.selfSkill === 'reaper') {
-    const triggerRange = arena.cellSize * (POWERUP_CONFIG.reaperBladeCellsLength * 0.92);
+    // 2. LƯỠI HÁI TỬ THẦN: Rush deep inside the `4.7-cell` wall-piercing scythe radius before triggering `1.16s` windup!
+    const wallsBetween = countWallIntersections(
+      self.x,
+      self.y,
+      primaryEnemy.x,
+      primaryEnemy.y,
+      bulletRadius,
+      arena.walls,
+    );
+    const maxSafeTriggerCells =
+      wallsBetween >= 1
+        ? POWERUP_CONFIG.reaperBladeCellsLength * 0.78
+        : POWERUP_CONFIG.reaperBladeCellsLength * 0.66;
+    const safeWindup = wallsBetween >= 1 || danger.imminentBulletTimeSec > 1.05 || ctx.selfShielded;
     if (
       ctx.canFire &&
-      distToEnemy <= triggerRange &&
-      !ctx.shieldedTankIndices.has(primaryEnemy.index)
+      !enemyShielded &&
+      safeWindup &&
+      distToEnemy <= arena.cellSize * maxSafeTriggerCells
     ) {
       wantFirePressed = true;
     }
   } else if (ctx.selfSkill === 'mine') {
+    // 3. MÌN BÓNG MA: Plant stealth mines at corridor intersections/choke-points (never trap self in a 1-exit dead-end!)
+    const neighbors = getAccessibleNeighbors(arena.grid, selfCell);
+    const isNotDeadEnd = neighbors.length >= 2;
     const alreadyMinedHere = ctx.mines.some(
-      (m) => m.age < m.duration && Math.hypot(m.x - self.x, m.y - self.y) < arena.cellSize * 1.15,
+      (m) => m.age < m.duration && Math.hypot(m.x - self.x, m.y - self.y) < arena.cellSize * 1.2,
     );
+    const tacticalSpot =
+      primaryEnemySteps <= 4 ||
+      (neighbors.length >= 3 && primaryEnemySteps <= 7) ||
+      (neighbors.length === 2 && primaryEnemySteps <= 5 && rng.nextFloat() < 0.18);
+
     if (
       ctx.canFire &&
+      isNotDeadEnd &&
       !alreadyMinedHere &&
       mem.fireCooldownTimer <= 0 &&
-      (primaryEnemySteps <= 3 || rng.nextFloat() < 0.025)
+      tacticalSpot
     ) {
       wantFirePressed = true;
-      mem.fireCooldownTimer = 0.95;
+      mem.fireCooldownTimer = 1.05;
+      mem.mineClearTimer = 0.65;
     }
   } else if (ctx.selfSkill === 'flame') {
-    const flameRange = arena.cellSize * 4.75;
+    // 4. HỎA LONG PHUN LỬA: Direct inferno + 90-deg corner-sliding pre-fire + incoming-bullet incineration!
+    const flameRange = arena.cellSize * 4.85;
     const angleToEnemy = Math.atan2(primaryEnemy.y - self.y, primaryEnemy.x - self.x);
-    const diff = Math.abs(wrapAngleRad(angleToEnemy - self.angle));
+    const diffEnemy = Math.abs(wrapAngleRad(angleToEnemy - self.angle));
     const clearSight = !hasWallOcclusion(
       self.x,
       self.y,
@@ -1119,48 +1478,445 @@ export function computeBotDecision(
       bulletRadius,
       arena.walls,
     );
+
+    let cornerSlideReady = false;
+    if (
+      !clearSight &&
+      difficulty !== 'easy' &&
+      !enemyShielded &&
+      primaryEnemySteps <= 2 &&
+      distToEnemy <= arena.cellSize * 2.45 &&
+      primaryNavPreview.firstDoorway
+    ) {
+      const doorAng = Math.atan2(
+        primaryNavPreview.firstDoorway.y - self.y,
+        primaryNavPreview.firstDoorway.x - self.x,
+      );
+      if (danger.threatLevel < 0.35) {
+        desiredAimAngle = doorAng;
+      }
+      if (Math.abs(wrapAngleRad(doorAng - self.angle)) < 0.36) {
+        cornerSlideReady = true;
+      }
+    } else if (clearSight && distToEnemy <= flameRange && !enemyShielded && danger.threatLevel < 0.35) {
+      desiredAimAngle = angleToEnemy;
+    }
+
     const selfNearBarrelInCone = barrels.some(
       (br) =>
         br.active &&
         Math.hypot(br.x - self.x, br.y - self.y) < br.blastRadius + self.radius * 1.25 &&
-        Math.abs(wrapAngleRad(Math.atan2(br.y - self.y, br.x - self.x) - self.angle)) < 0.5,
+        Math.abs(wrapAngleRad(Math.atan2(br.y - self.y, br.x - self.x) - self.angle)) < 0.55,
     );
+
     if (
       ctx.canFire &&
       !selfNearBarrelInCone &&
-      ((distToEnemy <= flameRange && diff < 0.42 && clearSight) ||
+      ((distToEnemy <= flameRange && diffEnemy < 0.46 && clearSight && !enemyShielded) ||
+        cornerSlideReady ||
         (difficulty !== 'easy' && danger.bulletInFrontCone))
     ) {
       wantFirePressed = true;
       wantFireHeld = true;
     }
   } else if (ctx.selfSkill === 'drill') {
-    const angleToEnemy = Math.atan2(primaryEnemy.y - self.y, primaryEnemy.x - self.x);
+    // 5. MŨI KHOAN ĐỊA CHẤN: Carve through 1..4 INTERIOR walls (never outer border!) to snipe or open a shortcut!
+    const drillSpeed = BASE_GAMEPLAY.projectileSpeed * POWERUP_CONFIG.drillSpeedMultiplier * scale;
+    let targetX = primaryEnemy.x;
+    let targetY = primaryEnemy.y;
+    if (profile.predictiveLead) {
+      const leadT = Math.min(0.38, distToEnemy / drillSpeed);
+      targetX += primaryEnemy.vx * leadT;
+      targetY += primaryEnemy.vy * leadT;
+    }
+    const angleToEnemy = Math.atan2(targetY - self.y, targetX - self.x);
     const wallsBetween = countWallIntersections(
       muzzleX,
       muzzleY,
+      targetX,
+      targetY,
+      bulletRadius,
+      arena.walls,
+    );
+    const hitsOuterBorder = isOuterBoundaryWallHit(
+      muzzleX,
+      muzzleY,
+      angleToEnemy,
+      arena.cellSize * 1.5,
+      bulletRadius,
+      arena,
+    );
+
+    const canDrillSnipe =
+      !enemyShielded &&
+      !hitsOuterBorder &&
+      wallsBetween <= POWERUP_CONFIG.drillWallsPerShot &&
+      distToEnemy < arena.cellSize * 7.2;
+
+    const canCarveShortcut =
+      difficulty !== 'easy' &&
+      ctx.selfSkillAmmo >= 2 &&
+      !hitsOuterBorder &&
+      primaryEnemySteps >= 8 &&
+      distToEnemy <= arena.cellSize * 4.6 &&
+      wallsBetween >= 1 &&
+      wallsBetween <= POWERUP_CONFIG.drillWallsPerShot;
+
+    if (canDrillSnipe || canCarveShortcut) {
+      desiredAimAngle = angleToEnemy;
+      const diff = Math.abs(wrapAngleRad(angleToEnemy - self.angle));
+      if (ctx.canFire && mem.fireCooldownTimer <= 0 && diff < 0.13) {
+        wantFirePressed = true;
+        mem.fireCooldownTimer = Math.max(POWERUP_CONFIG.drillCooldownSec, profile.fireIntervalSec);
+      }
+    }
+  } else if (ctx.selfSkill === 'scatter') {
+    // 6. PHÁO CHÙM HẢI TẶC: Simulate ALL 5 fan pellets (`+-17.8 deg`) for corner broadsides & zero self-ricochet!
+    const scatterSpeed =
+      BASE_GAMEPLAY.projectileSpeed * POWERUP_CONFIG.scatterSpeedMultiplier * scale;
+    const scatterR =
+      BASE_GAMEPLAY.projectileRadius * POWERUP_CONFIG.scatterRadiusMultiplier * scale;
+    const scatterBounces = Math.min(3, profile.maxBounces + (difficulty === 'easy' ? 0 : 1));
+    const scatterMaxDist = arena.cellSize * (4.5 + scatterBounces * 2.2);
+
+    const evaluateScatterVolley = (centerAng: number) => {
+      const fan = computeScatterAngles(centerAng);
+      let hits = 0;
+      let minDist = Infinity;
+      for (let i = 0; i < fan.length; i++) {
+        const a = fan[i];
+        const mx = self.x + Math.cos(a) * barrelLen;
+        const my = self.y + Math.sin(a) * barrelLen;
+        const tr = traceBallisticShot(
+          mx,
+          my,
+          a,
+          self.index,
+          ctx.tanks,
+          ctx.shieldedTankIndices,
+          arena.walls,
+          scatterBounces,
+          scatterMaxDist,
+          scatterR,
+          profile.predictiveLead ? scatterSpeed : 0,
+          barrels,
+          profile.detonateTntTraps,
+        );
+        if (tr.selfHitRisk && tr.travelDist < arena.cellSize * 3.2) {
+          return { hits: 0, safe: false, minDist: Infinity };
+        }
+        if (tr.hitsEnemy && !tr.selfHitRisk) {
+          hits++;
+          if (tr.travelDist < minDist) minDist = tr.travelDist;
+        }
+      }
+      return { hits, safe: true, minDist };
+    };
+
+    const curVolley = evaluateScatterVolley(self.angle);
+    if (curVolley.safe && curVolley.hits >= 1) {
+      if (ctx.canFire && mem.fireCooldownTimer <= 0) {
+        wantFirePressed = true;
+        mem.fireCooldownTimer = Math.max(POWERUP_CONFIG.scatterCooldownSec, profile.fireIntervalSec);
+      }
+    } else if (profile.rayScanAngles > 0) {
+      const scanCount = Math.min(28, profile.rayScanAngles);
+      let bestVolley: { angle: number; score: number } | null = null;
+      for (let k = -1; k < scanCount; k++) {
+        const ang =
+          k < 0
+            ? Math.atan2(primaryEnemy.y - self.y, primaryEnemy.x - self.x)
+            : (k / scanCount) * Math.PI * 2 - Math.PI;
+        const res = evaluateScatterVolley(ang);
+        if (res.safe && res.hits >= 1) {
+          const score = res.minDist - res.hits * 48 + Math.abs(wrapAngleRad(ang - self.angle)) * 55;
+          if (!bestVolley || score < bestVolley.score) {
+            bestVolley = { angle: ang, score };
+          }
+        }
+      }
+      if (bestVolley) {
+        mem.cachedAimAngle = bestVolley.angle;
+        mem.aimHoldTimer = 0.18;
+        desiredAimAngle = bestVolley.angle;
+      }
+    }
+  } else if (ctx.selfSkill === 'homing') {
+    // 7. ĐẠN ĐỊNH VỊ (2.5s slower ballistic bounce -> Maze-BFS Seeker!):
+    //    - Close in first if enemy is > 10 corridor steps away.
+    //    - Launch indirectly around corners / down corridors toward enemy territory where the 2.5s lock-point
+    //      advances closer to the enemy, then IMMEDIATELY peel off / retreat into opposite rooms (`homingRetreatTimer`)
+    //      so the AI never drives behind its own slower missile!
+    const hmSpeed =
+      BASE_GAMEPLAY.projectileSpeed * POWERUP_CONFIG.homingBallisticSpeedMultiplier * scale;
+    const hmR = BASE_GAMEPLAY.projectileRadius * POWERUP_CONFIG.homingRadiusMultiplier * scale;
+    const ballisticReach = hmSpeed * POWERUP_CONFIG.homingBallisticSec;
+
+    const directCheck = traceBallisticShot(
+      muzzleX,
+      muzzleY,
+      self.angle,
+      self.index,
+      ctx.tanks,
+      ctx.shieldedTankIndices,
+      arena.walls,
+      Math.min(2, profile.maxBounces),
+      ballisticReach,
+      hmR,
+      profile.predictiveLead ? hmSpeed : 0,
+      barrels,
+      profile.detonateTntTraps,
+    );
+
+    if (directCheck.hitsEnemy && !directCheck.selfHitRisk && ctx.canFire && mem.fireCooldownTimer <= 0) {
+      wantFirePressed = true;
+      mem.fireCooldownTimer = profile.fireIntervalSec;
+      mem.homingRetreatTimer = POWERUP_CONFIG.homingBallisticSec + 1.8;
+    } else if (ctx.canFire && mem.fireCooldownTimer <= 0 && primaryEnemySteps <= 10) {
+      const selfRaw = getRawField();
+      const targetEnemies = enemies.filter((e) => !ctx.shieldedTankIndices.has(e.index));
+      const candidatePool = targetEnemies.length > 0 ? targetEnemies : enemies;
+      const enemyFields = candidatePool.map((e) => {
+        const ec = worldToGridCell(e.x, e.y, arena);
+        const ef = computeMazeDistanceField(ec, [], [], arena, [], false);
+        const curStepsFromSelf = ef.dist[selfCell.row * arena.grid.cols + selfCell.col];
+        return { enemy: e, field: ef, curStepsFromSelf: curStepsFromSelf >= 0 ? curStepsFromSelf : 99 };
+      });
+
+      const candidateAngles: number[] = [self.angle];
+      if (primaryNavPreview.firstDoorway) {
+        const doorAng = Math.atan2(
+          primaryNavPreview.firstDoorway.y - self.y,
+          primaryNavPreview.firstDoorway.x - self.x,
+        );
+        candidateAngles.push(doorAng, doorAng - 0.2, doorAng + 0.2, doorAng - 0.4, doorAng + 0.4);
+      }
+      candidateAngles.push(Math.atan2(primaryEnemy.y - self.y, primaryEnemy.x - self.x));
+
+      const radialProbes = difficulty === 'easy' ? 14 : difficulty === 'normal' ? 28 : 40;
+      for (let k = 0; k < radialProbes; k++) {
+        candidateAngles.push((k / radialProbes) * Math.PI * 2 - Math.PI);
+      }
+
+      let bestLaunchAng: number | null = null;
+      let bestLaunchScore = -Infinity;
+
+      for (let i = 0; i < candidateAngles.length; i++) {
+        const ang = candidateAngles[i];
+        const mx = self.x + Math.cos(ang) * barrelLen;
+        const my = self.y + Math.sin(ang) * barrelLen;
+
+        // Only reject immediate close-wall self-ricochets (within ~3.4 cells, before AI peels off!)
+        const safetyTrace = traceBallisticShot(
+          mx,
+          my,
+          ang,
+          self.index,
+          ctx.tanks,
+          ctx.shieldedTankIndices,
+          arena.walls,
+          2,
+          Math.min(ballisticReach, arena.cellSize * 3.4),
+          hmR,
+          0,
+          barrels,
+          false,
+        );
+        if (safetyTrace.selfHitRisk) continue;
+
+        if (safetyTrace.hitsEnemy) {
+          const directScore = 2600 - safetyTrace.travelDist - Math.abs(wrapAngleRad(ang - self.angle)) * 45;
+          if (directScore > bestLaunchScore) {
+            bestLaunchScore = directScore;
+            bestLaunchAng = ang;
+          }
+          continue;
+        }
+
+        const lockPt = simulateBallisticEndpoint(
+          mx,
+          my,
+          ang,
+          hmSpeed,
+          POWERUP_CONFIG.homingBallisticSec,
+          hmR,
+          arena.walls,
+          12,
+        );
+        const lockCell = worldToGridCell(lockPt.x, lockPt.y, arena);
+        const lockIdx = lockCell.row * arena.grid.cols + lockCell.col;
+
+        const selfSteps = selfRaw.dist[lockIdx];
+        // Never fire a shot whose 2.5s bounce ends up right back in our own cell or adjacent dead-end!
+        if (selfSteps < 1) continue;
+        if (selfSteps === 1 && Math.hypot(lockPt.x - self.x, lockPt.y - self.y) < arena.cellSize * 1.15) {
+          continue;
+        }
+
+        const selfTrueMazeDist =
+          selfSteps * arena.cellSize + Math.hypot(lockPt.x - self.x, lockPt.y - self.y) * 0.18;
+
+        let nearestEnemyMazeDist = Infinity;
+        let advancesTowardEnemy = false;
+        for (const ef of enemyFields) {
+          const eSteps = ef.field.dist[lockIdx];
+          if (eSteps < 0) continue;
+          if (eSteps < ef.curStepsFromSelf) {
+            advancesTowardEnemy = true;
+          }
+          const eDist =
+            eSteps === 0
+              ? Math.hypot(lockPt.x - ef.enemy.x, lockPt.y - ef.enemy.y)
+              : eSteps * arena.cellSize +
+                Math.hypot(lockPt.x - ef.enemy.x, lockPt.y - ef.enemy.y) * 0.18;
+          if (eDist < nearestEnemyMazeDist) {
+            nearestEnemyMazeDist = eDist;
+          }
+        }
+
+        // Trajectory must actually penetrate closer toward an enemy along the maze!
+        if (!advancesTowardEnemy) continue;
+
+        // Account for AI's immediate post-launch retreat (~1.5 cells of extra separation on Normal+):
+        const retreatBonus = difficulty === 'easy' ? 0 : arena.cellSize * 0.9;
+        const mazeAdvantage = selfTrueMazeDist + retreatBonus - nearestEnemyMazeDist;
+        const minRequiredAdvantage =
+          difficulty === 'easy' ? arena.cellSize * 0.25 : arena.cellSize * 0.85;
+        if (mazeAdvantage < minRequiredAdvantage) continue;
+
+        // Prefer dropping the 2.5s seeker lock right outside the enemy's room (`1..3` cells away)!
+        const turnPenalty = Math.abs(wrapAngleRad(ang - self.angle)) * 30;
+        const score = mazeAdvantage * 1.35 - nearestEnemyMazeDist * 0.95 - turnPenalty;
+        if (score > bestLaunchScore) {
+          bestLaunchScore = score;
+          bestLaunchAng = ang;
+        }
+      }
+
+      if (bestLaunchAng !== null) {
+        if (Math.abs(wrapAngleRad(bestLaunchAng - self.angle)) <= 0.14) {
+          wantFirePressed = true;
+          mem.fireCooldownTimer = profile.fireIntervalSec;
+          mem.homingRetreatTimer = POWERUP_CONFIG.homingBallisticSec + 1.8;
+        } else {
+          mem.cachedAimAngle = bestLaunchAng;
+          mem.aimHoldTimer = 0.24;
+          desiredAimAngle = bestLaunchAng;
+        }
+      }
+    }
+  } else if (ctx.selfSkill === 'phantom') {
+    // 11. BÓNG MA XUYÊN TƯỜNG: Pop Phase Shift when walls separate us from an enemy within 5.5 cells or under fire!
+    const wallsBetween = countWallIntersections(
+      self.x,
+      self.y,
       primaryEnemy.x,
       primaryEnemy.y,
       bulletRadius,
       arena.walls,
     );
-    if (wallsBetween <= POWERUP_CONFIG.drillWallsPerShot && distToEnemy < arena.cellSize * 6.0) {
-      desiredAimAngle = angleToEnemy;
-      const diff = Math.abs(wrapAngleRad(angleToEnemy - self.angle));
-      if (
-        ctx.canFire &&
-        mem.fireCooldownTimer <= 0 &&
-        diff < 0.14 &&
-        !ctx.shieldedTankIndices.has(primaryEnemy.index)
-      ) {
-        wantFirePressed = true;
-        mem.fireCooldownTimer = profile.fireIntervalSec;
+    if (
+      ctx.canFire &&
+      ((wallsBetween >= 1 && distToEnemy <= arena.cellSize * 5.8) ||
+        danger.imminentBulletTimeSec < 0.65)
+    ) {
+      wantFirePressed = true;
+    }
+  } else if (ctx.selfSkill === 'warp' && !ctx.selfWarpBeaconPlaced) {
+    // 12. MỎ NEO KHÔNG GIAN (Stage 1): Plant anchor in a multi-exit cell before diving into combat!
+    const exits = getAccessibleNeighbors(arena.grid, selfCell).length;
+    if (
+      ctx.canFire &&
+      mem.fireCooldownTimer <= 0 &&
+      danger.threatLevel < 0.35 &&
+      exits >= 2 &&
+      primaryEnemySteps <= 7 &&
+      distToEnemy >= arena.cellSize * 1.4
+    ) {
+      wantFirePressed = true;
+      mem.fireCooldownTimer = 0.45;
+    }
+  } else if (ctx.selfSkill === 'barrier') {
+    // 13. TƯỜNG NĂNG LƯỢNG: Seal corridor ahead to block imminent bullets, trap close enemies, or block Homing!
+    const angleToEnemy = Math.atan2(primaryEnemy.y - self.y, primaryEnemy.x - self.x);
+    const facingEnemy = Math.abs(wrapAngleRad(angleToEnemy - self.angle)) < 0.65;
+    const blockThreat = danger.imminentBulletTimeSec < 0.62;
+    const trapCorridor =
+      facingEnemy &&
+      primaryEnemySteps >= 1 &&
+      primaryEnemySteps <= 3 &&
+      distToEnemy <= arena.cellSize * 2.8;
+    if (ctx.canFire && mem.fireCooldownTimer <= 0 && (blockThreat || trapCorridor)) {
+      wantFirePressed = true;
+      mem.fireCooldownTimer = 0.85;
+    }
+  } else if (ctx.selfSkill === 'emp') {
+    // 14. LỰU ĐẠN XUNG ĐIỆN EMP: Launch toward shielded/channeling/nearby enemies (2nd press detonates mid-air!)
+    const empSpeed =
+      BASE_GAMEPLAY.projectileSpeed * POWERUP_CONFIG.empOrbSpeedMultiplier * scale;
+    const empR =
+      BASE_GAMEPLAY.projectileRadius * POWERUP_CONFIG.empOrbRadiusMultiplier * scale;
+    const highValueEnemy = enemies.find(
+      (e) =>
+        ctx.shieldedTankIndices.has(e.index) ||
+        ctx.reaperTankIndices.has(e.index) ||
+        Boolean(ctx.laserChargingTankIndices?.has(e.index)),
+    );
+    const empTarget = highValueEnemy ?? primaryEnemy;
+    const empDist = Math.hypot(empTarget.x - self.x, empTarget.y - self.y);
+    if (ctx.canFire && mem.fireCooldownTimer <= 0 && empDist <= arena.cellSize * 5.8) {
+      const directAng = Math.atan2(empTarget.y - self.y, empTarget.x - self.x);
+      let bestEmpAng: number | null = null;
+      let bestEmpErr = arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius * 0.9;
+      const probes = [directAng, self.angle];
+      for (let k = 0; k < 20; k++) probes.push((k / 20) * Math.PI * 2 - Math.PI);
+      for (const ang of probes) {
+        const mx = self.x + Math.cos(ang) * barrelLen;
+        const my = self.y + Math.sin(ang) * barrelLen;
+        for (const tProbe of [0.45, 0.9, 1.4, 1.9]) {
+          const pt = simulateBallisticEndpoint(mx, my, ang, empSpeed, tProbe, empR, arena.walls, 6);
+          const err = Math.hypot(pt.x - empTarget.x, pt.y - empTarget.y);
+          if (err < bestEmpErr) {
+            bestEmpErr = err;
+            bestEmpAng = ang;
+          }
+        }
+      }
+      if (bestEmpAng !== null) {
+        if (Math.abs(wrapAngleRad(bestEmpAng - self.angle)) <= 0.18) {
+          wantFirePressed = true;
+          mem.fireCooldownTimer = 0.25;
+        } else {
+          desiredAimAngle = bestEmpAng;
+        }
       }
     }
   } else if (!ctx.selfReaperSweeping) {
-    // Standard Cannon / Gatling / Scatter / Spike / Homing ballistic + multi-bounce + TNT trap solver!
+    // Standard Cannon / Gatling / Spike / Cryo (`0.92x` bounce freeze orb)!
+    const isGatling = ctx.selfSkill === 'gatling';
+    const isSpike = ctx.selfSkill === 'spike';
+    const isCryo = ctx.selfSkill === 'cryo';
     const hasAmmo = ctx.selfSkill ? ctx.selfSkillAmmo > 0 : ctx.selfAmmo > 0;
-    const maxRayDist = Math.hypot(arena.width, arena.height) * (1 + profile.maxBounces * 0.55);
+
+    const projSpeed = isGatling
+      ? bulletSpeed * POWERUP_CONFIG.gatlingSpeedMultiplier
+      : isSpike
+        ? bulletSpeed * POWERUP_CONFIG.spikeSpeedMultiplier
+        : isCryo
+          ? bulletSpeed * POWERUP_CONFIG.cryoOrbSpeedMultiplier
+          : bulletSpeed;
+    const projRadius = isGatling
+      ? bulletRadius * POWERUP_CONFIG.gatlingRadiusMultiplier
+      : isSpike
+        ? bulletRadius * POWERUP_CONFIG.spikeRadiusMultiplier
+        : isCryo
+          ? bulletRadius * POWERUP_CONFIG.cryoOrbRadiusMultiplier
+          : bulletRadius;
+    const maxRayDist = isSpike
+      ? projSpeed * POWERUP_CONFIG.spikeFlightDetonateSec
+      : isCryo
+        ? projSpeed * 2.8
+        : Math.hypot(arena.width, arena.height) * (1 + profile.maxBounces * 0.55);
 
     if (hasAmmo) {
       const currentCheck = traceBallisticShot(
@@ -1173,8 +1929,8 @@ export function computeBotDecision(
         arena.walls,
         profile.maxBounces,
         maxRayDist,
-        bulletRadius,
-        profile.predictiveLead ? bulletSpeed : 0,
+        projRadius,
+        profile.predictiveLead ? projSpeed : 0,
         barrels,
         profile.detonateTntTraps,
       );
@@ -1183,27 +1939,36 @@ export function computeBotDecision(
         if (ctx.canFire && mem.fireCooldownTimer <= 0) {
           if (difficulty !== 'easy' || rng.nextFloat() < 0.72) {
             wantFirePressed = true;
-            wantFireHeld = ctx.selfSkill === 'gatling';
-            mem.fireCooldownTimer =
-              ctx.selfSkill === 'gatling'
-                ? POWERUP_CONFIG.gatlingCooldownSec * (difficulty === 'easy' ? 2.2 : 1.05)
-                : profile.fireIntervalSec;
+            wantFireHeld = isGatling;
+            if (isGatling && difficulty !== 'easy') {
+              mem.gatlingSuppressTimer = 0.24;
+            }
+            mem.fireCooldownTimer = isGatling
+              ? POWERUP_CONFIG.gatlingCooldownSec * (difficulty === 'easy' ? 2.1 : 1.02)
+              : profile.fireIntervalSec;
           }
         }
+      } else if (
+        isGatling &&
+        mem.gatlingSuppressTimer > 0 &&
+        !currentCheck.selfHitRisk &&
+        ctx.canFire
+      ) {
+        wantFirePressed = true;
+        wantFireHeld = true;
       } else {
         const candidates: number[] = [];
         for (const e of enemies) {
           let tx = e.x;
           let ty = e.y;
           if (profile.predictiveLead) {
-            const leadT = Math.min(0.4, Math.hypot(e.x - self.x, e.y - self.y) / bulletSpeed);
+            const leadT = Math.min(0.4, Math.hypot(e.x - self.x, e.y - self.y) / projSpeed);
             tx += e.vx * leadT;
             ty += e.vy * leadT;
           }
           candidates.push(Math.atan2(ty - self.y, tx - self.x));
         }
 
-        // Also include direct angles toward TNT barrels that trap an enemy!
         if (profile.detonateTntTraps) {
           for (const br of barrels) {
             if (!br.active) continue;
@@ -1239,8 +2004,8 @@ export function computeBotDecision(
             arena.walls,
             profile.maxBounces,
             maxRayDist,
-            bulletRadius,
-            profile.predictiveLead ? bulletSpeed : 0,
+            projRadius,
+            profile.predictiveLead ? projSpeed : 0,
             barrels,
             profile.detonateTntTraps,
           );
@@ -1258,27 +2023,60 @@ export function computeBotDecision(
           const jitter =
             profile.aimJitterRad > 0 ? (rng.nextFloat() - 0.5) * profile.aimJitterRad : 0;
           mem.cachedAimAngle = wrapAngleRad(bestShot.angle + jitter);
-          mem.aimHoldTimer = 0.22;
+          mem.aimHoldTimer = 0.2;
           desiredAimAngle = mem.cachedAimAngle;
         } else if (
-          ctx.selfSkill === 'homing' &&
+          isSpike &&
           difficulty !== 'easy' &&
           ctx.canFire &&
           mem.fireCooldownTimer <= 0
         ) {
-          // On large maps, launch Homing Missile down an open safe corridor so its seeker hunts the enemy!
-          const fwdClear = wallClearanceInDirection(
-            muzzleX,
-            muzzleY,
-            Math.cos(self.angle),
-            Math.sin(self.angle),
-            bulletRadius,
-            arena.cellSize * 2.2,
-            arena.walls,
-          );
-          if (fwdClear >= arena.cellSize * 1.4 && !currentCheck.selfHitRisk) {
-            wantFirePressed = true;
-            mem.fireCooldownTimer = profile.fireIntervalSec;
+          // Tactical Spike Airburst: bounce Spike Ball so its 3.0s detonation bursts shrapnel & ground spikes near enemy!
+          let bestBurstAng: number | null = null;
+          let bestBurstDist = arena.cellSize * 1.65;
+          const burstProbes = 20;
+          for (let k = 0; k < burstProbes; k++) {
+            const ang = (k / burstProbes) * Math.PI * 2 - Math.PI;
+            const mx = self.x + Math.cos(ang) * barrelLen;
+            const my = self.y + Math.sin(ang) * barrelLen;
+            const safeTr = traceBallisticShot(
+              mx,
+              my,
+              ang,
+              self.index,
+              ctx.tanks,
+              ctx.shieldedTankIndices,
+              arena.walls,
+              3,
+              projSpeed * 2.0,
+              projRadius,
+            );
+            if (safeTr.selfHitRisk) continue;
+            const detPt = simulateBallisticEndpoint(
+              mx,
+              my,
+              ang,
+              projSpeed,
+              POWERUP_CONFIG.spikeFlightDetonateSec,
+              projRadius,
+              arena.walls,
+              12,
+            );
+            const selfDistToDet = Math.hypot(detPt.x - self.x, detPt.y - self.y);
+            if (selfDistToDet < arena.cellSize * 2.3) continue;
+            const enemyDistToDet = Math.hypot(detPt.x - primaryEnemy.x, detPt.y - primaryEnemy.y);
+            if (enemyDistToDet < bestBurstDist) {
+              bestBurstDist = enemyDistToDet;
+              bestBurstAng = ang;
+            }
+          }
+          if (bestBurstAng !== null) {
+            if (Math.abs(wrapAngleRad(bestBurstAng - self.angle)) <= 0.14) {
+              wantFirePressed = true;
+              mem.fireCooldownTimer = profile.fireIntervalSec;
+            } else {
+              desiredAimAngle = bestBurstAng;
+            }
           }
         } else if (mem.cachedAimAngle !== null) {
           desiredAimAngle = mem.cachedAimAngle;
@@ -1287,14 +2085,17 @@ export function computeBotDecision(
     }
   }
 
-  // Urgent Evasion Override: if threatLevel is high, dodge immediately!
-  if (danger.threatLevel >= 0.65) {
+  // Urgent Evasion Override: dodge incoming bullets/blasts immediately (ignored if Aegis Shield is active and no mines/spikes!)
+  if (danger.threatLevel >= 0.68 && (!ctx.selfShielded || danger.imminentBulletTimeSec === Infinity)) {
+    const allowEmergencyReverse =
+      mem.mineClearTimer <= 0 && danger.imminentBulletTimeSec < 0.72;
     const move = driveTankTowardVector(
       self,
       danger.dodgeX,
       danger.dodgeY,
       profile.turnDeadbandRad,
-      true,
+      allowEmergencyReverse,
+      arena,
     );
     return {
       ...move,
@@ -1304,45 +2105,139 @@ export function computeBotDecision(
     };
   }
 
-  // Branch 5: Clearance-Guided Corner Recovery
+  // Branch 5: Brief, Doorway-Guided Unstuck Recovery (0.22s max, never drives aimlessly backward!)
   if (mem.unstuckTimer > 0) {
     mem.unstuckTimer = Math.max(0, mem.unstuckTimer - dt);
+    const targetAng =
+      mem.unstuckTargetAngle ??
+      (primaryNavPreview.firstDoorway
+        ? Math.atan2(
+            primaryNavPreview.firstDoorway.y - self.y,
+            primaryNavPreview.firstDoorway.x - self.x,
+          )
+        : self.angle + Math.PI * 0.5);
+    const diff = wrapAngleRad(targetAng - self.angle);
     return {
-      forward: false,
-      backward: true,
-      left: mem.unstuckTurnSign < 0,
-      right: mem.unstuckTurnSign > 0,
+      forward: mem.unstuckUseForward,
+      backward: !mem.unstuckUseForward,
+      left: diff < -0.04,
+      right: diff > 0.04,
       firePressed: wantFirePressed,
       fireHeld: wantFireHeld,
       fireBufferedUntil: wantFirePressed ? mem.clock + 0.12 : 0,
     };
   }
 
-  // Branch 6: Maze-Path Crate vs Enemy Navigation & Tactic Spacing
+  // Branch 6: Maze-Path Crate vs Enemy vs Post-Homing-Disengage Navigation (100% Nose-First!)
   let navGoalX = primaryEnemy.x;
   let navGoalY = primaryEnemy.y;
+  let escapingHomingMissile = false;
 
-  if (!ctx.selfSkill && ctx.crates.length > 0 && profile.cratePriority > 0) {
+  // Active Homing Disengage: if ANY Homing Missile is in its 2.5s pre-lock flight OR hunting nearby,
+  // route nose-first via BFS to a multi-exit cell FAR from the missile so we NEVER follow our own missile
+  // and ALWAYS force the 2.5s radar lock onto the enemy!
+  if (difficulty !== 'easy') {
+    for (let i = 0; i < ctx.projectiles.length; i++) {
+      const p = ctx.projectiles[i];
+      if (!p.active || p.variant !== 'homing_missile') continue;
+      const remB = Math.max(0, POWERUP_CONFIG.homingBallisticSec - p.age);
+      const lockPt =
+        remB > 0.03
+          ? simulateBallisticEndpoint(
+              p.x,
+              p.y,
+              Math.atan2(p.vy, p.vx),
+              Math.max(10, Math.hypot(p.vx, p.vy)),
+              remB,
+              p.radius,
+              arena.walls,
+              10,
+            )
+          : { x: p.x, y: p.y, bounces: 0 };
+
+      const mCell = worldToGridCell(lockPt.x, lockPt.y, arena);
+      const mField = computeMazeDistanceField(mCell, ctx.spikeZones, ctx.mines, arena, barrels, false);
+      const selfStepsFromM = mField.dist[selfCell.row * mField.cols + selfCell.col];
+
+      let minEnemyStepsFromM = 99;
+      for (const e of enemies) {
+        const ec = worldToGridCell(e.x, e.y, arena);
+        const d = mField.dist[ec.row * mField.cols + ec.col];
+        if (d >= 0 && d < minEnemyStepsFromM) minEnemyStepsFromM = d;
+      }
+
+      const mustPeelOff =
+        mem.homingRetreatTimer > 0 ||
+        remB > 0.05 ||
+        (selfStepsFromM >= 0 && selfStepsFromM <= minEnemyStepsFromM + 2);
+
+      if (mustPeelOff && selfStepsFromM >= 0 && selfStepsFromM <= 6) {
+        let bestSafeCell: GridCell | null = null;
+        let bestSafeScore = -Infinity;
+        for (let r = 0; r < arena.grid.rows; r++) {
+          for (let c = 0; c < arena.grid.cols; c++) {
+            const idx = r * arena.grid.cols + c;
+            const stepsFromSelf = safeField.dist[idx];
+            const stepsFromMissile = mField.dist[idx];
+            if (stepsFromSelf <= 0 || stepsFromSelf > 5 || stepsFromMissile < 0) continue;
+            const exits = getAccessibleNeighbors(arena.grid, { col: c, row: r }).length;
+            const deadEndPenalty = exits <= 1 ? 2.5 : 0;
+            const score = stepsFromMissile * 1.6 - stepsFromSelf * 0.45 - deadEndPenalty;
+            if (score > bestSafeScore) {
+              bestSafeScore = score;
+              bestSafeCell = { col: c, row: r };
+            }
+          }
+        }
+        if (bestSafeCell) {
+          navGoalX = arena.originX + (bestSafeCell.col + 0.5) * arena.cellSize;
+          navGoalY = arena.originY + (bestSafeCell.row + 0.5) * arena.cellSize;
+          escapingHomingMissile = true;
+          break;
+        }
+      }
+    }
+  }
+
+  const lowOnEquippedSkill =
+    (ctx.selfSkill === 'gatling' && ctx.selfSkillAmmo <= 4) ||
+    (ctx.selfSkill === 'flame' && ctx.selfSkillAmmo <= 14) ||
+    (ctx.selfSkill === 'mine' && ctx.selfSkillAmmo <= 1);
+
+  if (
+    !escapingHomingMissile &&
+    (!ctx.selfSkill || lowOnEquippedSkill) &&
+    ctx.crates.length > 0 &&
+    profile.cratePriority > 0
+  ) {
     let bestCrate: MysteryCrateState | null = null;
     let bestCratePathDist = Infinity;
+    let bestCrateSteps = 99;
     for (const c of ctx.crates) {
       const cSteps = cellStepDistanceTo(c.x, c.y);
       const cMetric = cSteps * arena.cellSize * 0.8 + Math.hypot(c.x - self.x, c.y - self.y) * 0.2;
       if (cMetric < bestCratePathDist) {
         bestCratePathDist = cMetric;
         bestCrate = c;
+        bestCrateSteps = cSteps;
       }
     }
     const enemyPathDist = primaryEnemySteps * arena.cellSize * 0.8 + distToEnemy * 0.2;
-    if (bestCrate && bestCratePathDist * (1 / profile.cratePriority) < enemyPathDist * 1.25) {
+    const shouldTakeCrate = !ctx.selfSkill
+      ? bestCratePathDist * (1 / profile.cratePriority) < enemyPathDist * 1.3
+      : bestCrateSteps <= 2;
+    if (bestCrate && shouldTakeCrate) {
       navGoalX = bestCrate.x;
       navGoalY = bestCrate.y;
     }
   }
 
-  if (desiredAimAngle !== null && danger.threatLevel < 0.25) {
+  // Snap barrel onto firing solution when nearly aligned (or lining up Laser/Drill), without freezing forever!
+  if (desiredAimAngle !== null && danger.threatLevel < 0.28 && mem.mineClearTimer <= 0) {
     const aimDiff = wrapAngleRad(desiredAimAngle - self.angle);
-    if (Math.abs(aimDiff) > profile.turnDeadbandRad * 0.7) {
+    const snapWindow =
+      ctx.selfSkill === 'laser' || ctx.selfSkill === 'drill' ? Math.PI : 0.72;
+    if (Math.abs(aimDiff) > profile.turnDeadbandRad * 0.75 && Math.abs(aimDiff) <= snapWindow) {
       return {
         forward: false,
         backward: false,
@@ -1355,46 +2250,60 @@ export function computeBotDecision(
     }
   }
 
-  const navWp = resolveWaypointFromField(
-    self,
-    navGoalX,
-    navGoalY,
-    safeField,
-    rawField,
-    arena,
-  );
+  const navWp = ctx.selfPhantom
+    ? { x: navGoalX, y: navGoalY, cellSteps: distToEnemy > arena.cellSize ? 1 : 0 }
+    : resolveWaypointFromField(
+        self,
+        navGoalX,
+        navGoalY,
+        safeField,
+        rawField,
+        arena,
+      );
 
   let moveVecX = navWp.x - self.x + danger.dodgeX * 42;
   let moveVecY = navWp.y - self.y + danger.dodgeY * 42;
 
   const tactic = ctx.tactic ?? 'balanced';
-  const chasingCrate = navGoalX !== primaryEnemy.x || navGoalY !== primaryEnemy.y;
+  const chasingCrate =
+    !escapingHomingMissile && (navGoalX !== primaryEnemy.x || navGoalY !== primaryEnemy.y);
   const rushingClose =
-    tactic === 'rusher' ||
-    ctx.selfSkill === 'reaper' ||
-    ctx.selfSkill === 'flame' ||
-    chasingCrate;
+    escapingHomingMissile ||
+    (mem.homingRetreatTimer <= 0 &&
+      (tactic === 'rusher' ||
+        ctx.selfShielded ||
+        Boolean(ctx.selfPhantom) ||
+        Boolean(ctx.selfWarpBeaconPlaced) ||
+        ctx.selfSkill === 'reaper' ||
+        ctx.selfSkill === 'flame' ||
+        ctx.selfSkill === 'scatter' ||
+        (ctx.selfSkill === 'homing' && primaryEnemySteps > 10) ||
+        chasingCrate));
 
   const preferredStandoff =
-    tactic === 'sniper'
-      ? arena.cellSize * 2.75
-      : tactic === 'camper'
-        ? arena.cellSize * 2.15
-        : arena.cellSize * 1.15;
+    mem.homingRetreatTimer > 0
+      ? arena.cellSize * 3.4
+      : tactic === 'sniper'
+        ? arena.cellSize * 2.75
+        : tactic === 'camper'
+          ? arena.cellSize * 2.15
+          : arena.cellSize * 1.15;
 
   if (
     !rushingClose &&
+    mem.mineClearTimer <= 0 &&
     navWp.cellSteps <= (tactic === 'sniper' ? 1 : 0) &&
     distToEnemy < preferredStandoff
   ) {
     const awayX = self.x - primaryEnemy.x;
     const awayY = self.y - primaryEnemy.y;
-    const kiteStrafe = tactic === 'sniper' ? 0.45 : 0.75;
+    const kiteStrafe = tactic === 'sniper' ? 0.55 : 0.85;
     moveVecX = awayX - awayY * kiteStrafe + danger.dodgeX * 42;
     moveVecY = awayY + awayX * kiteStrafe + danger.dodgeY * 42;
   } else if (
     tactic === 'camper' &&
-    !chasingCrate &&
+    !rushingClose &&
+    mem.mineClearTimer <= 0 &&
     primaryEnemySteps <= 4 &&
     distToEnemy < arena.cellSize * 3.6 &&
     danger.threatLevel < 0.2
@@ -1413,19 +2322,21 @@ export function computeBotDecision(
     };
   }
 
+  // IMPORTANT: Never pass allowEmergencyReverse=true during normal navigation (`false` prevents tail-first reverse driving!)
   const move = driveTankTowardVector(
     self,
     moveVecX,
     moveVecY,
     profile.turnDeadbandRad,
-    difficulty === 'hard' || difficulty === 'super_hard',
+    false,
+    ctx.selfPhantom ? undefined : arena,
   );
 
   if (profile.throttleDutyCycle < 1 && Math.sin(mem.clock * 5.2 + self.index) > 0.65) {
     move.forward = false;
   }
 
-  if (move.forward) {
+  if (move.forward || move.backward) {
     const moved = Math.hypot(self.x - mem.lastProgressX, self.y - mem.lastProgressY);
     if (moved > 3.5 * scale) {
       mem.lastProgressX = self.x;
@@ -1433,35 +2344,29 @@ export function computeBotDecision(
       mem.stuckTimer = 0;
     } else {
       mem.stuckTimer += dt;
-      if (mem.stuckTimer >= 0.52) {
+      if (mem.stuckTimer >= 0.58) {
         mem.stuckTimer = 0;
-        mem.unstuckTimer = 0.36;
-        // Turn rear toward whichever perpendicular side has more open maze clearance!
-        const leftAng = self.angle - Math.PI * 0.5;
-        const rightAng = self.angle + Math.PI * 0.5;
-        const leftClear = wallClearanceInDirection(
+        mem.unstuckTimer = 0.22;
+        const fwdClear = wallClearanceInDirection(
           self.x,
           self.y,
-          Math.cos(leftAng),
-          Math.sin(leftAng),
+          Math.cos(self.angle),
+          Math.sin(self.angle),
           self.radius * 0.85,
-          arena.cellSize * 1.4,
+          arena.cellSize * 0.8,
           arena.walls,
         );
-        const rightClear = wallClearanceInDirection(
+        const rearClear = wallClearanceInDirection(
           self.x,
           self.y,
-          Math.cos(rightAng),
-          Math.sin(rightAng),
+          -Math.cos(self.angle),
+          -Math.sin(self.angle),
           self.radius * 0.85,
-          arena.cellSize * 1.4,
+          arena.cellSize * 0.8,
           arena.walls,
         );
-        if (Math.abs(leftClear - rightClear) > 4 * scale) {
-          mem.unstuckTurnSign = leftClear > rightClear ? -1 : 1;
-        } else {
-          mem.unstuckTurnSign = rng.nextFloat() < 0.5 ? 1 : -1;
-        }
+        mem.unstuckUseForward = fwdClear > rearClear + 6 * scale;
+        mem.unstuckTargetAngle = Math.atan2(navWp.y - self.y, navWp.x - self.x);
       }
     }
   } else {
