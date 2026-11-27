@@ -496,8 +496,14 @@ export const POWERUP_CONFIG = {
   shieldDurationSec: 5.5,
   shieldRadiusFactor: 1.68,
   shieldReflectSpeedBoost: 1.18,
-  // 10. Reaper (Lưỡi Hái Tử Thần — Obsidian-Black & Crimson-Red, halved to 0.8375 rad/s, exact 180-deg sweep!)
-  reaperWindupSec: 0.55,
+  // 10. Reaper (Lưỡi Hái Tử Thần — 4-stage cinematic choreography:
+  //     1. Fast gyroscopic spin -> smooth stop at random angle (`0.68s`)
+  //     2. Straight crimson-obsidian laser shaft shoots out to full 4.7-cell peak (`0.26s`, crescent still hidden)
+  //     3. Transverse Crescent Scythe blades snap out sideways from shaft tips (`0.22s`)
+  //     4. Full 180-deg lethal sweep (`Math.PI / 0.8375`) + retract)
+  reaperWindupSec: 0.68,
+  reaperShaftExtendSec: 0.26,
+  reaperCrescentUnfurlSec: 0.22,
   reaperSpinSpeedRad: 0.8375,
   reaperSpinDurationSec: Math.PI / 0.8375,
   reaperBladeCellsLength: 4.7,
@@ -680,9 +686,9 @@ export const SKILL_DESCRIPTORS: readonly SkillDescriptor[] = [
     accentHex: '#C62828',
     summary: 'CỰC HIẾM: Triệu hồi đại lưỡi liềm Đỏ-Đen khổng lồ xuyên tường, quét chậm 180°.',
     traits: [
-      'Tụ huyết ấn 0.55s rồi bung đôi lưỡi hái Đen-Đỏ dài 4.7 ô có 2 đầu LƯỠI LIỀM sắc lẹm!',
-      'Xoay trầm hùng 180° quét sạch 360° quanh xe (trong lúc dùng KHÔNG THỂ di chuyển, giống Laser)',
-      'Chém hạ mọi đối thủ không có Khiên Từ Trường chạm vào trục hắc ám hoặc lưỡi liềm đỏ',
+      'Xoay hồi chuyển 1 vòng mượt mà dừng ở góc ngẫu nhiên rồi phóng tia trục Đỏ-Đen tới đỉnh 4.7 ô!',
+      'Tia chạm đỉnh mới bung ngang 2 đầu LƯỠI LIỀM sắc lẹm rồi bắt đầu xoay quét 180° (khóa di chuyển)',
+      'Chém hạ mọi đối thủ không có Khiên Từ Trường chạm vào tia trục hoặc lưỡi liềm đỏ',
     ],
   },
 ] as const;

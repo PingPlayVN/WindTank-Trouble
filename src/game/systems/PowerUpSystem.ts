@@ -736,9 +736,10 @@ export class PowerUpSystem {
       return { fired: true, hudDirty: true };
     }
 
-    // 8. Reaper (360-deg Twin Plasma Scythe Overdrive!)
+    // 8. Reaper (4-Stage Gyro Spin -> Laser Shaft -> Sideways Crescent Unfurl -> 180-deg Sweep!)
     if (skill === 'reaper') {
-      tank.startReaperSweep();
+      const randomExtraSpin = (0.35 + this.rng.nextFloat() * 1.55) * Math.PI;
+      tank.startReaperSweep(randomExtraSpin);
       audioManager.playReaperActivate();
       return { fired: true, hudDirty: true };
     }
@@ -945,12 +946,14 @@ export class PowerUpSystem {
         );
       }
 
-      if (tank.consumeReaperUnfurlEvent()) {
+      if (tank.consumeReaperShaftLaunchEvent()) {
+        audioManager.playLaserBlast();
         this.effectsSystem.emitReaperUnfurlBurst(tank.kinematics.x, tank.kinematics.y);
       }
 
       if (!tank.isReaperSweeping()) continue;
       const extend = tank.getReaperExtendProgress();
+      const crescentExtend = tank.getReaperCrescentProgress();
       const bladeLen =
         this.arena.cellSize * POWERUP_CONFIG.reaperBladeCellsLength * extend;
       const sweep = computeReaperBlades(
@@ -961,14 +964,24 @@ export class PowerUpSystem {
         bladeLen,
         tankKinematics,
         scale,
+        crescentExtend,
       );
-      if (emitReaperSparks) {
-        const tipA = sweep.crescentA[sweep.crescentA.length - 1];
-        const tipB = sweep.crescentB[sweep.crescentB.length - 1];
+
+      if (tank.consumeReaperUnfurlEvent()) {
+        audioManager.playSpikeBurst();
+        this.effectsSystem.emitReaperUnfurlBurst(sweep.bladeA.x1, sweep.bladeA.y1);
+        this.effectsSystem.emitReaperUnfurlBurst(sweep.bladeB.x1, sweep.bladeB.y1);
+      }
+
+      if (emitReaperSparks && bladeLen > 8) {
         this.effectsSystem.emitReaperSpark(sweep.bladeA.x1, sweep.bladeA.y1);
         this.effectsSystem.emitReaperSpark(sweep.bladeB.x1, sweep.bladeB.y1);
-        this.effectsSystem.emitReaperSpark(tipA.x, tipA.y);
-        this.effectsSystem.emitReaperSpark(tipB.x, tipB.y);
+        if (sweep.crescentA.length > 0 && sweep.crescentB.length > 0) {
+          const tipA = sweep.crescentA[sweep.crescentA.length - 1];
+          const tipB = sweep.crescentB[sweep.crescentB.length - 1];
+          this.effectsSystem.emitReaperSpark(tipA.x, tipA.y);
+          this.effectsSystem.emitReaperSpark(tipB.x, tipB.y);
+        }
       }
       for (const vIdx of sweep.hitVictimIndices) {
         const victim = tanks.find((t) => t.index === vIdx);
@@ -1279,13 +1292,24 @@ export class PowerUpSystem {
     for (const tank of tanks) {
       if (!tank.kinematics.alive || !tank.isReaperSweeping()) continue;
       const extend = tank.getReaperExtendProgress();
+      if (extend <= 0.01) continue;
+      const crescentExtend = tank.getReaperCrescentProgress();
       const bladeLen =
         this.arena.cellSize * POWERUP_CONFIG.reaperBladeCellsLength * extend;
       const cx = tank.kinematics.x;
       const cy = tank.kinematics.y;
 
       const drawScytheAtAngle = (ang: number, alphaMul: number, isPrimary: boolean) => {
-        const sweep = computeReaperBlades(cx, cy, ang, tank.index, bladeLen, [], scale);
+        const sweep = computeReaperBlades(
+          cx,
+          cy,
+          ang,
+          tank.index,
+          bladeLen,
+          [],
+          scale,
+          crescentExtend,
+        );
         const x0 = sweep.bladeB.x1;
         const y0 = sweep.bladeB.y1;
         const x1 = sweep.bladeA.x1;
@@ -1297,7 +1321,7 @@ export class PowerUpSystem {
         this.reaperShadowGraphics.lineStyle(12 * scale, 0x16181f, 0.92 * alphaMul);
         this.reaperShadowGraphics.lineBetween(x0, y0, x1, y1);
 
-        // 1B. Blood-Crimson Plasma Aura & Scarlet Lightning (`ADD` blend)
+        // 1B. Blood-Crimson Laser-Shaft Plasma Aura & Scarlet Lightning (`ADD` blend)
         this.reaperGraphics.lineStyle(22 * scale, 0xb71c1c, 0.36 * alphaMul);
         this.reaperGraphics.lineBetween(x0, y0, x1, y1);
         this.reaperGraphics.lineStyle(9.5 * scale, 0xff1744, 0.88 * alphaMul);
@@ -1305,6 +1329,14 @@ export class PowerUpSystem {
         if (isPrimary) {
           this.reaperGraphics.lineStyle(3.8 * scale, 0xffebee, 0.96);
           this.reaperGraphics.lineBetween(x0, y0, x1, y1);
+
+          // Glowing laser tip nodes at both ends while the shaft shoots out to peak!
+          this.reaperGraphics.fillStyle(0xff1744, 0.55);
+          this.reaperGraphics.fillCircle(x0, y0, 10 * scale);
+          this.reaperGraphics.fillCircle(x1, y1, 10 * scale);
+          this.reaperGraphics.fillStyle(0xffffff, 0.95);
+          this.reaperGraphics.fillCircle(x0, y0, 4.2 * scale);
+          this.reaperGraphics.fillCircle(x1, y1, 4.2 * scale);
 
           // Crackling blood-crimson lightning along the twin obsidian shafts!
           this.reaperGraphics.lineStyle(2.2 * scale, 0xff1744, 0.95);
@@ -1326,8 +1358,10 @@ export class PowerUpSystem {
           this.reaperGraphics.strokePath();
         }
 
-        // 2. Twin Transverse Obsidian-Black + Blood-Crimson Crescent Scythe Blades (`Lưỡi Liềm`)!
+        // 2. Twin Transverse Obsidian-Black + Blood-Crimson Crescent Scythe Blades (`Lưỡi Liềm`)
+        //    Only drawn once `crescentExtend > 0.02` (after the laser shaft reaches 100% peak!)
         const drawCrescentHead = (outerPts: ReadonlyArray<{ x: number; y: number }>, dirSign: 1 | -1) => {
+          if (outerPts.length < 2) return;
           const ux = Math.cos(ang) * dirSign;
           const uy = Math.sin(ang) * dirSign;
 
@@ -1341,7 +1375,7 @@ export class PowerUpSystem {
           }
           for (let i = outerPts.length - 1; i >= 0; i--) {
             const arch = Math.sin((i / (outerPts.length - 1)) * Math.PI);
-            const inset = bladeLen * 0.135 * arch;
+            const inset = bladeLen * 0.135 * arch * Math.min(1, crescentExtend);
             this.reaperShadowGraphics.lineTo(
               outerPts[i].x - ux * inset,
               outerPts[i].y - uy * inset,
@@ -1373,9 +1407,11 @@ export class PowerUpSystem {
         drawCrescentHead(sweep.crescentB, -1);
       };
 
-      // Dark-crimson shadow wakes trailing behind the slow, menacing 180-deg sweep!
-      drawScytheAtAngle(tank.kinematics.angle - 0.14, 0.22, false);
-      drawScytheAtAngle(tank.kinematics.angle - 0.07, 0.44, false);
+      // Only draw rotational shadow wakes during Stage 4 (`isReaperRotating()`) when actually spinning!
+      if (tank.isReaperRotating()) {
+        drawScytheAtAngle(tank.kinematics.angle - 0.14, 0.22, false);
+        drawScytheAtAngle(tank.kinematics.angle - 0.07, 0.44, false);
+      }
       drawScytheAtAngle(tank.kinematics.angle, 1.0, true);
     }
 

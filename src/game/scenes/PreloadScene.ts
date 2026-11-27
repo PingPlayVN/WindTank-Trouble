@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { AssetFactory } from '../art/AssetFactory';
 import { DESIGN_HEIGHT, DESIGN_WIDTH, UI_COLORS } from '../config/constants';
 import { mobileOrientationManager } from '../managers/MobileOrientationManager';
+import { networkStatus } from '../network/networkStatus';
 import { extractRoomCodeFromSearch } from '../network/roomCode';
 import { drawMazeBackdrop } from '../../ui/components/ArcadeWidgets';
 
@@ -243,7 +244,7 @@ export class PreloadScene extends Phaser.Scene {
       this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
         const inviteCode =
           typeof window !== 'undefined' ? extractRoomCodeFromSearch(window.location.search) : null;
-        if (inviteCode) {
+        if (inviteCode && networkStatus.isOnline()) {
           this.scene.start('OnlineLobbyScene', { autoJoinCode: inviteCode });
         } else {
           this.scene.start('MenuScene');

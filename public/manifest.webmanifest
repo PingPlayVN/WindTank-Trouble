@@ -1,0 +1,20 @@
+{
+  "name": "WindTank — Đại Chiến Xe Tăng Mê Cung",
+  "short_name": "WindTank",
+  "description": "Game bắn xe tăng mê cung 2D nhiều chế độ — Chơi Offline cùng AI, 2–4 Người hoặc Đấu Online 1vs1.",
+  "lang": "vi",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#EEEEEC",
+  "theme_color": "#E2E4E7",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

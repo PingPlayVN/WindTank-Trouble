@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import './styles/main.css';
 import { gameConfig } from './game/config/gameConfig';
 import { mobileOrientationManager } from './game/managers/MobileOrientationManager';
+import { networkStatus } from './game/network/networkStatus';
 import { peerMultiplayer } from './game/network/PeerMultiplayerManager';
 
 declare global {
@@ -9,7 +10,16 @@ declare global {
     __WINDTANK_GAME__?: Phaser.Game;
     __PHASER_GAME_DIAGNOSTICS__?: unknown;
     __WINDTANK_BG_ONLINE_TIMER__?: number;
+    __WINDTANK_NETWORK_STATUS__?: typeof networkStatus;
   }
+}
+
+window.__WINDTANK_NETWORK_STATUS__ = networkStatus;
+
+if (import.meta.env.PROD && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
 }
 
 if (window.__WINDTANK_BG_ONLINE_TIMER__) {

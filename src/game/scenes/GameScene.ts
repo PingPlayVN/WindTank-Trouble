@@ -882,6 +882,7 @@ export class GameScene extends Phaser.Scene {
           skillAmmo: sk.ammo,
           chargingLaserRemaining: Math.round(sk.chargingLaserRemaining * 100) / 100,
           reaperWindupRemaining: Math.round((sk.reaperWindupRemaining ?? 0) * 100) / 100,
+          reaperDeployRemaining: Math.round((sk.reaperDeployRemaining ?? 0) * 100) / 100,
           reaperSpinRemaining: Math.round((sk.reaperSpinRemaining ?? 0) * 100) / 100,
           shieldRemaining: Math.round(t.getShieldRemainingSec() * 100) / 100,
         };

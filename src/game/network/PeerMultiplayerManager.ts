@@ -83,6 +83,7 @@ export interface NetTankSnapshot {
   skillAmmo: number;
   chargingLaserRemaining: number;
   reaperWindupRemaining: number;
+  reaperDeployRemaining?: number;
   reaperSpinRemaining: number;
   shieldRemaining: number;
 }

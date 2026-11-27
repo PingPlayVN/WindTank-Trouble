@@ -35,10 +35,14 @@ export class Tank {
     ammo: 0,
     chargingLaserRemaining: 0,
     reaperWindupRemaining: 0,
+    reaperDeployRemaining: 0,
     reaperSpinRemaining: 0,
   };
   private shieldRemainingSec = 0;
   private laserReadyToDischarge = false;
+  private reaperGyroStartAngle = 0;
+  private reaperGyroTotalDelta = Math.PI * 2.6;
+  private reaperJustShotShaft = false;
   private reaperJustUnfurled = false;
   private auraPulseClock = 0;
 
@@ -203,28 +207,44 @@ export class Tank {
       ammo: 0,
       chargingLaserRemaining: 0,
       reaperWindupRemaining: 0,
+      reaperDeployRemaining: 0,
       reaperSpinRemaining: 0,
     };
     this.refreshBodyTexture();
   }
 
-  startReaperSweep(): void {
+  startReaperSweep(extraRandomAngleRad?: number): void {
+    const randomOffset =
+      extraRandomAngleRad ?? (0.35 + Math.random() * 1.55) * Math.PI;
+    this.reaperGyroStartAngle = this.kinematics.angle;
+    // Spin >1 full revolution quickly then glide to a smooth stop at a random angle!
+    this.reaperGyroTotalDelta = Math.PI * 2 + randomOffset;
+
     this.skillState.reaperWindupRemaining = POWERUP_CONFIG.reaperWindupSec;
+    this.skillState.reaperDeployRemaining =
+      POWERUP_CONFIG.reaperShaftExtendSec + POWERUP_CONFIG.reaperCrescentUnfurlSec;
     this.skillState.reaperSpinRemaining = POWERUP_CONFIG.reaperSpinDurationSec;
+    this.reaperJustShotShaft = false;
     this.reaperJustUnfurled = false;
     this.kinematics.vx = 0;
     this.kinematics.vy = 0;
 
-    // Dramatic levitation squash-and-stretch windup animation on hull!
+    // Smooth gyroscopic levitation pulse during the 1-turn spin-up!
     this.scene.tweens.killTweensOf(this.bodySprite);
     this.scene.tweens.add({
       targets: this.bodySprite,
-      scaleX: this.scaleRatio * 1.24,
-      scaleY: this.scaleRatio * 1.24,
-      duration: POWERUP_CONFIG.reaperWindupSec * 1000 * 0.72,
+      scaleX: this.scaleRatio * 1.18,
+      scaleY: this.scaleRatio * 1.18,
+      duration: POWERUP_CONFIG.reaperWindupSec * 1000 * 0.55,
       yoyo: true,
       ease: 'Sine.easeInOut',
     });
+  }
+
+  consumeReaperShaftLaunchEvent(): boolean {
+    if (!this.reaperJustShotShaft) return false;
+    this.reaperJustShotShaft = false;
+    return true;
   }
 
   consumeReaperUnfurlEvent(): boolean {
@@ -237,32 +257,103 @@ export class Tank {
     return (this.skillState.reaperWindupRemaining ?? 0) > 0;
   }
 
+  isReaperDeploying(): boolean {
+    return (
+      (this.skillState.reaperWindupRemaining ?? 0) <= 0 &&
+      (this.skillState.reaperDeployRemaining ?? 0) > 0
+    );
+  }
+
+  isReaperRotating(): boolean {
+    return (
+      (this.skillState.reaperWindupRemaining ?? 0) <= 0 &&
+      (this.skillState.reaperDeployRemaining ?? 0) <= 0 &&
+      (this.skillState.reaperSpinRemaining ?? 0) > 0
+    );
+  }
+
   getReaperWindupProgress(): number | null {
     const rem = this.skillState.reaperWindupRemaining ?? 0;
     if (rem <= 0) return null;
     return Math.max(0, Math.min(1, 1 - rem / POWERUP_CONFIG.reaperWindupSec));
   }
 
+  /**
+   * True whenever the Reaper shaft/blades are active on the field (Stages 2, 3, and 4).
+   */
   isReaperSweeping(): boolean {
     return (
       (this.skillState.reaperWindupRemaining ?? 0) <= 0 &&
-      (this.skillState.reaperSpinRemaining ?? 0) > 0
+      ((this.skillState.reaperDeployRemaining ?? 0) > 0 ||
+        (this.skillState.reaperSpinRemaining ?? 0) > 0)
     );
   }
 
+  /**
+   * Stage 2 -> 4 axial Laser-Shaft extension (`0 -> 1`):
+   * - Stage 1 (Gyro Spin): `0`
+   * - Stage 2 (`0.26s`): shoots straight out `0 -> 1` to full 4.7-cell peak!
+   * - Stage 3 (`0.22s`, Crescent Unfurl): holds at `1.0` peak!
+   * - Stage 4 (`180°` Sweep): holds at `1.0`, retracting cleanly in the final `0.16s`.
+   */
   getReaperExtendProgress(): number {
-    const rem = this.skillState.reaperSpinRemaining ?? 0;
-    if (rem <= 0) return 0;
-    const total = POWERUP_CONFIG.reaperSpinDurationSec;
-    const elapsed = total - rem;
-    const unfurlWindow = 0.24;
-    const retractWindow = 0.16;
-    if (elapsed < unfurlWindow) {
-      const t = elapsed / unfurlWindow;
-      return 0.18 + 0.82 * (1 - (1 - t) * (1 - t));
+    if ((this.skillState.reaperWindupRemaining ?? 0) > 0) return 0;
+
+    const deployRem = this.skillState.reaperDeployRemaining ?? 0;
+    if (deployRem > 0) {
+      const totalDeploy =
+        POWERUP_CONFIG.reaperShaftExtendSec + POWERUP_CONFIG.reaperCrescentUnfurlSec;
+      const elapsed = Math.max(0, totalDeploy - deployRem);
+      if (elapsed < POWERUP_CONFIG.reaperShaftExtendSec) {
+        const u = elapsed / POWERUP_CONFIG.reaperShaftExtendSec;
+        return 1 - Math.pow(1 - u, 3);
+      }
+      return 1.0;
     }
-    if (rem < retractWindow) {
-      return Math.max(0.15, rem / retractWindow);
+
+    const spinRem = this.skillState.reaperSpinRemaining ?? 0;
+    if (spinRem <= 0) return 0;
+    const retractWindow = 0.16;
+    if (spinRem < retractWindow) {
+      return Math.max(0.1, spinRem / retractWindow);
+    }
+    return 1.0;
+  }
+
+  /**
+   * Stage 3 -> 4 transverse Crescent Scythe Blade extension (`0 -> 1`):
+   * - Stages 1 & 2 (Gyro Spin + Laser Shaft Shooting to Peak): strictly `0`!
+   * - Stage 3 (`0.22s`, after shaft reaches peak): snaps sideways out from the shaft tips `0 -> 1`!
+   * - Stage 4 (`180°` Sweep): holds at `1.0`, retracting cleanly in the final `0.16s`.
+   */
+  getReaperCrescentProgress(): number {
+    if ((this.skillState.reaperWindupRemaining ?? 0) > 0) return 0;
+
+    const deployRem = this.skillState.reaperDeployRemaining ?? 0;
+    if (deployRem > 0) {
+      const totalDeploy =
+        POWERUP_CONFIG.reaperShaftExtendSec + POWERUP_CONFIG.reaperCrescentUnfurlSec;
+      const elapsed = Math.max(0, totalDeploy - deployRem);
+      if (elapsed <= POWERUP_CONFIG.reaperShaftExtendSec) {
+        return 0;
+      }
+      const u = Math.min(
+        1,
+        (elapsed - POWERUP_CONFIG.reaperShaftExtendSec) /
+          Math.max(0.05, POWERUP_CONFIG.reaperCrescentUnfurlSec),
+      );
+      // Crisp snappy lateral blade unfurl (`easeOutBack` clamped smoothly)
+      const c1 = 1.45;
+      const c3 = c1 + 1;
+      const back = 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2);
+      return Math.max(0, Math.min(1.06, back));
+    }
+
+    const spinRem = this.skillState.reaperSpinRemaining ?? 0;
+    if (spinRem <= 0) return 0;
+    const retractWindow = 0.16;
+    if (spinRem < retractWindow) {
+      return Math.max(0, spinRem / retractWindow);
     }
     return 1.0;
   }
@@ -285,6 +376,7 @@ export class Tank {
       ammo,
       chargingLaserRemaining: 0,
       reaperWindupRemaining: 0,
+      reaperDeployRemaining: 0,
       reaperSpinRemaining: 0,
     };
     this.laserReadyToDischarge = false;
@@ -307,6 +399,7 @@ export class Tank {
       ammo: 0,
       chargingLaserRemaining: 0,
       reaperWindupRemaining: 0,
+      reaperDeployRemaining: 0,
       reaperSpinRemaining: 0,
     };
     this.laserReadyToDischarge = false;
@@ -410,19 +503,42 @@ export class Tank {
       return { shieldJustExpired, reaperJustEnded, emitCriticalDamage: false };
     }
 
-    // Reaper Overlord Windup + 360-deg Vortex Spin:
-    // Locks linear movement & manual steering completely on the spot (just like Laser charge)!
+    // Reaper 4-Stage Choreography (all linear movement locked on the spot!):
+    // Stage 1 (`windup > 0`): Fast gyroscopic >1-turn spin decelerating smoothly to a random stop angle
+    // Stage 2 (`deploy`: first `0.26s`): Straight laser shaft shoots out to peak (`4.7` cells), tank holds still
+    // Stage 3 (`deploy`: next `0.22s`): Crescent scythe heads snap out sideways from shaft tips, tank holds still
+    // Stage 4 (`spinning > 0`): Full Crescent Scythes rotate smoothly across `180°`!
     const windup = this.skillState.reaperWindupRemaining ?? 0;
+    const deploy = this.skillState.reaperDeployRemaining ?? 0;
     const spinning = this.skillState.reaperSpinRemaining ?? 0;
 
-    if (windup > 0 || spinning > 0) {
+    if (windup > 0 || deploy > 0 || spinning > 0) {
       this.kinematics.vx = 0;
       this.kinematics.vy = 0;
 
       if (windup > 0) {
         const nextWindup = Math.max(0, windup - dt);
         this.skillState.reaperWindupRemaining = nextWindup;
+        const u = Math.max(0, Math.min(1, 1 - nextWindup / POWERUP_CONFIG.reaperWindupSec));
+        // High-RPM initial gyro whip -> silky smooth deceleration stop at random target angle
+        const eased = 1 - Math.pow(1 - u, 3.6);
+        this.kinematics.angle = Phaser.Math.Angle.Wrap(
+          this.reaperGyroStartAngle + this.reaperGyroTotalDelta * eased,
+        );
         if (nextWindup <= 0) {
+          this.reaperJustShotShaft = true;
+        }
+      } else if (deploy > 0) {
+        const totalDeploy =
+          POWERUP_CONFIG.reaperShaftExtendSec + POWERUP_CONFIG.reaperCrescentUnfurlSec;
+        const prevElapsed = totalDeploy - deploy;
+        const nextDeploy = Math.max(0, deploy - dt);
+        const nextElapsed = totalDeploy - nextDeploy;
+        this.skillState.reaperDeployRemaining = nextDeploy;
+        if (
+          prevElapsed < POWERUP_CONFIG.reaperShaftExtendSec &&
+          nextElapsed >= POWERUP_CONFIG.reaperShaftExtendSec
+        ) {
           this.reaperJustUnfurled = true;
         }
       } else {
@@ -567,6 +683,7 @@ export class Tank {
       ammo: snap.skillAmmo,
       chargingLaserRemaining: snap.chargingLaserRemaining,
       reaperWindupRemaining: snap.reaperWindupRemaining,
+      reaperDeployRemaining: snap.reaperDeployRemaining ?? 0,
       reaperSpinRemaining: snap.reaperSpinRemaining,
     };
     this.shieldRemainingSec = snap.shieldRemaining;
@@ -614,7 +731,7 @@ export class Tank {
     this.auraPulseClock += dt;
     this.kinematics.x += this.kinematics.vx * dt;
     this.kinematics.y += this.kinematics.vy * dt;
-    if (this.isReaperSweeping()) {
+    if (this.isReaperRotating()) {
       this.kinematics.angle = Phaser.Math.Angle.Wrap(
         this.kinematics.angle + POWERUP_CONFIG.reaperSpinSpeedRad * dt,
       );

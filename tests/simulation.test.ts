@@ -1754,6 +1754,73 @@ test('Night Ops Signal-Flare 360° Raycasting & Projectile Light Coalescing', as
   assert.equal(merged[1].variant, 'standard');
 });
 
+test('Crescent Reaper 4-Stage Simulation: Laser-Shaft stage (crescentScale=0) vs Sideways Crescent Unfurl (crescentScale=1)', () => {
+  // Rival placed laterally off the tip (x = 290, y = 165) — off the main y=100 laser shaft,
+  // right where the sideways Crescent Blade unfurls!
+  const lateralRival: TankKinematics = {
+    index: 1,
+    x: 290,
+    y: 165,
+    vx: 0,
+    vy: 0,
+    angle: Math.PI,
+    radius: 12,
+    alive: true,
+  };
+  const axialRival: TankKinematics = {
+    index: 2,
+    x: 260,
+    y: 100,
+    vx: 0,
+    vy: 0,
+    angle: Math.PI,
+    radius: 12,
+    alive: true,
+  };
+
+  // Stage 2 (`crescentScale = 0`): straight laser shaft hits axialRival (`2`) ONLY; crescent curves stay empty!
+  const stage2ShaftOnly = computeReaperBlades(
+    100,
+    100,
+    0,
+    0,
+    200,
+    [lateralRival, axialRival],
+    1.0,
+    0,
+  );
+  assert.equal(stage2ShaftOnly.crescentA.length, 0);
+  assert.equal(stage2ShaftOnly.crescentB.length, 0);
+  assert.deepEqual(stage2ShaftOnly.hitVictimIndices, [2]);
+
+  // Stage 3 & 4 (`crescentScale = 1`): sideways crescent blades unfurl at peak and slice lateralRival (`1`) too!
+  const stage3FullReaper = computeReaperBlades(
+    100,
+    100,
+    0,
+    0,
+    200,
+    [lateralRival, axialRival],
+    1.0,
+    1,
+  );
+  assert.ok(stage3FullReaper.crescentA.length >= 6);
+  assert.deepEqual(stage3FullReaper.hitVictimIndices, [1, 2]);
+
+  // Crate pickup stays blocked during Stage 2/3 deploy (`reaperDeployRemaining > 0`)
+  assert.equal(
+    canPickupCrate({
+      skill: 'reaper',
+      ammo: 1,
+      chargingLaserRemaining: 0,
+      reaperWindupRemaining: 0,
+      reaperDeployRemaining: 0.3,
+      reaperSpinRemaining: 3.7,
+    }),
+    false,
+  );
+});
+
 
 
 

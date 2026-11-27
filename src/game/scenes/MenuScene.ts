@@ -9,6 +9,7 @@ import {
 import { audioManager } from '../managers/AudioManager';
 import { mobileOrientationManager } from '../managers/MobileOrientationManager';
 import { settingsManager } from '../managers/SettingsManager';
+import { networkStatus } from '../network/networkStatus';
 import {
   animateStaggeredEntrance,
   createArcadeButton,
@@ -22,6 +23,9 @@ import { SkillGuideModal } from '../../ui/components/SkillGuideModal';
 
 export class MenuScene extends Phaser.Scene {
   private countButtons: Map<2 | 3 | 4, ArcadeButtonHandle> = new Map();
+  private onlineBtn!: ArcadeButtonHandle;
+  private offlineBadgeText!: Phaser.GameObjects.Text;
+  private unsubNetwork: (() => void) | null = null;
   private previewContainer!: Phaser.GameObjects.Container;
   private activeModal: SettingsModal | null = null;
   private activeSkillModal: SkillGuideModal | null = null;
@@ -107,21 +111,42 @@ export class MenuScene extends Phaser.Scene {
       },
     });
 
-    const onlineBtn = createArcadeButton(this, {
+    this.onlineBtn = createArcadeButton(this, {
       x: DESIGN_WIDTH / 2 + 252,
       y: 504,
       width: 236,
       height: 56,
       lipHeight: 5,
       label: '🌐 ONLINE 1VS1',
-      fontSize: 19,
+      fontSize: 18,
       fillColor: 0x1565c0,
       hoverColor: 0x1976d2,
       textColor: '#FFFFFF',
       onClick: () => {
         if (this.activeModal || this.activeSkillModal) return;
+        if (!networkStatus.isOnline()) return;
         this.scene.start('OnlineLobbyScene');
       },
+    });
+
+    this.offlineBadgeText = this.add
+      .text(
+        DESIGN_WIDTH / 2 + 252,
+        544,
+        '📴 Chế độ Offline • Vẫn chơi mượt với AI & Nội Bộ!',
+        {
+          fontFamily: "'Segoe UI', 'Inter', sans-serif",
+          fontSize: '11px',
+          fontStyle: '800',
+          color: '#C62828',
+        },
+      )
+      .setOrigin(0.5, 0.5)
+      .setVisible(false);
+
+    this.syncOnlineButtonAvailability();
+    this.unsubNetwork = networkStatus.subscribe(() => {
+      this.syncOnlineButtonAvailability();
     });
 
     const guideBtn = createArcadeButton(this, {
@@ -187,7 +212,7 @@ export class MenuScene extends Phaser.Scene {
         this.previewContainer,
         lobbyBtn.container,
         quickBtn.container,
-        onlineBtn.container,
+        this.onlineBtn.container,
         guideBtn.container,
         settingsBtn.container,
         codexBtn.container,
@@ -215,12 +240,30 @@ export class MenuScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener('keydown', this.onKeyDownBound);
+      this.unsubNetwork?.();
+      this.unsubNetwork = null;
       fsControls.destroy();
       this.activeModal?.close(true);
       this.activeModal = null;
       this.activeSkillModal?.close();
       this.activeSkillModal = null;
     });
+  }
+
+  private syncOnlineButtonAvailability(): void {
+    if (!this.onlineBtn) return;
+    const online = networkStatus.isOnline();
+    if (online) {
+      this.onlineBtn.setEnabled(true);
+      this.onlineBtn.setLabel('🌐 ONLINE 1VS1');
+      this.onlineBtn.setFill(0x1565c0, 0x1976d2, '#FFFFFF');
+      this.offlineBadgeText?.setVisible(false);
+    } else {
+      this.onlineBtn.setEnabled(false);
+      this.onlineBtn.setLabel('🔒 ONLINE (OFFLINE)');
+      this.onlineBtn.setFill(0xe0e3e7, 0xe0e3e7, '#788089');
+      this.offlineBadgeText?.setVisible(true);
+    }
   }
 
   private buildPlayerCountSelector(centerX: number, y: number): void {

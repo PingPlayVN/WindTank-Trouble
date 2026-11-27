@@ -49,6 +49,7 @@ export interface PlayerSkillState {
   ammo: number;
   chargingLaserRemaining: number;
   reaperWindupRemaining?: number;
+  reaperDeployRemaining?: number;
   reaperSpinRemaining?: number;
 }
 
@@ -105,6 +106,7 @@ export function canPickupCrate(state: PlayerSkillState, pendingDischarge = false
     state.chargingLaserRemaining <= 0 &&
     !pendingDischarge &&
     (state.reaperWindupRemaining ?? 0) <= 0 &&
+    (state.reaperDeployRemaining ?? 0) <= 0 &&
     (state.reaperSpinRemaining ?? 0) <= 0
   );
 }
@@ -925,10 +927,13 @@ function buildCrescentScytheCurve(
   vx: number,
   vy: number,
   bladeLength: number,
+  crescentScale = 1,
 ): Array<{ x: number; y: number }> {
-  const crescentSpan = bladeLength * 0.44;
+  if (crescentScale <= 0.02 || bladeLength <= 1) return [];
+  const clampedScale = Math.max(0, Math.min(1.15, crescentScale));
+  const crescentSpan = bladeLength * 0.44 * clampedScale;
   return CRESCENT_CURVE_SAMPLES.map((t) => {
-    const radial = bladeLength * (0.985 - 0.14 * t * t);
+    const radial = bladeLength * (0.985 - 0.14 * t * t * clampedScale);
     const lateral = t * crescentSpan;
     return {
       x: cx + ux * radial + vx * lateral,
@@ -954,7 +959,8 @@ function hitsPolyline(
 /**
  * 10. Reaper (`Lưỡi Hái Tử Thần`): computes the two opposing wall-piercing plasma shafts
  * (`angle` and `angle + PI`) PLUS two curved transverse Crescent Scythe heads (`crescentA`, `crescentB`)
- * sweeping across each tip, returning all rival tanks sliced by either shaft or crescent blade!
+ * scaled by `crescentScale` (`0` while laser shaft is still shooting out to peak; `0..1` while unfurling sideways;
+ * `1` during the 180-deg sweep!), returning all rival tanks sliced by the active shaft or crescent blades!
  */
 export function computeReaperBlades(
   cx: number,
@@ -964,6 +970,7 @@ export function computeReaperBlades(
   bladeLength: number,
   tanks: readonly TankKinematics[],
   scaleRatio: number,
+  crescentScale = 1,
 ): {
   bladeA: { x0: number; y0: number; x1: number; y1: number };
   bladeB: { x0: number; y0: number; x1: number; y1: number };
@@ -982,24 +989,26 @@ export function computeReaperBlades(
 
   const bladeA = { x0: cx, y0: cy, x1: cx + dx, y1: cy + dy };
   const bladeB = { x0: cx, y0: cy, x1: cx - dx, y1: cy - dy };
-  const crescentA = buildCrescentScytheCurve(cx, cy, ux, uy, vx, vy, bladeLength);
-  const crescentB = buildCrescentScytheCurve(cx, cy, -ux, -uy, -vx, -vy, bladeLength);
+  const crescentA = buildCrescentScytheCurve(cx, cy, ux, uy, vx, vy, bladeLength, crescentScale);
+  const crescentB = buildCrescentScytheCurve(cx, cy, -ux, -uy, -vx, -vy, bladeLength, crescentScale);
 
   const halfW = POWERUP_CONFIG.reaperBladeHalfWidth * scaleRatio;
   const crescentHalfW = halfW * 1.18;
   const hitVictimIndices: PlayerIndex[] = [];
 
-  for (const t of tanks) {
-    if (!t.alive || t.index === ownerIndex) continue;
-    const shaftRSq = (t.radius + halfW) * (t.radius + halfW);
-    const crescRSq = (t.radius + crescentHalfW) * (t.radius + crescentHalfW);
-    if (
-      pointToSegmentDistSq(t.x, t.y, bladeA.x0, bladeA.y0, bladeA.x1, bladeA.y1) <= shaftRSq ||
-      pointToSegmentDistSq(t.x, t.y, bladeB.x0, bladeB.y0, bladeB.x1, bladeB.y1) <= shaftRSq ||
-      hitsPolyline(t.x, t.y, crescentA, crescRSq) ||
-      hitsPolyline(t.x, t.y, crescentB, crescRSq)
-    ) {
-      hitVictimIndices.push(t.index);
+  if (bladeLength > 2) {
+    for (const t of tanks) {
+      if (!t.alive || t.index === ownerIndex) continue;
+      const shaftRSq = (t.radius + halfW) * (t.radius + halfW);
+      const crescRSq = (t.radius + crescentHalfW) * (t.radius + crescentHalfW);
+      if (
+        pointToSegmentDistSq(t.x, t.y, bladeA.x0, bladeA.y0, bladeA.x1, bladeA.y1) <= shaftRSq ||
+        pointToSegmentDistSq(t.x, t.y, bladeB.x0, bladeB.y0, bladeB.x1, bladeB.y1) <= shaftRSq ||
+        (crescentA.length >= 2 && hitsPolyline(t.x, t.y, crescentA, crescRSq)) ||
+        (crescentB.length >= 2 && hitsPolyline(t.x, t.y, crescentB, crescRSq))
+      ) {
+        hitVictimIndices.push(t.index);
+      }
     }
   }
 

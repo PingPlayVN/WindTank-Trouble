@@ -878,11 +878,21 @@ export class NightVisionSystem {
         );
       }
 
-      // Crescent Reaper (`Lưỡi Hái Tử Thần`) 180-deg Giant Twin-Scythe Sweep Phase!
+      // Crescent Reaper (`Lưỡi Hái Tử Thần`) Stages 2–4: Laser Shaft -> Crescent Unfurl -> 180° Sweep!
       if (tank.isReaperSweeping()) {
         const extend = tank.getReaperExtendProgress();
+        const crescentExtend = tank.getReaperCrescentProgress();
         const bladeLen = cellSize * POWERUP_CONFIG.reaperBladeCellsLength * extend;
-        const sweep = computeReaperBlades(cx, cy, tank.kinematics.angle, tank.index, bladeLen, [], scale);
+        const sweep = computeReaperBlades(
+          cx,
+          cy,
+          tank.kinematics.angle,
+          tank.index,
+          bladeLen,
+          [],
+          scale,
+          crescentExtend,
+        );
 
         paintRadialLight(
           cx,
@@ -1095,8 +1105,18 @@ export class NightVisionSystem {
 
       if (tank.isReaperSweeping()) {
         const extend = tank.getReaperExtendProgress();
+        const crescentExtend = tank.getReaperCrescentProgress();
         const bladeLen = cellSize * POWERUP_CONFIG.reaperBladeCellsLength * extend;
-        const sweep = computeReaperBlades(cx, cy, tank.kinematics.angle, tank.index, bladeLen, [], scale);
+        const sweep = computeReaperBlades(
+          cx,
+          cy,
+          tank.kinematics.angle,
+          tank.index,
+          bladeLen,
+          [],
+          scale,
+          crescentExtend,
+        );
 
         g.lineStyle(11 * scale, 0xd50000, 0.28);
         g.lineBetween(sweep.bladeB.x1, sweep.bladeB.y1, sweep.bladeA.x1, sweep.bladeA.y1);

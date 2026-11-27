@@ -411,20 +411,42 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   expect(reaperStartPos.vx).toBe(0);
   expect(reaperStartPos.vy).toBe(0);
 
-  // Hold `KeyW` (forward) across Windup -> Scythe Sweep transition — P1 MUST stay 100% movement-locked!
+  // Hold `KeyW` (forward) across all 4 Reaper stages:
+  //   Stage 1 (Gyro Spin) -> Stage 2 (Laser Shaft out, Crescent still 0!) -> Stage 3 (Crescent Unfurl) -> Stage 4 (180° Rotation)!
   await page.keyboard.down('KeyW');
   await page.waitForFunction(
     () => {
       const game = (window as unknown as { __WINDTANK_GAME__?: Phaser.Game }).__WINDTANK_GAME__;
       const gs = game?.scene.getScene('GameScene') as unknown as {
-        tanks?: Array<{ isReaperSweeping: () => boolean }>;
+        tanks?: Array<{
+          getReaperExtendProgress: () => number;
+          getReaperCrescentProgress: () => number;
+        }>;
       };
-      return Boolean(gs?.tanks?.[0]?.isReaperSweeping());
+      const t = gs?.tanks?.[0];
+      // Verify Stage 2: Laser shaft is shooting out (`> 0.15`) while sideways crescent is still strictly `0`!
+      return Boolean(t && t.getReaperExtendProgress() > 0.15 && t.getReaperCrescentProgress() === 0);
     },
     null,
     { timeout: 5000 },
   );
-  await page.waitForTimeout(160);
+  await page.waitForFunction(
+    () => {
+      const game = (window as unknown as { __WINDTANK_GAME__?: Phaser.Game }).__WINDTANK_GAME__;
+      const gs = game?.scene.getScene('GameScene') as unknown as {
+        tanks?: Array<{
+          isReaperRotating: () => boolean;
+          getReaperCrescentProgress: () => number;
+        }>;
+      };
+      const t = gs?.tanks?.[0];
+      // Verify Stage 4: Crescent blades unfurled (`>= 0.98`) and 180° rotation has started!
+      return Boolean(t && t.isReaperRotating() && t.getReaperCrescentProgress() >= 0.98);
+    },
+    null,
+    { timeout: 5000 },
+  );
+  await page.waitForTimeout(120);
   await page.keyboard.up('KeyW');
 
   const reaperAfterHold = await page.evaluate(() => {
@@ -795,6 +817,36 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   ).toBe(true);
 
   await mobilePage.close();
+
+  // 4b. Verify Offline Mode locks `ONLINE 1VS1` (`🔒 ONLINE (OFFLINE)`) while keeping Offline modes playable,
+  //     then automatically unlocks `🌐 ONLINE 1VS1` when connectivity returns!
+  await context.setOffline(true);
+  await page.waitForFunction(() => {
+    const g = (window as unknown as { __WINDTANK_GAME__?: Phaser.Game }).__WINDTANK_GAME__;
+    const menu = g?.scene.getScene('MenuScene') as unknown as {
+      onlineBtn?: { labelText: { text: string } };
+    };
+    return menu?.onlineBtn?.labelText.text.includes('OFFLINE') ?? false;
+  });
+  await clickDesignCoord(892, 504, page);
+  await page.waitForTimeout(120);
+  const stillOnMenuWhileOffline = await page.evaluate(() => {
+    const g = (window as unknown as { __WINDTANK_GAME__?: Phaser.Game }).__WINDTANK_GAME__;
+    return Boolean(g?.scene.isActive('MenuScene') && !g?.scene.isActive('OnlineLobbyScene'));
+  });
+  expect(stillOnMenuWhileOffline).toBe(true);
+  await page.screenshot({
+    path: path.join(SHOT_DIR, '05a-offline-mode-locks-online-button.png'),
+  });
+
+  await context.setOffline(false);
+  await page.waitForFunction(() => {
+    const g = (window as unknown as { __WINDTANK_GAME__?: Phaser.Game }).__WINDTANK_GAME__;
+    const menu = g?.scene.getScene('MenuScene') as unknown as {
+      onlineBtn?: { labelText: { text: string } };
+    };
+    return menu?.onlineBtn?.labelText.text.includes('ONLINE 1VS1') ?? false;
+  });
 
   // 5. 2-Tab Serverless 1vs1 Online Room Code Lobby (`WT-XXXX`) + Live Host-Guest P2P Sync!
   await clickDesignCoord(892, 504, page);
