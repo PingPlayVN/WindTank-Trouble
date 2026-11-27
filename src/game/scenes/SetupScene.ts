@@ -22,6 +22,7 @@ import {
   type ArcadeButtonHandle,
   type ScoreStepperHandle,
 } from '../../ui/components/ArcadeWidgets';
+import { createMobileFullscreenControls } from '../../ui/components/FullscreenPromptWidget';
 import { MatchRulesModal } from '../../ui/components/MatchRulesModal';
 import { SettingsModal } from '../../ui/components/SettingsModal';
 import { SkillGuideModal } from '../../ui/components/SkillGuideModal';
@@ -59,7 +60,13 @@ export class SetupScene extends Phaser.Scene {
     this.activeSkillModal = null;
     this.activeRulesModal = null;
 
+    mobileOrientationManager.syncLayout();
     drawMazeBackdrop(this, DESIGN_WIDTH, DESIGN_HEIGHT);
+    const fsControls = createMobileFullscreenControls(this, {
+      buttonX: DESIGN_WIDTH - 96,
+      buttonY: 46,
+      showRecommendationBanner: false,
+    });
 
     const header = this.add
       .text(DESIGN_WIDTH / 2, 46, 'SẢNH CHỌN XE TĂNG, ĐỘ KHÓ AI & LUẬT ĐẤU', {
@@ -308,6 +315,7 @@ export class SetupScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener('keydown', this.onKeyDownBound);
+      fsControls.destroy();
       this.activeModal?.close(true);
       this.activeModal = null;
       this.activeSkillModal?.close();

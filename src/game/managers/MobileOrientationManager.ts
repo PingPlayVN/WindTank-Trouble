@@ -5,21 +5,28 @@ import { settingsManager } from '../managers/SettingsManager';
 export interface MobileViewportState {
   isMobileUi: boolean;
   isCssPortraitRotated: boolean;
+  isFullscreen: boolean;
   viewportWidth: number;
   viewportHeight: number;
 }
 
+type FullscreenListener = (isFullscreen: boolean) => void;
+
 /**
  * Automatically detects Mobile vs PC, locks the page against mobile scroll/bounce/zoom,
- * attempts native Screen Orientation Landscape lock on user gesture, and — whenever a mobile
+ * manages Cross-Browser Fullscreen + Native Landscape Orientation Lock, and — whenever a mobile
  * player holds their phone vertically (`innerHeight > innerWidth`) — applies an instant, centered
  * `90deg` CSS landscape rotation to `#game-root` WITH exact live pointer-coordinate remapping!
  */
 class MobileOrientationManager {
   private game: Phaser.Game | null = null;
   private cssRotated = false;
+  private expectedCssW = '';
+  private expectedCssH = '';
   private attached = false;
   private pointerHooked = false;
+  private fullscreenPromptDismissed = false;
+  private readonly fullscreenListeners = new Set<FullscreenListener>();
 
   attach(game: Phaser.Game): void {
     this.game = game;
@@ -35,6 +42,10 @@ class MobileOrientationManager {
         ) => {
           this.transformCanvasPointer(pointer, pageX, pageY, wasMove);
         };
+        // Prevent Phaser ScaleManager's internal getBoundingClientRect() refresh from clobbering
+        // canvas CSS dimensions when #game-root is rotated +90deg on portrait phones!
+        game.scale?.on(Phaser.Scale.Events.RESIZE, () => this.enforceCanvasStyle());
+        game.events.on(Phaser.Core.Events.PRE_RENDER, () => this.enforceCanvasStyle());
       }
       this.syncLayout();
     };
@@ -52,23 +63,41 @@ class MobileOrientationManager {
       window.addEventListener('orientationchange', onResize);
       window.visualViewport?.addEventListener('resize', onResize);
 
-      const tryLockNativeLandscape = () => {
-        if (!this.shouldUseMobileMode()) return;
-        const scr = window.screen as Screen & {
-          orientation?: { lock?: (mode: string) => Promise<void> };
-        };
-        if (scr?.orientation?.lock) {
-          scr.orientation.lock('landscape').catch(() => {
-            // Outside fullscreen, browsers reject lock(); CSS 90deg landscape lock handles it seamlessly!
-          });
+      const onFsChange = () => {
+        const full = this.isFullscreen();
+        if (full) {
+          this.fullscreenPromptDismissed = true;
+          this.tryLockNativeLandscape();
+        }
+        this.syncLayout();
+        window.requestAnimationFrame(() => this.syncLayout());
+        // Delayed sync after browser finishes animating status/address bar hide
+        window.setTimeout(() => this.syncLayout(), 120);
+        for (const fn of this.fullscreenListeners) {
+          fn(full);
         }
       };
-      window.addEventListener('touchstart', tryLockNativeLandscape, { passive: true });
-      window.addEventListener('pointerdown', tryLockNativeLandscape, { passive: true });
+      document.addEventListener('fullscreenchange', onFsChange);
+      document.addEventListener('webkitfullscreenchange', onFsChange);
+
+      window.addEventListener('touchstart', () => this.tryLockNativeLandscape(), { passive: true });
+      window.addEventListener('pointerdown', () => this.tryLockNativeLandscape(), { passive: true });
     }
 
     this.syncLayout();
     this.registerDiagnostics();
+  }
+
+  private tryLockNativeLandscape(): void {
+    if (!this.shouldUseMobileMode() || typeof window === 'undefined') return;
+    const scr = window.screen as Screen & {
+      orientation?: { lock?: (mode: string) => Promise<void> };
+    };
+    if (scr?.orientation?.lock) {
+      scr.orientation.lock('landscape').catch(() => {
+        // Outside fullscreen, mobile browsers reject lock(); CSS 90deg landscape lock handles it!
+      });
+    }
   }
 
   shouldUseMobileMode(): boolean {
@@ -79,12 +108,94 @@ class MobileOrientationManager {
     return this.cssRotated;
   }
 
+  isFullscreen(): boolean {
+    if (typeof document === 'undefined') return false;
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
+    return Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+  }
+
+  isFullscreenSupported(): boolean {
+    if (typeof document === 'undefined') return false;
+    const el = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    return Boolean(el && (typeof el.requestFullscreen === 'function' || typeof el.webkitRequestFullscreen === 'function'));
+  }
+
+  async toggleFullscreen(): Promise<{ ok: boolean; isFullscreen: boolean; unsupportedReason?: string }> {
+    if (typeof document === 'undefined') {
+      return { ok: false, isFullscreen: false };
+    }
+
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    const el = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+
+    try {
+      if (this.isFullscreen()) {
+        if (typeof doc.exitFullscreen === 'function') {
+          await doc.exitFullscreen();
+        } else if (typeof doc.webkitExitFullscreen === 'function') {
+          await doc.webkitExitFullscreen();
+        }
+        this.syncLayout();
+        return { ok: true, isFullscreen: false };
+      }
+
+      if (typeof el.requestFullscreen === 'function') {
+        await el.requestFullscreen({ navigationUI: 'hide' });
+      } else if (typeof el.webkitRequestFullscreen === 'function') {
+        await el.webkitRequestFullscreen();
+      } else {
+        this.fullscreenPromptDismissed = true;
+        return {
+          ok: false,
+          isFullscreen: false,
+          unsupportedReason:
+            'Trên iPhone Safari: bấm nút Chia Sẻ → "Thêm vào MH chính" để mở Toàn Màn Hình!',
+        };
+      }
+
+      this.fullscreenPromptDismissed = true;
+      this.tryLockNativeLandscape();
+      this.syncLayout();
+      return { ok: true, isFullscreen: true };
+    } catch {
+      return {
+        ok: false,
+        isFullscreen: this.isFullscreen(),
+        unsupportedReason:
+          'Trình duyệt chặn tự động Toàn Màn Hình — hãy mở bằng Chrome hoặc Thêm vào Màn Hình Chính!',
+      };
+    }
+  }
+
+  hasDismissedFullscreenPrompt(): boolean {
+    return this.fullscreenPromptDismissed || this.isFullscreen();
+  }
+
+  dismissFullscreenPrompt(): void {
+    this.fullscreenPromptDismissed = true;
+  }
+
+  subscribeFullscreen(fn: FullscreenListener): () => void {
+    this.fullscreenListeners.add(fn);
+    return () => {
+      this.fullscreenListeners.delete(fn);
+    };
+  }
+
   getState(): MobileViewportState {
     const w = typeof window !== 'undefined' ? window.innerWidth : DESIGN_WIDTH;
     const h = typeof window !== 'undefined' ? window.innerHeight : DESIGN_HEIGHT;
     return {
       isMobileUi: this.shouldUseMobileMode(),
       isCssPortraitRotated: this.cssRotated,
+      isFullscreen: this.isFullscreen(),
       viewportWidth: w,
       viewportHeight: h,
     };
@@ -116,25 +227,33 @@ class MobileOrientationManager {
       root.style.height = `${availH}px`;
     }
 
+    const fitScale = Math.min(availW / DESIGN_WIDTH, availH / DESIGN_HEIGHT);
+    const cssW = Math.max(1, Math.floor(DESIGN_WIDTH * fitScale));
+    const cssH = Math.max(1, Math.floor(DESIGN_HEIGHT * fitScale));
+    this.expectedCssW = `${cssW}px`;
+    this.expectedCssH = `${cssH}px`;
+
     if (this.game?.scale && this.game.isBooted) {
       this.game.scale.setParentSize(availW, availH);
     }
 
+    this.enforceCanvasStyle();
+  }
+
+  private enforceCanvasStyle(): void {
     const canvas = this.game?.canvas;
-    if (canvas) {
-      const fitScale = Math.min(availW / DESIGN_WIDTH, availH / DESIGN_HEIGHT);
-      const cssW = Math.max(1, Math.floor(DESIGN_WIDTH * fitScale));
-      const cssH = Math.max(1, Math.floor(DESIGN_HEIGHT * fitScale));
-      canvas.style.width = `${cssW}px`;
-      canvas.style.height = `${cssH}px`;
+    if (!canvas || !this.expectedCssW || !this.expectedCssH) return;
+    if (canvas.style.width !== this.expectedCssW) {
+      canvas.style.width = this.expectedCssW;
+    }
+    if (canvas.style.height !== this.expectedCssH) {
+      canvas.style.height = this.expectedCssH;
+    }
+    if (canvas.style.margin !== '0px') {
       canvas.style.margin = '0px';
     }
   }
 
-  /**
-   * Live, zero-stale-cache pointer coordinate mapper from screen `(pageX, pageY)` into `1280×760`
-   * design coordinates for BOTH normal landscape and `+90deg` CSS-rotated portrait viewports!
-   */
   private transformCanvasPointer(
     pointer: Phaser.Input.Pointer,
     pageX: number,
@@ -167,7 +286,6 @@ class MobileOrientationManager {
       const unrotCssW = Math.max(1, rect.height);
       const unrotCssH = Math.max(1, rect.width);
 
-      // Inverse of +90deg clockwise rotation around (cx, cy):
       const u = clientY - cy;
       const v = -(clientX - cx);
       x = ((u + unrotCssW * 0.5) / unrotCssW) * DESIGN_WIDTH;
@@ -193,11 +311,15 @@ class MobileOrientationManager {
         __WINDTANK_ORIENTATION__?: {
           getState: () => MobileViewportState;
           syncLayout: () => void;
+          toggleFullscreen: () => Promise<{ ok: boolean; isFullscreen: boolean }>;
+          hasDismissedFullscreenPrompt: () => boolean;
         };
       }
     ).__WINDTANK_ORIENTATION__ = {
       getState: () => this.getState(),
       syncLayout: () => this.syncLayout(),
+      toggleFullscreen: () => this.toggleFullscreen(),
+      hasDismissedFullscreenPrompt: () => this.hasDismissedFullscreenPrompt(),
     };
   }
 }

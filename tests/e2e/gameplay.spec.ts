@@ -305,10 +305,42 @@ test('Full Wave 6 QA: Smooth Hero-Tank Loading Bar, Auto Mobile CSS Landscape Lo
   // Pressing Digit4 or clicking 4-player button (`x=805, y=294`) on Mobile MUST stay locked at 2 players!
   await mobilePage.keyboard.press('Digit4');
   await clickDesignCoord(805, 294, mobilePage);
-  await mobilePage.waitForTimeout(100);
+  await mobilePage.waitForTimeout(320); // Allow Fullscreen Recommendation Banner entrance tween to settle
   await mobilePage.screenshot({
     path: path.join(SHOT_DIR, '02-mobile-portrait-auto-css-landscape-menu.png'),
   });
+
+  // Verify Fullscreen Recommendation Banner dismiss (`x=1032, y=40`) & Enter/Exit Fullscreen Button (`x=1184, y=40`)!
+  await clickDesignCoord(1032, 40, mobilePage);
+  await mobilePage.waitForTimeout(140);
+  const dismissedPrompt = await mobilePage.evaluate(() => {
+    const o = (
+      window as unknown as {
+        __WINDTANK_ORIENTATION__: {
+          hasDismissedFullscreenPrompt: () => boolean;
+          getState: () => { isMobileUi: boolean; isFullscreen: boolean };
+        };
+      }
+    ).__WINDTANK_ORIENTATION__;
+    return o.hasDismissedFullscreenPrompt();
+  });
+  expect(dismissedPrompt).toBe(true);
+
+  // Enter Fullscreen via `⛶ FULL MÀN HÌNH`, assert `isFullscreen === true`, then exit via `✕ THOÁT FULL`!
+  await clickDesignCoord(1184, 40, mobilePage);
+  await mobilePage.waitForFunction(() => Boolean(document.fullscreenElement), null, {
+    timeout: 3000,
+  });
+  await mobilePage.waitForTimeout(220);
+  await waitFrames(2, mobilePage);
+  await clickDesignCoord(1184, 40, mobilePage);
+  await mobilePage.waitForFunction(() => !document.fullscreenElement, null, {
+    timeout: 3000,
+  });
+  // Restore exact portrait viewport in Headless Chromium after OS fullscreen exit
+  await mobilePage.setViewportSize({ width: 390, height: 844 });
+  await mobilePage.waitForTimeout(160);
+  await waitFrames(2, mobilePage);
 
   // Tap `VÀO SẢNH ĐẤU` (`388, 504`) directly through the +90deg CSS-rotated portrait canvas!
   await clickDesignCoord(388, 504, mobilePage);

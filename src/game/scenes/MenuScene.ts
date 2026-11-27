@@ -16,6 +16,7 @@ import {
   drawMazeBackdrop,
   type ArcadeButtonHandle,
 } from '../../ui/components/ArcadeWidgets';
+import { createMobileFullscreenControls } from '../../ui/components/FullscreenPromptWidget';
 import { SettingsModal } from '../../ui/components/SettingsModal';
 import { SkillGuideModal } from '../../ui/components/SkillGuideModal';
 
@@ -42,6 +43,12 @@ export class MenuScene extends Phaser.Scene {
 
     this.cameras.main.fadeIn(220, 238, 238, 236);
     drawMazeBackdrop(this, DESIGN_WIDTH, DESIGN_HEIGHT);
+    const fsControls = createMobileFullscreenControls(this, {
+      buttonX: DESIGN_WIDTH - 96,
+      buttonY: 40,
+      showRecommendationBanner: true,
+      bannerY: 40,
+    });
     const logo = createLogoHeader(this, DESIGN_WIDTH / 2, 148, 1.04);
 
     const subHeader = this.add
@@ -208,6 +215,7 @@ export class MenuScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener('keydown', this.onKeyDownBound);
+      fsControls.destroy();
       this.activeModal?.close(true);
       this.activeModal = null;
       this.activeSkillModal?.close();

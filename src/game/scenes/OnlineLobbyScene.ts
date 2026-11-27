@@ -23,6 +23,7 @@ import {
   drawMazeBackdrop,
   type ArcadeButtonHandle,
 } from '../../ui/components/ArcadeWidgets';
+import { createMobileFullscreenControls } from '../../ui/components/FullscreenPromptWidget';
 import { MatchRulesModal } from '../../ui/components/MatchRulesModal';
 
 interface OnlineLobbyInitData {
@@ -65,6 +66,12 @@ export class OnlineLobbyScene extends Phaser.Scene {
     this.cameras.main.fadeIn(200, 238, 238, 236);
 
     drawMazeBackdrop(this, DESIGN_WIDTH, DESIGN_HEIGHT);
+    const fsControls = createMobileFullscreenControls(this, {
+      buttonX: DESIGN_WIDTH - 96,
+      buttonY: 42,
+      showRecommendationBanner: true,
+      bannerY: 42,
+    });
 
     const header = this.add
       .text(DESIGN_WIDTH / 2, 42, '🌐 SẢNH ĐẤU ONLINE 1VS1  •  KẾT NỐI MÃ PHÒNG P2P', {
@@ -118,7 +125,7 @@ export class OnlineLobbyScene extends Phaser.Scene {
     this.roomPanelContainer = this.add.container(0, 0);
 
     this.pingBadgeText = this.add
-      .text(DESIGN_WIDTH - 48, 42, 'PING: -- ms', {
+      .text(DESIGN_WIDTH - 36, 118, 'PING: -- ms', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: '13.5px',
         fontStyle: '900',
@@ -202,6 +209,7 @@ export class OnlineLobbyScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener('keydown', this.onKeyDownBound);
+      fsControls.destroy();
       this.unsubLobby?.();
       this.unsubLobby = null;
       this.unsubMatchStart?.();

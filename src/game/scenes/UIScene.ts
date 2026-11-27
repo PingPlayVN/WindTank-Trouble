@@ -22,6 +22,10 @@ import {
   createArcadeButton,
   type ArcadeButtonHandle,
 } from '../../ui/components/ArcadeWidgets';
+import {
+  createMobileFullscreenControls,
+  type MobileFullscreenControlsHandle,
+} from '../../ui/components/FullscreenPromptWidget';
 import { MatchRulesModal } from '../../ui/components/MatchRulesModal';
 import { SettingsModal } from '../../ui/components/SettingsModal';
 import { SkillGuideModal } from '../../ui/components/SkillGuideModal';
@@ -55,6 +59,7 @@ export class UIScene extends Phaser.Scene {
   private lastSnapshot: HudSnapshot | null = null;
 
   private touchOverlay: TouchControlsOverlay | null = null;
+  private fsControls: MobileFullscreenControlsHandle | null = null;
 
   private centerBannerContainer!: Phaser.GameObjects.Container;
   private centerBannerBg!: Phaser.GameObjects.Graphics;
@@ -155,6 +160,8 @@ export class UIScene extends Phaser.Scene {
       gameScene.events.off('pause-changed', onPauseChanged);
       this.touchOverlay?.destroy();
       this.touchOverlay = null;
+      this.fsControls?.destroy();
+      this.fsControls = null;
       this.settingsModal?.close(true);
       this.settingsModal = null;
       this.skillGuideModal?.close();
@@ -235,8 +242,9 @@ export class UIScene extends Phaser.Scene {
       .setOrigin(0, 0.5)
       .setDepth(30);
 
+    const isMobile = settingsManager.isTouchControlsActive();
     this.goalBadgeText = this.add
-      .text(DESIGN_WIDTH / 2 - 58, y, 'ĐẠT TRƯỚC 5 ĐIỂM', {
+      .text(DESIGN_WIDTH / 2 - (isMobile ? 105 : 58), y, 'ĐẠT TRƯỚC 5 ĐIỂM', {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: '13px',
         fontStyle: '800',
@@ -244,6 +252,16 @@ export class UIScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0.5)
       .setDepth(30);
+
+    this.fsControls = createMobileFullscreenControls(this, {
+      buttonX: DESIGN_WIDTH - 548,
+      buttonY: y,
+      buttonWidth: 108,
+      buttonHeight: 30,
+      compactButton: true,
+      showRecommendationBanner: false,
+      depth: 30,
+    });
 
     this.netPingText = this.add
       .text(318, y, '', {
