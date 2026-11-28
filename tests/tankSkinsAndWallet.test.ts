@@ -453,3 +453,149 @@ test('Google Account Skin Sync: restores purchased skins on a brand-new device a
     }
   }
 });
+
+test('Shared Tài Xỉu <-> WindTank Account Rules: Giftcode requires login, 1-time shared redemption, and no duplicate Daily Reward', async () => {
+  const g = globalThis as unknown as {
+    window?: Record<string, unknown>;
+    localStorage?: Storage;
+    navigator?: { onLine: boolean };
+  };
+  const prevWin = g.window;
+  const prevLs = g.localStorage;
+  const prevNav = g.navigator;
+
+  const map = new Map<string, string>();
+  const mockStorage = {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      map.set(k, String(v));
+    },
+    removeItem: (k: string) => {
+      map.delete(k);
+    },
+    clear: () => map.clear(),
+    key: (i: number) => Array.from(map.keys())[i] ?? null,
+    get length() {
+      return map.size;
+    },
+  } as Storage;
+
+  let authenticated = false;
+  let balance = 10000;
+  let claimedTodayInTaiXiu = true; // Simulate player ALREADY logged in & claimed daily reward in Tài Xỉu!
+  const sharedRedeemedCodes = new Set<string>(['TAIXIU2026']); // Already redeemed in Tài Xỉu!
+
+  const mockBridge = {
+    getState: () => ({
+      connectedToWindHub: true,
+      authenticated,
+      online: true,
+      uid: authenticated ? 'uid_shared_01' : null,
+      googleSub: authenticated ? 'sub_shared_01' : null,
+      email: authenticated ? 'shared@windhub.vn' : '',
+      displayName: authenticated ? 'Shared Player' : 'Chưa đăng nhập',
+      avatarUrl: '',
+      balance: authenticated ? balance : 0,
+      cloudSynced: authenticated,
+      ownedSkins: ['classic'],
+      redeemedGiftcodes: authenticated ? Array.from(sharedRedeemedCodes) : [],
+      dailyReward: authenticated
+        ? {
+            currentStreak: 1,
+            claimedToday: claimedTodayInTaiXiu,
+            canClaimToday: !claimedTodayInTaiXiu,
+            nextStreakDay: 2,
+            nextRewardAmount: 10000,
+            rewardAmounts: [5000, 10000, 15000, 25000, 40000, 60000, 100000],
+          }
+        : null,
+    }),
+    claimDailyReward: async () => {
+      if (claimedTodayInTaiXiu) {
+        return {
+          success: false,
+          code: 'ALREADY_CLAIMED',
+          message: 'Đã điểm danh bên Tài Xỉu hôm nay!',
+        };
+      }
+      claimedTodayInTaiXiu = true;
+      balance += 10000;
+      return { success: true, amount: 10000, newBalance: balance };
+    },
+    redeemGiftCode: async (code: string) => {
+      const clean = code.trim().toUpperCase();
+      if (sharedRedeemedCodes.has(clean)) {
+        return {
+          success: false,
+          code: 'ALREADY_REDEEMED',
+          message: `Bạn đã nhập mã ${clean} bên Tài Xỉu rồi!`,
+        };
+      }
+      if (clean === 'WINDTANKVIP') {
+        sharedRedeemedCodes.add(clean);
+        balance += 50000;
+        return {
+          success: true,
+          code: clean,
+          rewardAmount: 50000,
+          newBalance: balance,
+          message: 'Nhận +50,000 Xu!',
+        };
+      }
+      return { success: false, code: 'NOT_FOUND', message: 'Mã không tồn tại' };
+    },
+  };
+
+  try {
+    Object.defineProperty(g, 'navigator', { value: { onLine: true }, configurable: true });
+    g.localStorage = mockStorage;
+    g.window = { localStorage: mockStorage, __WINDHUB_TANK_WALLET_BRIDGE__: mockBridge };
+
+    const mgr = new SkinWalletManager();
+
+    // 1. Unauthenticated: cannot redeem giftcode or claim daily reward
+    assert.equal(mgr.getSnapshot().authenticated, false);
+    const unauthCode = await mgr.redeemGiftCode('WINDTANKVIP');
+    assert.equal(unauthCode.success, false);
+    assert.equal(unauthCode.code, 'AUTH_REQUIRED');
+
+    // 2. Player logs in (already logged in & claimed daily reward in Tài Xỉu!)
+    authenticated = true;
+    const snapAfterLogin = mgr.getSnapshot();
+    assert.equal(snapAfterLogin.authenticated, true);
+    assert.equal(snapAfterLogin.dailyReward?.claimedToday, true);
+    assert.equal(snapAfterLogin.dailyReward?.canClaimToday, false);
+
+    // Trying to claim daily reward again in WindTank is strictly blocked!
+    const duplicateClaim = await mgr.claimDailyReward();
+    assert.equal(duplicateClaim.success, false);
+    assert.equal(duplicateClaim.code, 'ALREADY_CLAIMED');
+    assert.equal(mgr.getSnapshot().balance, 10000, 'No duplicate reward granted when coming from Tài Xỉu!');
+
+    // 3. Trying to re-enter giftcode 'TAIXIU2026' (already used in Tài Xỉu) is strictly blocked!
+    const dupGift = await mgr.redeemGiftCode('taixiu2026');
+    assert.equal(dupGift.success, false);
+    assert.equal(dupGift.code, 'ALREADY_REDEEMED');
+
+    // 4. Entering a fresh valid giftcode 'WINDTANKVIP' credits shared Xu & marks it used for both games!
+    const validGift = await mgr.redeemGiftCode('windtankvip');
+    assert.equal(validGift.success, true);
+    assert.equal(mgr.getSnapshot().balance, 60000);
+    assert.equal(mgr.getSnapshot().redeemedGiftcodes.includes('WINDTANKVIP'), true);
+
+    // 5. Re-entering 'WINDTANKVIP' a second time is rejected!
+    const secondTry = await mgr.redeemGiftCode('WINDTANKVIP');
+    assert.equal(secondTry.success, false);
+    assert.equal(secondTry.code, 'ALREADY_REDEEMED');
+  } finally {
+    if (prevWin === undefined) delete g.window;
+    else g.window = prevWin;
+    if (prevLs === undefined) delete g.localStorage;
+    else g.localStorage = prevLs;
+    if (prevNav === undefined) {
+      delete (g as Record<string, unknown>).navigator;
+    } else {
+      Object.defineProperty(g, 'navigator', { value: prevNav, configurable: true });
+    }
+  }
+});

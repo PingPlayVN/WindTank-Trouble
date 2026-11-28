@@ -11,6 +11,10 @@ import {
 import { audioManager } from '../managers/AudioManager';
 import { mobileOrientationManager } from '../managers/MobileOrientationManager';
 import { settingsManager } from '../managers/SettingsManager';
+import {
+  skinWalletManager,
+  type WindHubWalletSnapshot,
+} from '../managers/SkinWalletManager';
 import { networkStatus } from '../network/networkStatus';
 import type { PlayerIndex } from '../types/gameTypes';
 import {
@@ -24,18 +28,23 @@ import { createMobileFullscreenControls } from '../../ui/components/FullscreenPr
 import { SettingsModal } from '../../ui/components/SettingsModal';
 import { SkillGuideModal } from '../../ui/components/SkillGuideModal';
 import { TankGarageModal } from '../../ui/components/TankGarageModal';
+import { WindHubAccountModal } from '../../ui/components/WindHubAccountModal';
 
 export class MenuScene extends Phaser.Scene {
   private countButtons: Map<2 | 3 | 4, ArcadeButtonHandle> = new Map();
   private mobileSoloAiBtn: ArcadeButtonHandle | null = null;
   private mobileDualHumanBtn: ArcadeButtonHandle | null = null;
   private onlineBtn!: ArcadeButtonHandle;
+  private accountHudBtn!: ArcadeButtonHandle;
+  private giftCodeHudBtn!: ArcadeButtonHandle;
   private offlineBadgeText!: Phaser.GameObjects.Text;
   private unsubNetwork: (() => void) | null = null;
+  private unsubWallet: (() => void) | null = null;
   private previewContainer!: Phaser.GameObjects.Container;
   private activeModal: SettingsModal | null = null;
   private activeSkillModal: SkillGuideModal | null = null;
   private activeGarageModal: TankGarageModal | null = null;
+  private activeAccountModal: WindHubAccountModal | null = null;
   private onKeyDownBound!: (e: KeyboardEvent) => void;
 
   constructor() {
@@ -49,6 +58,7 @@ export class MenuScene extends Phaser.Scene {
     this.activeModal = null;
     this.activeSkillModal = null;
     this.activeGarageModal = null;
+    this.activeAccountModal = null;
     mobileOrientationManager.syncLayout();
     const isMobile = settingsManager.isTouchControlsActive();
     if (isMobile) {
@@ -71,6 +81,48 @@ export class MenuScene extends Phaser.Scene {
       bannerY: 40,
     });
     const logo = createLogoHeader(this, DESIGN_WIDTH / 2, 146, 1.04);
+
+    // Top-Right WindHub Login + Giftcode/Daily Reward HUD (Giftcode button ONLY appears when authenticated!)
+    const rightEdge = mobileOrientationManager.getViewRight();
+    const hudY = isMobile ? 96 : 36;
+    const accBtnW = isMobile ? 216 : 226;
+    const giftBtnW = isMobile ? 216 : 238;
+
+    this.accountHudBtn = createArcadeButton(this, {
+      x: rightEdge - accBtnW / 2 - 18,
+      y: hudY,
+      width: accBtnW,
+      height: 36,
+      lipHeight: 2.5,
+      label: '🔑 ĐĂNG NHẬP WINDHUB',
+      fontSize: 12,
+      fillColor: 0x1565c0,
+      hoverColor: 0x1976d2,
+      textColor: '#FFFFFF',
+      onClick: () => this.openAccountModal(),
+    });
+    this.accountHudBtn.container.setDepth(85);
+
+    this.giftCodeHudBtn = createArcadeButton(this, {
+      x: isMobile
+        ? rightEdge - giftBtnW / 2 - 18
+        : rightEdge - accBtnW - giftBtnW / 2 - 28,
+      y: isMobile ? hudY + 44 : hudY,
+      width: giftBtnW,
+      height: 36,
+      lipHeight: 2.5,
+      label: '🎟️ NHẬP GIFTCODE',
+      fontSize: 12,
+      fillColor: 0xffb300,
+      hoverColor: 0xffca28,
+      textColor: '#18191B',
+      onClick: () => this.openAccountModal(),
+    });
+    this.giftCodeHudBtn.container.setDepth(85).setVisible(false);
+
+    this.unsubWallet = skinWalletManager.subscribe((snap) => {
+      this.syncAccountHud(snap);
+    });
 
     const subHeader = this.add
       .text(
@@ -106,7 +158,7 @@ export class MenuScene extends Phaser.Scene {
       hoverColor: 0xf44336,
       textColor: '#FFFFFF',
       onClick: () => {
-        if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
+        if (this.hasOpenModal()) return;
         this.scene.start('SetupScene');
       },
     });
@@ -123,7 +175,7 @@ export class MenuScene extends Phaser.Scene {
       hoverColor: 0x4caf50,
       textColor: '#FFFFFF',
       onClick: () => {
-        if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
+        if (this.hasOpenModal()) return;
         this.scene.start('GameScene', { freshMatch: true });
       },
     });
@@ -140,7 +192,7 @@ export class MenuScene extends Phaser.Scene {
       hoverColor: 0x1976d2,
       textColor: '#FFFFFF',
       onClick: () => {
-        if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
+        if (this.hasOpenModal()) return;
         if (!networkStatus.isOnline()) return;
         this.scene.start('OnlineLobbyScene');
       },
@@ -254,7 +306,7 @@ export class MenuScene extends Phaser.Scene {
     );
 
     this.onKeyDownBound = (e: KeyboardEvent) => {
-      if (this.activeModal || this.activeSkillModal || this.activeGarageModal || e.repeat) return;
+      if (this.hasOpenModal() || e.repeat) return;
       if (e.code === 'Enter' || e.code === 'Space') {
         audioManager.unlock();
         audioManager.playUiClick(false);
@@ -273,6 +325,8 @@ export class MenuScene extends Phaser.Scene {
       window.removeEventListener('keydown', this.onKeyDownBound);
       this.unsubNetwork?.();
       this.unsubNetwork = null;
+      this.unsubWallet?.();
+      this.unsubWallet = null;
       fsControls.destroy();
       this.activeModal?.close(true);
       this.activeModal = null;
@@ -280,7 +334,57 @@ export class MenuScene extends Phaser.Scene {
       this.activeSkillModal = null;
       this.activeGarageModal?.close(true);
       this.activeGarageModal = null;
+      this.activeAccountModal?.close(true);
+      this.activeAccountModal = null;
     });
+  }
+
+  private hasOpenModal(): boolean {
+    return Boolean(
+      this.activeModal ||
+        this.activeSkillModal ||
+        this.activeGarageModal ||
+        this.activeAccountModal,
+    );
+  }
+
+  private syncAccountHud(snap: WindHubWalletSnapshot): void {
+    if (!this.accountHudBtn?.container?.scene || !this.giftCodeHudBtn?.container?.scene) {
+      return;
+    }
+
+    if (!snap.authenticated) {
+      // STRICT REQUIREMENT: Giftcode & Daily Check-in button is HIDDEN until logged into an account!
+      this.giftCodeHudBtn.container.setVisible(false);
+      this.accountHudBtn.setLabel(
+        snap.online ? '🔑 ĐĂNG NHẬP WINDHUB' : '📴 OFFLINE (KHÁCH)',
+      );
+      this.accountHudBtn.setFill(
+        snap.online ? 0x1565c0 : 0x546e7a,
+        snap.online ? 0x1976d2 : 0x607d8b,
+        '#FFFFFF',
+      );
+      return;
+    }
+
+    // Authenticated: show BOTH Account Xu Pill AND Giftcode / Daily Check-in Button!
+    const shortName = (snap.displayName || snap.email || 'Tài khoản').slice(0, 12);
+    this.accountHudBtn.setLabel(`◈ ${snap.balance.toLocaleString()} XU • ${shortName}`);
+    this.accountHudBtn.setFill(0xffffff, 0xf8fafc, UI_COLORS.inkDarkHex);
+
+    if (snap.online) {
+      this.giftCodeHudBtn.container.setVisible(true);
+      const canClaim = Boolean(snap.dailyReward?.canClaimToday);
+      if (canClaim) {
+        this.giftCodeHudBtn.setLabel('🎁 ĐIỂM DANH & NHẬP CODE');
+        this.giftCodeHudBtn.setFill(0xffb300, 0xffca28, '#18191B');
+      } else {
+        this.giftCodeHudBtn.setLabel('🎟️ NHẬP GIFTCODE (ĐÃ NHẬN)');
+        this.giftCodeHudBtn.setFill(0xe8f5e9, 0xc8e6c9, '#1B5E20');
+      }
+    } else {
+      this.giftCodeHudBtn.container.setVisible(false);
+    }
   }
 
   private syncOnlineButtonAvailability(): void {
@@ -464,7 +568,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private openModal(mode: 'settings' | 'controls'): void {
-    if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
+    if (this.hasOpenModal()) return;
     this.activeModal = new SettingsModal(this, {
       mode,
       onClose: () => {
@@ -485,7 +589,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private openSkillGuide(): void {
-    if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
+    if (this.hasOpenModal()) return;
     this.activeSkillModal = new SkillGuideModal(this, {
       onClose: () => {
         this.activeSkillModal = null;
@@ -494,7 +598,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private openGarageModal(): void {
-    if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
+    if (this.hasOpenModal()) return;
     this.activeGarageModal = new TankGarageModal(this, {
       initialPlayerIndex: 0,
       onUpdated: () => {
@@ -502,6 +606,16 @@ export class MenuScene extends Phaser.Scene {
       },
       onClose: () => {
         this.activeGarageModal = null;
+        this.refreshTankPreview(false);
+      },
+    });
+  }
+
+  private openAccountModal(): void {
+    if (this.hasOpenModal()) return;
+    this.activeAccountModal = new WindHubAccountModal(this, {
+      onClose: () => {
+        this.activeAccountModal = null;
         this.refreshTankPreview(false);
       },
     });

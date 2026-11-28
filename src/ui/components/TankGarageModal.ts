@@ -25,6 +25,7 @@ import {
   createModalScrim,
   type ArcadeButtonHandle,
 } from './ArcadeWidgets';
+import { WindHubAccountModal } from './WindHubAccountModal';
 
 export interface TankGarageModalOptions {
   initialPlayerIndex?: PlayerIndex;
@@ -113,6 +114,7 @@ export class TankGarageModal {
 
   private unsubWallet: (() => void) | null = null;
   private walletSnap: WindHubWalletSnapshot;
+  private childAccountModal: WindHubAccountModal | null = null;
   private readonly onKeyDownBound: (e: KeyboardEvent) => void;
   private readonly onSceneUpdateBound: (_time: number, delta: number) => void;
 
@@ -130,7 +132,7 @@ export class TankGarageModal {
     this.dynamicRoot = scene.add.container(0, 0);
 
     this.onKeyDownBound = (e: KeyboardEvent) => {
-      if (this.closed || e.repeat) return;
+      if (this.closed || this.childAccountModal || e.repeat) return;
       if (e.code === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
@@ -237,23 +239,21 @@ export class TankGarageModal {
       hoverColor: 0xffca28,
       textColor: '#18191B',
       onClick: () => {
+        if (this.childAccountModal) return;
         if (!this.walletSnap.authenticated && this.walletSnap.online) {
-          const opened = skinWalletManager.openWindHubLogin();
-          if (!opened) {
-            this.setStatus(
-              '🔑 Hãy mở WindTank trong mục Giải Trí trên WindHub để đăng nhập Google & đồng bộ Skin!',
-              false,
-              true,
-            );
-          } else {
-            this.setStatus('🔑 Đang mở cửa sổ đăng nhập Google để đồng bộ Chiến Xa…', false, true);
-          }
+          this.childAccountModal = new WindHubAccountModal(this.scene, {
+            onClose: () => {
+              this.childAccountModal = null;
+              this.refreshDynamicState();
+            },
+          });
         } else if (this.walletSnap.authenticated && this.walletSnap.online) {
-          this.setStatus(
-            `☁ Đã đồng bộ Google (${this.walletSnap.email || this.walletSnap.displayName}) — Mọi xe đã mua đều lưu trên mây & Offline!`,
-            false,
-            true,
-          );
+          this.childAccountModal = new WindHubAccountModal(this.scene, {
+            onClose: () => {
+              this.childAccountModal = null;
+              this.refreshDynamicState();
+            },
+          });
         }
       },
     });
@@ -634,13 +634,13 @@ export class TankGarageModal {
     const ownedSet = new Set<TankSkinId>(this.walletSnap.ownedSkins);
     ownedSet.add('classic');
 
-    // 1. Header Google Sync & Wallet Pill
-    const shortIdentity = (this.walletSnap.email || this.walletSnap.displayName || '').slice(0, 18);
+    // 1. Header Google Sync & Wallet Pill (opens Giftcode & Daily Reward when authenticated!)
+    const shortIdentity = (this.walletSnap.email || this.walletSnap.displayName || '').slice(0, 14);
     const walletTextCopy = !this.walletSnap.online
       ? `📴 OFFLINE • ĐÃ MỞ ${ownedSet.size}/${TANK_SKIN_DESCRIPTORS.length} XE`
       : this.walletSnap.authenticated
-        ? `☁ ${shortIdentity} • ◈ ${this.walletSnap.balance.toLocaleString()} XU`
-        : '🔑 ĐĂNG NHẬP GOOGLE ĐỒNG BỘ SKIN';
+        ? `◈ ${this.walletSnap.balance.toLocaleString()} XU • 🎁 CODE / ĐIỂM DANH (${shortIdentity})`
+        : '🔑 ĐĂNG NHẬP GOOGLE • MỞ GIFTCODE';
 
     this.walletPillBtn.setLabel(walletTextCopy);
     if (!this.walletSnap.online) {
@@ -1029,6 +1029,8 @@ export class TankGarageModal {
   close(silent = false): void {
     if (this.closed) return;
     this.closed = true;
+    this.childAccountModal?.close(true);
+    this.childAccountModal = null;
     if (!silent) {
       audioManager.playUiClick(true);
     }

@@ -6,6 +6,17 @@ const OWNED_SKINS_ACCOUNT_PREFIX = 'windtank_owned_skins_acct_';
 const LAST_GOOGLE_ACCOUNT_KEY = 'windtank_last_google_account';
 const LAST_GOOGLE_LABEL_KEY = 'windtank_last_google_label';
 
+export const DEFAULT_DAILY_REWARD_AMOUNTS = [5000, 10000, 15000, 25000, 40000, 60000, 100000];
+
+export interface WindHubDailyRewardSnapshot {
+  currentStreak: number;
+  claimedToday: boolean;
+  canClaimToday: boolean;
+  nextStreakDay: number;
+  nextRewardAmount: number;
+  rewardAmounts: number[];
+}
+
 export interface WindHubWalletSnapshot {
   connectedToWindHub: boolean;
   authenticated: boolean;
@@ -18,6 +29,8 @@ export interface WindHubWalletSnapshot {
   balance: number;
   cloudSynced: boolean;
   ownedSkins: TankSkinId[];
+  redeemedGiftcodes: string[];
+  dailyReward: WindHubDailyRewardSnapshot | null;
 }
 
 export interface SkinPurchaseResult {
@@ -26,6 +39,25 @@ export interface SkinPurchaseResult {
   alreadyOwned?: boolean;
   newBalance?: number;
   ownedSkins?: string[];
+  message: string;
+}
+
+export interface DailyRewardClaimResult {
+  ok?: boolean;
+  success: boolean;
+  code?: string;
+  amount?: number;
+  rewardAmount?: number;
+  streakDay?: number;
+  newBalance?: number;
+  message?: string;
+}
+
+export interface GiftCodeRedeemResult {
+  success: boolean;
+  code?: string;
+  rewardAmount?: number;
+  newBalance?: number;
   message: string;
 }
 
@@ -43,6 +75,8 @@ interface ExternalWindHubBridge {
     balance?: number;
     cloudSynced?: boolean;
     ownedSkins?: string[];
+    redeemedGiftcodes?: string[];
+    dailyReward?: Partial<WindHubDailyRewardSnapshot> | null;
   };
   subscribe?: (listener: (state: unknown) => void) => () => void;
   purchaseSkin?: (args: {
@@ -51,6 +85,9 @@ interface ExternalWindHubBridge {
     costXu: number;
   }) => Promise<SkinPurchaseResult>;
   syncOwnedSkins?: (ownedSkins: TankSkinId[]) => Promise<unknown>;
+  claimDailyReward?: () => Promise<DailyRewardClaimResult>;
+  redeemGiftCode?: (code: string) => Promise<GiftCodeRedeemResult>;
+  logoutAccount?: () => Promise<unknown>;
   openWindHubLogin?: () => void;
 }
 
@@ -114,13 +151,31 @@ function parseSkinListJson(raw: string | null): TankSkinId[] {
   }
 }
 
+function normalizeDailySnapshot(
+  raw: Partial<WindHubDailyRewardSnapshot> | null | undefined,
+): WindHubDailyRewardSnapshot | null {
+  if (!raw) return null;
+  const amounts =
+    Array.isArray(raw.rewardAmounts) && raw.rewardAmounts.length === 7
+      ? raw.rewardAmounts
+      : DEFAULT_DAILY_REWARD_AMOUNTS;
+  const nextDay = Math.min(7, Math.max(1, Number(raw.nextStreakDay) || 1));
+  const claimedToday = Boolean(raw.claimedToday);
+  const canClaimToday = raw.canClaimToday !== undefined ? Boolean(raw.canClaimToday) : !claimedToday;
+  return {
+    currentStreak: Math.max(0, Number(raw.currentStreak) || 0),
+    claimedToday,
+    canClaimToday,
+    nextStreakDay: nextDay,
+    nextRewardAmount: Number(raw.nextRewardAmount) || amounts[nextDay - 1] || 5000,
+    rewardAmounts: amounts,
+  };
+}
+
 /**
- * Manages Google Account Cloud Synchronization + WindHub Coin Wallet + 100% Offline persistence
- * of unlocked Tank Skins (`ownedSkins`), isolated cleanly per Google Account!
- * - Online + Signed in with Google: syncs `ownedSkins` across devices via Google Account (`email` / `googleSub`)
- *   and caches them into `windtank_owned_skins_acct_<accountKey>` for instant Offline play.
- * - Switching Google Accounts on the same device: cleanly isolates each Google Account's skin inventory!
- * - Offline (no internet): restores the last signed-in Google Account's unlocked skins 100% offline.
+ * Manages Google Account Cloud Synchronization + Shared WindHub Coin Wallet,
+ * Shared 7-Day Daily Check-in Reward, Shared Giftcode Redemption (100% synced with Tài Xỉu),
+ * and 100% Offline persistence of unlocked Tank Skins (`ownedSkins`) per Google Account!
  */
 export class SkinWalletManager {
   private memoryByAccount: Map<string, Set<TankSkinId>> = new Map();
@@ -197,7 +252,6 @@ export class SkinWalletManager {
           mem.add(sk);
         }
       } else if (allowLegacyMigration) {
-        // One-time migration for skins unlocked prior to per-Google-account isolation
         if (uid) {
           for (const sk of parseSkinListJson(storage.getItem(`${OWNED_SKINS_USER_PREFIX}${uid}`))) {
             mem.add(sk);
@@ -312,7 +366,6 @@ export class SkinWalletManager {
             email || displayName,
           );
 
-          // If local device had unlocked skins for this Google Account that aren't in Cloud yet, push sync once!
           if (
             isOnline &&
             typeof bridge.syncOwnedSkins === 'function' &&
@@ -324,6 +377,10 @@ export class SkinWalletManager {
               void bridge.syncOwnedSkins(mergedSkins).catch(() => {});
             }
           }
+
+          const redeemedGiftcodes = Array.isArray(st?.redeemedGiftcodes)
+            ? st.redeemedGiftcodes.filter((c): c is string => typeof c === 'string')
+            : [];
 
           return {
             connectedToWindHub: Boolean(st?.connectedToWindHub ?? true),
@@ -337,12 +394,11 @@ export class SkinWalletManager {
             balance: typeof st?.balance === 'number' ? Math.max(0, Math.floor(st.balance)) : 0,
             cloudSynced: Boolean(st?.cloudSynced ?? true),
             ownedSkins: mergedSkins,
+            redeemedGiftcodes,
+            dailyReward: normalizeDailySnapshot(st?.dailyReward),
           };
         }
 
-        // Unauthenticated inside WindHub:
-        // - If Offline, restore the last signed-in Google account's cached skins so Offline play is 100% preserved!
-        // - If Online & logged out, show only ['classic'] until the player signs in with Google!
         if (!isOnline) {
           const lastAcct =
             storage?.getItem(LAST_GOOGLE_ACCOUNT_KEY) ||
@@ -363,6 +419,8 @@ export class SkinWalletManager {
             balance: 0,
             cloudSynced: false,
             ownedSkins: offlineSkins,
+            redeemedGiftcodes: [],
+            dailyReward: null,
           };
         }
 
@@ -378,13 +436,14 @@ export class SkinWalletManager {
           balance: 0,
           cloudSynced: false,
           ownedSkins: ['classic'],
+          redeemedGiftcodes: [],
+          dailyReward: null,
         };
       } catch {
         // Fall through to standalone / offline localStorage fallback
       }
     }
 
-    // Standalone / Offline LocalStorage fallback (when WindTank runs outside WindHub iframe or completely offline)
     let uid: string | null = null;
     let lastAcct: string | null = null;
     let lastLabel = '';
@@ -425,6 +484,8 @@ export class SkinWalletManager {
       balance,
       cloudSynced: false,
       ownedSkins,
+      redeemedGiftcodes: [],
+      dailyReward: null,
     };
   }
 
@@ -450,6 +511,104 @@ export class SkinWalletManager {
       return true;
     }
     return false;
+  }
+
+  async logoutAccount(): Promise<boolean> {
+    const bridge = this.resolveExternalBridge();
+    if (bridge && typeof bridge.logoutAccount === 'function') {
+      await bridge.logoutAccount();
+      this.emit(this.getSnapshot());
+      return true;
+    }
+    return false;
+  }
+
+  async claimDailyReward(): Promise<DailyRewardClaimResult> {
+    const snap = this.getSnapshot();
+    if (!snap.online) {
+      return {
+        success: false,
+        code: 'OFFLINE',
+        message: '📴 Cần kết nối mạng để điểm danh nhận thưởng hằng ngày!',
+      };
+    }
+    if (!snap.authenticated) {
+      return {
+        success: false,
+        code: 'AUTH_REQUIRED',
+        message: '🔑 Vui lòng đăng nhập tài khoản Google (WindHub) trước khi điểm danh!',
+      };
+    }
+    if (snap.dailyReward?.claimedToday) {
+      return {
+        success: false,
+        code: 'ALREADY_CLAIMED',
+        message: '✓ Hôm nay bạn đã nhận thưởng đăng nhập rồi! (Dùng chung Tài Xỉu & WindTank)',
+      };
+    }
+
+    const bridge = this.resolveExternalBridge();
+    if (bridge && typeof bridge.claimDailyReward === 'function') {
+      const res = await bridge.claimDailyReward();
+      this.emit(this.getSnapshot());
+      return {
+        ...res,
+        success: Boolean(res?.success || res?.ok),
+      };
+    }
+
+    return {
+      success: false,
+      code: 'BRIDGE_UNAVAILABLE',
+      message: 'Hãy mở WindTank bên trong mục Giải Trí trên WindHub để điểm danh nhận Xu!',
+    };
+  }
+
+  async redeemGiftCode(rawCode: string): Promise<GiftCodeRedeemResult> {
+    const cleanCode = rawCode.trim().toUpperCase();
+    if (!cleanCode) {
+      return {
+        success: false,
+        code: 'EMPTY_CODE',
+        message: 'Vui lòng nhập mã Giftcode quà tặng!',
+      };
+    }
+
+    const snap = this.getSnapshot();
+    if (!snap.online) {
+      return {
+        success: false,
+        code: 'OFFLINE',
+        message: '📴 Cần kết nối mạng để xác thực mã Giftcode!',
+      };
+    }
+    if (!snap.authenticated) {
+      return {
+        success: false,
+        code: 'AUTH_REQUIRED',
+        message: '🔑 Vui lòng đăng nhập tài khoản Google để nhập Giftcode!',
+      };
+    }
+    if (snap.redeemedGiftcodes.includes(cleanCode)) {
+      return {
+        success: false,
+        code: 'ALREADY_REDEEMED',
+        message: `Bạn đã nhập mã ${cleanCode} rồi! Mỗi tài khoản chỉ được nhập 1 lần (dùng chung Tài Xỉu).`,
+      };
+    }
+
+    const bridge = this.resolveExternalBridge();
+    if (bridge && typeof bridge.redeemGiftCode === 'function') {
+      const res = await bridge.redeemGiftCode(cleanCode);
+      this.emit(this.getSnapshot());
+      return res;
+    }
+
+    return {
+      success: false,
+      code: 'BRIDGE_UNAVAILABLE',
+      message: 'Hãy mở WindTank bên trong mục Giải Trí trên WindHub để sử dụng Giftcode!',
+    };
   }
 
   async purchaseSkin(
@@ -499,7 +658,6 @@ export class SkinWalletManager {
       return res;
     }
 
-    // Same-origin fallback if opened directly on WindHub domain outside React wrapper
     const storage = getSafeStorage();
     if (snap.authenticated && (snap.uid || snap.accountKey) && storage) {
       if (snap.balance < costXu) {
