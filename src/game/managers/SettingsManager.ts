@@ -323,6 +323,31 @@ export class SettingsManager {
     return isTouchDeviceDetected();
   }
 
+  /**
+   * Directly assigns `colorId` to `playerIndex` in O(1) time.
+   * If another slot (`0..3`) currently holds `colorId`, swaps their colors cleanly
+   * so all 4 player slots always retain distinct palettes with a single storage write.
+   */
+  setPlayerColor(playerIndex: PlayerIndex, colorId: string): string {
+    const currentId = this.settings.playerColors[playerIndex];
+    if (!TANK_PALETTES.some((p) => p.id === colorId)) {
+      return currentId;
+    }
+    if (currentId === colorId) {
+      return currentId;
+    }
+
+    for (let i = 0; i < 4; i++) {
+      if (i !== playerIndex && this.settings.playerColors[i] === colorId) {
+        this.settings.playerColors[i] = currentId;
+      }
+    }
+    this.settings.playerColors[playerIndex] = colorId;
+    this.ensureDistinctColors();
+    this.save();
+    return this.settings.playerColors[playerIndex];
+  }
+
   cyclePlayerColor(playerIndex: PlayerIndex, direction: 1 | -1 = 1): string {
     const currentId = this.settings.playerColors[playerIndex];
     const usedByActiveOthers = new Set<string>();

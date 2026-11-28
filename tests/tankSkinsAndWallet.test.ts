@@ -187,6 +187,8 @@ test('WindHub Wallet Bridge & 100% Offline Skin Persistence: buy online via Wind
       authenticated: true,
       online: isOnline,
       uid: 'wh_user_001',
+      googleSub: 'google_sub_001',
+      email: 'phong@windhub.vn',
       displayName: 'Phong WindHub',
       avatarUrl: '',
       balance: mockBalance,
@@ -278,6 +280,167 @@ test('WindHub Wallet Bridge & 100% Offline Skin Persistence: buy online via Wind
     assert.equal(sm.toggleSkinStatsEnabled(), false);
     assert.equal(sm.getSettings().skinStatsEnabled, false);
     assert.equal(sm.toggleSkinStatsEnabled(), true);
+  } finally {
+    if (prevWin === undefined) delete g.window;
+    else g.window = prevWin;
+    if (prevLs === undefined) delete g.localStorage;
+    else g.localStorage = prevLs;
+    if (prevNav === undefined) {
+      delete (g as Record<string, unknown>).navigator;
+    } else {
+      Object.defineProperty(g, 'navigator', { value: prevNav, configurable: true });
+    }
+  }
+});
+
+test('SettingsManager.setPlayerColor: O(1) instant color swap without infinite loop when selecting active slot color', () => {
+  const sm = new SettingsManager();
+  sm.setPlayerCount(2);
+  // Default colors: slot 0 = 'red', slot 1 = 'green'
+  const initialColors = [...sm.getSettings().playerColors];
+  assert.equal(initialColors[0], 'red');
+  assert.equal(initialColors[1], 'green');
+
+  // Regression check: selecting 'green' (currently held by active slot 1!) on slot 0
+  // previously hung in an infinite while-loop calling cyclePlayerColor. Now O(1)!
+  const t0 = performance.now();
+  const applied = sm.setPlayerColor(0, 'green');
+  const elapsedMs = performance.now() - t0;
+
+  assert.equal(applied, 'green');
+  assert.ok(elapsedMs < 25, `setPlayerColor must execute instantaneously (took ${elapsedMs.toFixed(2)}ms)`);
+  assert.equal(sm.getSettings().playerColors[0], 'green');
+  assert.equal(sm.getSettings().playerColors[1], 'red', 'Slot 1 cleanly swapped to red so active tanks stay distinct');
+
+  // Rapidly click through all 6 palettes 30 times across slots 0..3
+  for (let round = 0; round < 30; round++) {
+    for (const pal of TANK_PALETTES) {
+      const slot = (round % 4) as 0 | 1 | 2 | 3;
+      assert.equal(sm.setPlayerColor(slot, pal.id), pal.id);
+      const unique = new Set(sm.getSettings().playerColors);
+      assert.equal(unique.size, 4, 'All 4 player slots must always retain 4 distinct tank colors');
+    }
+  }
+});
+
+test('Google Account Skin Sync: restores purchased skins on a brand-new device and isolates multiple Google accounts', async () => {
+  const g = globalThis as unknown as {
+    window?: Record<string, unknown>;
+    localStorage?: Storage;
+    navigator?: { onLine: boolean };
+  };
+  const prevWin = g.window;
+  const prevLs = g.localStorage;
+  const prevNav = g.navigator;
+
+  const makeMockStorage = () => {
+    const map = new Map<string, string>();
+    return {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        map.set(k, String(v));
+      },
+      removeItem: (k: string) => {
+        map.delete(k);
+      },
+      clear: () => map.clear(),
+      key: (i: number) => Array.from(map.keys())[i] ?? null,
+      get length() {
+        return map.size;
+      },
+    } as Storage;
+  };
+
+  // Simulated Google Cloud DB keyed by Google Account email
+  const googleCloudDb = new Map<string, Set<string>>([
+    ['alpha@gmail.com', new Set(['classic'])],
+    ['bravo@gmail.com', new Set(['classic'])],
+  ]);
+
+  let isOnline = true;
+  let activeEmail: string | null = 'alpha@gmail.com';
+  let activeBalance = 600000;
+
+  const cloudBridge = {
+    getState: () => ({
+      connectedToWindHub: true,
+      authenticated: Boolean(activeEmail),
+      online: isOnline,
+      uid: activeEmail ? `uid_${activeEmail}` : null,
+      googleSub: activeEmail ? `sub_${activeEmail}` : null,
+      email: activeEmail ?? '',
+      displayName: activeEmail ?? 'Chưa đăng nhập',
+      avatarUrl: '',
+      balance: activeEmail ? activeBalance : 0,
+      cloudSynced: Boolean(activeEmail),
+      ownedSkins: activeEmail ? Array.from(googleCloudDb.get(activeEmail) ?? ['classic']) : ['classic'],
+    }),
+    purchaseSkin: async ({ skinId, skinName, costXu }: { skinId: string; skinName: string; costXu: number }) => {
+      if (!activeEmail) return { success: false, code: 'AUTH_REQUIRED' as const, message: 'Cần đăng nhập Google' };
+      activeBalance -= costXu;
+      const set = googleCloudDb.get(activeEmail)!;
+      set.add(skinId);
+      return {
+        success: true,
+        newBalance: activeBalance,
+        ownedSkins: Array.from(set),
+        message: `Đã đồng bộ ${skinName}`,
+      };
+    },
+  };
+
+  try {
+    Object.defineProperty(g, 'navigator', {
+      value: {
+        get onLine() {
+          return isOnline;
+        },
+      },
+      configurable: true,
+    });
+
+    // --- DEVICE 1 (PC): alpha@gmail.com buys Magma Drake & Cyber Omega ---
+    const device1Storage = makeMockStorage();
+    g.localStorage = device1Storage;
+    g.window = { localStorage: device1Storage, __WINDHUB_TANK_WALLET_BRIDGE__: cloudBridge };
+
+    const pcWallet = new SkinWalletManager();
+    await pcWallet.purchaseSkin('magma_drake', 'Hỏa Long Nham Thạch', 290000);
+    await pcWallet.purchaseSkin('cyber_omega', 'Chiến Thần Quang Tử', 250000);
+    assert.equal(pcWallet.isSkinOwned('magma_drake'), true);
+    assert.equal(pcWallet.isSkinOwned('cyber_omega'), true);
+
+    // Switch to bravo@gmail.com on Device 1 -> bravo@gmail.com must NOT inherit alpha's skins!
+    activeEmail = 'bravo@gmail.com';
+    assert.deepEqual(pcWallet.getOwnedSkins(), ['classic']);
+    assert.equal(pcWallet.isSkinOwned('cyber_omega'), false);
+
+    // --- DEVICE 2 (Brand-new Mobile Phone with empty LocalStorage!): alpha@gmail.com logs in ---
+    activeEmail = 'alpha@gmail.com';
+    const device2FreshStorage = makeMockStorage();
+    g.localStorage = device2FreshStorage;
+    g.window = { localStorage: device2FreshStorage, __WINDHUB_TANK_WALLET_BRIDGE__: cloudBridge };
+
+    const mobileWallet = new SkinWalletManager();
+    assert.equal(
+      mobileWallet.isSkinOwned('magma_drake'),
+      true,
+      'Magma Drake automatically synced onto new device via Google Account!',
+    );
+    assert.equal(
+      mobileWallet.isSkinOwned('cyber_omega'),
+      true,
+      'Cyber Omega automatically synced onto new device via Google Account!',
+    );
+
+    // Device 2 goes completely OFFLINE -> synced Google skins remain 100% playable offline!
+    isOnline = false;
+    activeEmail = null;
+    delete g.window.__WINDHUB_TANK_WALLET_BRIDGE__;
+
+    const mobileOfflineWallet = new SkinWalletManager();
+    assert.equal(mobileOfflineWallet.isSkinOwned('magma_drake'), true);
+    assert.equal(mobileOfflineWallet.isSkinOwned('cyber_omega'), true);
   } finally {
     if (prevWin === undefined) delete g.window;
     else g.window = prevWin;
