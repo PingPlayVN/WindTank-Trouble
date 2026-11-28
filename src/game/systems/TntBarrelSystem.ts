@@ -218,10 +218,11 @@ export class TntBarrelSystem {
     for (const v of impact.victims) {
       const victimTank = tanks.find((t) => t.index === v.index);
       if (!victimTank || !victimTank.kinematics.alive) continue;
+      const kbMul = victimTank.getSkinStats().knockbackScale;
       applySafeTankKnockback(
         victimTank.kinematics,
-        v.knockbackDx,
-        v.knockbackDy,
+        v.knockbackDx * kbMul,
+        v.knockbackDy * kbMul,
         this.arena.walls,
       );
       onBarrelDamageTank(v.index, v.damage);

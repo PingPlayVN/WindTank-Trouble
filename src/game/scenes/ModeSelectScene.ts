@@ -7,13 +7,14 @@ import {
   getAITacticDescriptor,
   getBattleModeDescriptor,
   getPaletteById,
+  getTankSkinDescriptor,
   UI_COLORS,
   type BattleModeDescriptor,
 } from '../config/constants';
+import type { BattleModeId, PlayerIndex } from '../types/gameTypes';
 import { audioManager } from '../managers/AudioManager';
 import { mobileOrientationManager } from '../managers/MobileOrientationManager';
 import { settingsManager } from '../managers/SettingsManager';
-import type { BattleModeId } from '../types/gameTypes';
 import {
   animateStaggeredEntrance,
   createArcadeButton,
@@ -271,14 +272,16 @@ export class ModeSelectScene extends Phaser.Scene {
     const parts: string[] = [];
     for (let i = 0; i < s.playerCount; i++) {
       const pal = getPaletteById(s.playerColors[i]);
+      const skinDesc = getTankSkinDescriptor(settingsManager.getPlayerSkin(i as PlayerIndex));
       const role = s.playerIsAI[i]
         ? getAIDifficultyDescriptor(s.playerAIDifficulty[i]).shortBadge
-        : 'Người Chơi';
+        : skinDesc.shortName;
       parts.push(`Xe ${i + 1} (${pal.name} • ${role})`);
     }
+    const fairTag = s.skinStatsEnabled ? '⚡Thực Chiến' : '🎨Chuẩn 100%';
 
     const txt = this.add
-      .text(0, 0, `ĐỘI HÌNH XUẤT KÍCH:  ${parts.join('   |   ')}`, {
+      .text(0, 0, `ĐỘI HÌNH (${fairTag}):  ${parts.join('  |  ')}`, {
         fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: '12.5px',
         fontStyle: '800',

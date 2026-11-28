@@ -1,10 +1,14 @@
 import type Phaser from 'phaser';
 import { POWERUP_CONFIG } from '../config/gameplayConfig';
 import { getSkillDescriptor } from '../skills/registry';
-import type { SkillId, TankKinematics } from '../types/gameTypes';
+import { getTankSkinModule } from '../skins/registry';
+import type { SkillId, TankColorPalette, TankKinematics, TankSkinId } from '../types/gameTypes';
 
 export interface TankAuraRenderParams {
   kinematics: Readonly<TankKinematics>;
+  skinId?: TankSkinId;
+  palette?: TankColorPalette;
+  trailHistory?: ReadonlyArray<{ x: number; y: number; angle: number }>;
   scaleRatio: number;
   auraPulseClock: number;
   hasArmorBar: boolean;
@@ -28,6 +32,9 @@ export interface TankAuraRenderParams {
 export function renderTankAurasAndOverlays(params: TankAuraRenderParams): void {
   const {
     kinematics,
+    skinId,
+    palette,
+    trailHistory,
     scaleRatio,
     auraPulseClock,
     hasArmorBar,
@@ -50,6 +57,20 @@ export function renderTankAurasAndOverlays(params: TankAuraRenderParams): void {
 
   auraGraphics.clear();
   overlayGraphics.clear();
+
+  // -1. Custom Tank Skin Ambient VFX (Thrusters, Magma Embers, Hover Rings, Quantum Neon Ribbon!)
+  if (kinematics.alive && skinId && skinId !== 'classic' && palette) {
+    const skinMod = getTankSkinModule(skinId);
+    skinMod.drawLiveAura?.({
+      kinematics,
+      palette,
+      scaleRatio,
+      timeSec: auraPulseClock,
+      auraGraphics,
+      overlayGraphics,
+      trailHistory,
+    });
+  }
 
   // 0. Floating World-Space Armor Durability Bar (`Độ Bền Giáp HP`)
   if (hasArmorBar && kinematics.alive) {

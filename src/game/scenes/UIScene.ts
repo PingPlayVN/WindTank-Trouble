@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { AssetFactory } from '../art/AssetFactory';
 import {
   ARENA_VIEWPORT,
   BASE_GAMEPLAY,
@@ -553,9 +554,14 @@ export class UIScene extends Phaser.Scene {
       }
       ref.nameLbl.setText(`XE ${p.index + 1}${tag}`);
 
-      const iconKey = p.visualSuit
-        ? `tank_icon_${p.colorId}_${p.visualSuit}`
-        : `tank_icon_${p.colorId}`;
+      const iconKey = AssetFactory.ensureTankTexture(
+        this,
+        p.colorId,
+        p.skinId ?? 'classic',
+        p.visualSuit,
+        0,
+        true,
+      );
       ref.tankIcon.setTexture(iconKey);
       ref.tankIcon.setAlpha(p.alive ? 1 : 0.32);
       ref.eliminatedCross.setVisible(!p.alive);
@@ -634,28 +640,34 @@ export class UIScene extends Phaser.Scene {
       } else {
         ref.skillBadgeText.setVisible(false);
 
-        const maxAmmo = BASE_GAMEPLAY.maxProjectilesPerTank;
+        const maxAmmo = p.maxAmmo || BASE_GAMEPLAY.maxProjectilesPerTank;
         if (ref.compact) {
-          // Single ultra-crisp row of 10 micro-dots inside the Mobile Top Pill
+          const span = 62;
+          const step = maxAmmo > 1 ? Math.min(6.9, span / (maxAmmo - 1)) : 0;
+          const startDotX = -((maxAmmo - 1) * step) / 2;
+          const dotR = maxAmmo > 11 ? 1.9 : 2.3;
           for (let sIdx = 0; sIdx < maxAmmo; sIdx++) {
-            const px = -31 + sIdx * 6.9;
+            const px = startDotX + sIdx * step;
             const filled = sIdx < p.ammo;
             ref.ammoGraphics.fillStyle(filled ? 0x22252a : 0xd0d4dc, 1);
-            ref.ammoGraphics.fillCircle(px, 0, 2.3);
+            ref.ammoGraphics.fillCircle(px, 0, dotR);
           }
         } else {
-          const cols = 5;
+          const cols = maxAmmo > 10 ? Math.ceil(maxAmmo / 2) : 5;
+          const stepX = cols > 5 ? 8.2 : 11;
+          const startColX = -((cols - 1) * stepX) / 2;
+          const dotR = cols > 5 ? 2.7 : 3.3;
           for (let sIdx = 0; sIdx < maxAmmo; sIdx++) {
             const col = sIdx % cols;
             const row = Math.floor(sIdx / cols);
-            const px = -22 + col * 11;
-            const py = row === 0 ? -5.5 : 5.5;
+            const px = startColX + col * stepX;
+            const py = maxAmmo <= 5 ? 0 : row === 0 ? -5.5 : 5.5;
             const filled = sIdx < p.ammo;
             ref.ammoGraphics.fillStyle(filled ? 0x22252a : 0xd0d4dc, 1);
-            ref.ammoGraphics.fillCircle(px, py, 3.3);
+            ref.ammoGraphics.fillCircle(px, py, dotR);
             if (filled) {
               ref.ammoGraphics.lineStyle(1, 0x111215, 0.9);
-              ref.ammoGraphics.strokeCircle(px, py, 3.3);
+              ref.ammoGraphics.strokeCircle(px, py, dotR);
             }
           }
         }

@@ -1,6 +1,7 @@
 import Peer, { type DataConnection } from 'peerjs';
 import {
   ALL_SKILL_IDS,
+  isValidTankSkinId,
   resolveOnlineArenaViewport,
   TANK_PALETTES,
 } from '../config/constants';
@@ -26,6 +27,7 @@ import type {
   RoundPhase,
   RoundResultSummary,
   SkillId,
+  TankSkinId,
   TntBarrelsOption,
 } from '../types/gameTypes';
 
@@ -47,6 +49,9 @@ export interface LobbySharedState {
   pingMs: number;
   hostColorId: string;
   guestColorId: string;
+  hostSkinId: TankSkinId;
+  guestSkinId: TankSkinId;
+  skinStatsEnabled: boolean;
   guestReady: boolean;
   hostTouchActive: boolean;
   guestTouchActive: boolean;
@@ -70,6 +75,9 @@ export interface OnlineMatchConfig {
   authoritativeGrid?: MazeGridData;
   hostColorId: string;
   guestColorId: string;
+  hostSkinId?: TankSkinId;
+  guestSkinId?: TankSkinId;
+  skinStatsEnabled?: boolean;
   mapMode: MapModeId;
   battleMode: BattleModeId;
   maxArmorHp: number;
@@ -267,6 +275,9 @@ type PeerPacket =
       roomCode: string;
       hostColorId: string;
       guestColorId: string;
+      hostSkinId?: TankSkinId;
+      guestSkinId?: TankSkinId;
+      skinStatsEnabled?: boolean;
       guestReady: boolean;
       hostTouchActive: boolean;
       guestTouchActive?: boolean;
@@ -282,6 +293,7 @@ type PeerPacket =
   | {
       t: 'guest_lobby_update';
       preferredColorId?: string;
+      preferredSkinId?: TankSkinId;
       ready: boolean;
       guestTouchActive: boolean;
     }
@@ -383,6 +395,9 @@ export class PeerMultiplayerManager {
       pingMs: 0,
       hostColorId: hostCol,
       guestColorId: guestCol,
+      hostSkinId: settingsManager.getPlayerSkin(0),
+      guestSkinId: settingsManager.getPlayerSkin(0),
+      skinStatsEnabled: s.skinStatsEnabled,
       guestReady: false,
       hostTouchActive: settingsManager.isTouchControlsActive(),
       guestTouchActive: false,
@@ -487,6 +502,9 @@ export class PeerMultiplayerManager {
       statusMessage: `Phòng ${formatRoomCode(code)} đã sẵn sàng! Gửi mã hoặc Link Mời cho bạn bè.`,
       hostColorId: hostCol,
       guestColorId: guestCol,
+      hostSkinId: settingsManager.getPlayerSkin(0),
+      guestSkinId: 'classic',
+      skinStatsEnabled: s.skinStatsEnabled,
       hostTouchActive: settingsManager.isTouchControlsActive(),
       mapMode: s.mapMode,
       battleMode: s.battleMode,
@@ -568,6 +586,7 @@ export class PeerMultiplayerManager {
       role: 'guest',
       status: 'connecting',
       statusMessage: `Đang kết nối P2P tới phòng ${formatRoomCode(code)}…`,
+      guestSkinId: settingsManager.getPlayerSkin(0),
       guestTouchActive: settingsManager.isTouchControlsActive(),
     };
     this.emitLobbyChange();
@@ -790,9 +809,38 @@ export class PeerMultiplayerManager {
     this.state.powerUpSpawnIntervalSec = s.powerUpSpawnIntervalSec;
     this.state.maxCratesOnFloor = s.maxCratesOnFloor;
     this.state.enabledSkills = s.enabledSkills.length > 0 ? [...s.enabledSkills] : [...ALL_SKILL_IDS];
+    this.state.hostSkinId = settingsManager.getPlayerSkin(0);
+    this.state.skinStatsEnabled = s.skinStatsEnabled;
     this.state.hostTouchActive = settingsManager.isTouchControlsActive();
     this.broadcastHostLobbyState();
     this.emitLobbyChange();
+  }
+
+  syncLobbyTankSkinFromWallet(): void {
+    const ownedSkin = settingsManager.getPlayerSkin(0);
+    if (this.state.role === 'host') {
+      this.state.hostSkinId = ownedSkin;
+      this.broadcastHostLobbyState();
+      this.emitLobbyChange();
+    } else if (this.state.role === 'guest') {
+      this.state.guestSkinId = ownedSkin;
+      this.sendGuestLobbyUpdate(this.state.guestReady, undefined, ownedSkin);
+      this.emitLobbyChange();
+    }
+  }
+
+  cycleLobbyTankSkin(slot: 'host' | 'guest'): void {
+    if (slot === 'host' && this.state.role === 'host') {
+      const next = settingsManager.cyclePlayerOwnedSkin(0, 1);
+      this.state.hostSkinId = next;
+      this.broadcastHostLobbyState();
+      this.emitLobbyChange();
+    } else if (slot === 'guest' && this.state.role === 'guest') {
+      const next = settingsManager.cyclePlayerOwnedSkin(0, 1);
+      this.state.guestSkinId = next;
+      this.sendGuestLobbyUpdate(this.state.guestReady, undefined, next);
+      this.emitLobbyChange();
+    }
   }
 
   cycleLobbyTankColor(slot: 'host' | 'guest'): void {
@@ -833,6 +881,9 @@ export class PeerMultiplayerManager {
       roomCode: this.state.roomCode,
       hostColorId: this.state.hostColorId,
       guestColorId: this.state.guestColorId,
+      hostSkinId: this.state.hostSkinId,
+      guestSkinId: this.state.guestSkinId,
+      skinStatsEnabled: this.state.skinStatsEnabled,
       guestReady: this.state.guestReady,
       hostTouchActive: this.state.hostTouchActive,
       guestTouchActive: this.state.guestTouchActive,
@@ -847,12 +898,17 @@ export class PeerMultiplayerManager {
     });
   }
 
-  private sendGuestLobbyUpdate(ready: boolean, preferredColorId?: string): void {
+  private sendGuestLobbyUpdate(
+    ready: boolean,
+    preferredColorId?: string,
+    preferredSkinId?: TankSkinId,
+  ): void {
     if (this.state.role !== 'guest' || !this.state.connected) return;
     this.state.guestTouchActive = settingsManager.isTouchControlsActive();
     this.sendRaw({
       t: 'guest_lobby_update',
       preferredColorId,
+      preferredSkinId: preferredSkinId ?? this.state.guestSkinId,
       ready,
       guestTouchActive: this.state.guestTouchActive,
     });
@@ -881,6 +937,9 @@ export class PeerMultiplayerManager {
       authoritativeGrid,
       hostColorId: this.state.hostColorId,
       guestColorId: this.state.guestColorId,
+      hostSkinId: this.state.hostSkinId,
+      guestSkinId: this.state.guestSkinId,
+      skinStatsEnabled: this.state.skinStatsEnabled,
       mapMode: this.state.mapMode,
       battleMode: this.state.battleMode,
       maxArmorHp: this.state.maxArmorHp,
@@ -919,6 +978,9 @@ export class PeerMultiplayerManager {
       authoritativeGrid,
       hostColorId: this.state.hostColorId,
       guestColorId: this.state.guestColorId,
+      hostSkinId: this.state.hostSkinId,
+      guestSkinId: this.state.guestSkinId,
+      skinStatsEnabled: this.state.skinStatsEnabled,
       mapMode: this.state.mapMode,
       battleMode: this.state.battleMode,
       maxArmorHp: this.state.maxArmorHp,
@@ -1036,6 +1098,15 @@ export class PeerMultiplayerManager {
         if (this.state.role === 'guest') {
           this.state.hostColorId = pkt.hostColorId;
           this.state.guestColorId = pkt.guestColorId;
+          if (pkt.hostSkinId && isValidTankSkinId(pkt.hostSkinId)) {
+            this.state.hostSkinId = pkt.hostSkinId;
+          }
+          if (pkt.guestSkinId && isValidTankSkinId(pkt.guestSkinId)) {
+            this.state.guestSkinId = pkt.guestSkinId;
+          }
+          if (typeof pkt.skinStatsEnabled === 'boolean') {
+            this.state.skinStatsEnabled = pkt.skinStatsEnabled;
+          }
           this.state.guestReady = pkt.guestReady;
           this.state.hostTouchActive = pkt.hostTouchActive;
           if (typeof pkt.guestTouchActive === 'boolean') {
@@ -1060,6 +1131,9 @@ export class PeerMultiplayerManager {
           } else if (this.state.guestColorId === this.state.hostColorId) {
             this.state.guestColorId =
               TANK_PALETTES.find((p) => p.id !== this.state.hostColorId)?.id ?? 'green';
+          }
+          if (pkt.preferredSkinId && isValidTankSkinId(pkt.preferredSkinId)) {
+            this.state.guestSkinId = pkt.preferredSkinId;
           }
           this.state.guestReady = pkt.ready;
           this.state.guestTouchActive = pkt.guestTouchActive;

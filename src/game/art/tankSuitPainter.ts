@@ -1,5 +1,6 @@
 import type Phaser from 'phaser';
-import type { SkillId, TankColorPalette } from '../types/gameTypes';
+import { getTankSkinModule } from '../skins/registry';
+import type { SkillId, TankColorPalette, TankSkinId } from '../types/gameTypes';
 import { makeCanvas, roundRectPath } from './canvasUtils';
 
 export function createTankTexture(
@@ -10,7 +11,9 @@ export function createTankTexture(
   width: number,
   height: number,
   skill: SkillId | null,
+  skinId: TankSkinId = 'classic',
 ): void {
+  const skinMod = getTankSkinModule(skinId);
   const { canvas, ctx } = makeCanvas(width, height);
   const cx = width * 0.44;
   const cy = height * 0.5;
@@ -203,38 +206,11 @@ export function createTankTexture(
     }
   }
 
-  // 1. Left & Right Treads
-  const treadPositions = [-15.5, 9.0];
-  for (const ty of treadPositions) {
-    roundRectPath(ctx, -19, ty, 38, 6.5, 2.5);
-    ctx.fillStyle = skill === 'laser' ? '#1A2733' : skill === 'spike' ? '#231F20' : '#2B2D30';
-    ctx.fill();
-
-    ctx.save();
-    ctx.clip();
-    ctx.fillStyle = skill === 'laser' ? '#00B0FF' : skill === 'reaper' ? '#FF1744' : '#161719';
-    const offset = (treadPhase * 2.2) % 6.6;
-    for (let gx = -22 + offset; gx < 20; gx += 6.6) {
-      ctx.fillRect(gx, ty, skill === 'laser' || skill === 'reaper' ? 1.8 : 2.6, 6.5);
-    }
-    ctx.restore();
-
-    roundRectPath(ctx, -19, ty, 38, 6.5, 2.5);
-    ctx.lineWidth = 2.0;
-    ctx.strokeStyle = outline;
-    ctx.stroke();
-  }
-
-  // 2. Main Hull Body
-  roundRectPath(ctx, -17, -11.5, 34, 23, 4.5);
-  const hullGrad = ctx.createLinearGradient(-17, -12, 17, 12);
-  hullGrad.addColorStop(0, palette.highlightHex);
-  hullGrad.addColorStop(0.35, palette.primaryHex);
-  hullGrad.addColorStop(1, palette.shadowHex);
-  ctx.fillStyle = hullGrad;
-  ctx.fill();
+  // 1 & 2. Custom Skin Treads/Pods/Hover-Nacelles & Color-Adaptive Armored Hull
+  skinMod.drawChassis(ctx, palette, treadPhase, skill);
 
   ctx.save();
+  skinMod.drawHullClipPath(ctx);
   ctx.clip();
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.30)';
   ctx.lineWidth = 2;
@@ -369,18 +345,8 @@ export function createTankTexture(
     ctx.beginPath();
     ctx.arc(0, 0, 9.5, 0, Math.PI * 2);
     ctx.stroke();
-  } else {
-    ctx.fillStyle = 'rgba(20, 22, 25, 0.38)';
-    ctx.fillRect(-13.5, -6.5, 3.2, 3.2);
-    ctx.fillRect(-13.5, -1.6, 3.2, 3.2);
-    ctx.fillRect(-13.5, 3.3, 3.2, 3.2);
   }
   ctx.restore();
-
-  roundRectPath(ctx, -17, -11.5, 34, 23, 4.5);
-  ctx.lineWidth = 2.2;
-  ctx.strokeStyle = outline;
-  ctx.stroke();
 
   if (skill === 'spike') {
     ctx.fillStyle = '#CFD8DC';
@@ -689,37 +655,11 @@ export function createTankTexture(
     ctx.fillStyle = '#EA80FC';
     ctx.fill();
   } else {
-    roundRectPath(ctx, 2, -3.6, 25, 7.2, 2.0);
-    const barrelGrad = ctx.createLinearGradient(2, -3.6, 2, 3.6);
-    barrelGrad.addColorStop(0, palette.highlightHex);
-    barrelGrad.addColorStop(0.5, palette.primaryHex);
-    barrelGrad.addColorStop(1, palette.shadowHex);
-    ctx.fillStyle = barrelGrad;
-    ctx.fill();
-    ctx.lineWidth = 2.1;
-    ctx.strokeStyle = outline;
-    ctx.stroke();
-
-    roundRectPath(ctx, 22.5, -4.3, 5.2, 8.6, 1.5);
-    ctx.fillStyle = palette.shadowHex;
-    ctx.fill();
-    ctx.lineWidth = 1.9;
-    ctx.strokeStyle = outline;
-    ctx.stroke();
+    skinMod.drawStandardBarrel(ctx, palette);
   }
 
-  // 4. Central Turret Dome / Superhero Helmet
-  ctx.beginPath();
-  ctx.arc(0, 0, skill ? 10.0 : 9.2, 0, Math.PI * 2);
-  const turretGrad = ctx.createRadialGradient(-2.5, -2.5, 1.5, 0, 0, 10.2);
-  turretGrad.addColorStop(0, palette.highlightHex);
-  turretGrad.addColorStop(0.65, palette.primaryHex);
-  turretGrad.addColorStop(1, palette.shadowHex);
-  ctx.fillStyle = turretGrad;
-  ctx.fill();
-  ctx.lineWidth = 2.2;
-  ctx.strokeStyle = outline;
-  ctx.stroke();
+  // 4. Central Turret Dome / Custom Skin Crest + Superhero Helmet
+  skinMod.drawTurret(ctx, palette, skill);
 
   if (skill) {
     const visorColorMap: Record<SkillId, string> = {

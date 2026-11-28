@@ -1,8 +1,14 @@
 import Phaser from 'phaser';
+import { AssetFactory } from '../art/AssetFactory';
 import { BASE_GAMEPLAY, POWERUP_CONFIG } from '../config/gameplayConfig';
 import { getPaletteById } from '../config/paletteConfig';
 import type { NetTankSnapshot } from '../network/PeerMultiplayerManager';
 import type { PlayerSkillState } from '../skills/types';
+import {
+  getTankSkinDescriptor,
+  resolveEffectiveSkinStats,
+  type TankSkinStats,
+} from '../skins';
 import type {
   PlayerConfig,
   PlayerIndex,
@@ -11,6 +17,7 @@ import type {
   SpawnPoint,
   TankColorPalette,
   TankKinematics,
+  TankSkinId,
 } from '../types/gameTypes';
 import { renderTankAurasAndOverlays } from './TankAuraRenderer';
 
@@ -18,6 +25,7 @@ export class Tank {
   readonly index: PlayerIndex;
   readonly config: PlayerConfig;
   readonly palette: TankColorPalette;
+  readonly skinId: TankSkinId;
   readonly kinematics: TankKinematics;
 
   private readonly scene: Phaser.Scene;
@@ -27,6 +35,10 @@ export class Tank {
   private readonly overlayGraphics: Phaser.GameObjects.Graphics;
   private readonly spawnRing: Phaser.GameObjects.Arc;
   private readonly scaleRatio: number;
+  private visualScale: number;
+  private skinStats: TankSkinStats;
+  private readonly trailHistory: Array<{ x: number; y: number; angle: number }> = [];
+  private trailSampleAccum = 0;
 
   private skillState: PlayerSkillState = {
     skill: null,
@@ -75,14 +87,18 @@ export class Tank {
     config: PlayerConfig,
     spawn: SpawnPoint,
     scaleRatio: number,
+    skinStatsEnabled = true,
   ) {
     this.scene = scene;
     this.index = config.index;
     this.config = config;
     this.palette = getPaletteById(config.colorId);
+    this.skinId = config.skinId ?? 'classic';
+    this.skinStats = resolveEffectiveSkinStats(this.skinId, skinStatsEnabled);
     this.scaleRatio = scaleRatio;
+    this.visualScale = scaleRatio * this.skinStats.radiusScale;
 
-    const radius = BASE_GAMEPLAY.tankRadius * scaleRatio;
+    const radius = BASE_GAMEPLAY.tankRadius * scaleRatio * this.skinStats.radiusScale;
     this.kinematics = {
       index: config.index,
       x: spawn.x,
@@ -103,20 +119,36 @@ export class Tank {
     this.shadowSprite = scene.add
       .image(spawn.x + 2.5 * scaleRatio, spawn.y + 3.5 * scaleRatio, 'tank_shadow')
       .setOrigin(0.44, 0.5)
-      .setScale(scaleRatio)
+      .setScale(this.visualScale)
       .setRotation(spawn.angle)
       .setDepth(12);
 
     this.auraGraphics = scene.add.graphics().setDepth(13);
 
+    const initialTexKey = AssetFactory.ensureTankTexture(
+      scene,
+      this.palette.id,
+      this.skinId,
+      null,
+      0,
+      false,
+    );
     this.bodySprite = scene.add
-      .image(spawn.x, spawn.y, `tank_${this.palette.id}_0`)
+      .image(spawn.x, spawn.y, initialTexKey)
       .setOrigin(0.44, 0.5)
-      .setScale(scaleRatio)
+      .setScale(this.visualScale)
       .setRotation(spawn.angle)
       .setDepth(14);
 
     this.overlayGraphics = scene.add.graphics().setDepth(14.8);
+  }
+
+  getSkinId(): TankSkinId {
+    return this.skinId;
+  }
+
+  getSkinStats(): Readonly<TankSkinStats> {
+    return this.skinStats;
   }
 
   getSkillState(): Readonly<PlayerSkillState> {
@@ -125,7 +157,7 @@ export class Tank {
 
   configureArmorMode(enabled: boolean, maxHp = 100): void {
     this.hasArmorBar = enabled;
-    this.maxHp = Math.max(20, maxHp);
+    this.maxHp = Math.max(20, Math.round(maxHp * this.skinStats.armorHpScale));
     this.hp = this.maxHp;
     this.hitFlashTimer = 0;
     this.criticalVfxTimer = 0;
@@ -253,7 +285,8 @@ export class Tank {
       this.clearSkill();
     }
 
-    this.empJamRemainingSec = Math.max(this.empJamRemainingSec, durationSec);
+    const scaledEmpDuration = durationSec * this.skinStats.ccDurationScale;
+    this.empJamRemainingSec = Math.max(this.empJamRemainingSec, scaledEmpDuration);
     this.empMisfireTimer = 0.16;
     this.refreshBodyTexture();
     return { brokeShield, interruptedChannel };
@@ -290,7 +323,8 @@ export class Tank {
       return false;
     }
     if (!this.kinematics.alive || this.isShielded()) return false;
-    this.frozenRemainingSec = Math.max(this.frozenRemainingSec, durationSec);
+    const scaledFreeze = durationSec * this.skinStats.ccDurationScale;
+    this.frozenRemainingSec = Math.max(this.frozenRemainingSec, scaledFreeze);
     this.cryoChillExposureSec = 0;
     this.kinematics.vx = 0;
     this.kinematics.vy = 0;
@@ -349,8 +383,8 @@ export class Tank {
     this.scene.tweens.killTweensOf(this.bodySprite);
     this.scene.tweens.add({
       targets: this.bodySprite,
-      scaleX: this.scaleRatio * 1.18,
-      scaleY: this.scaleRatio * 1.18,
+      scaleX: this.visualScale * 1.18,
+      scaleY: this.visualScale * 1.18,
       duration: POWERUP_CONFIG.reaperWindupSec * 1000 * 0.55,
       yoyo: true,
       ease: 'Sine.easeInOut',
@@ -483,11 +517,11 @@ export class Tank {
     this.refreshBodyTexture();
 
     this.scene.tweens.killTweensOf(this.bodySprite);
-    this.bodySprite.setScale(this.scaleRatio * 1.26, this.scaleRatio * 1.26);
+    this.bodySprite.setScale(this.visualScale * 1.26, this.visualScale * 1.26);
     this.scene.tweens.add({
       targets: this.bodySprite,
-      scaleX: this.scaleRatio,
-      scaleY: this.scaleRatio,
+      scaleX: this.visualScale,
+      scaleY: this.visualScale,
       duration: 210,
       ease: 'Back.easeOut',
     });
@@ -535,15 +569,21 @@ export class Tank {
   }
 
   applyRecoilImpulse(impulseSpeed: number): void {
-    this.kinematics.vx -= Math.cos(this.kinematics.angle) * impulseSpeed;
-    this.kinematics.vy -= Math.sin(this.kinematics.angle) * impulseSpeed;
+    const effectiveImpulse = impulseSpeed * this.skinStats.recoilScale;
+    this.kinematics.vx -= Math.cos(this.kinematics.angle) * effectiveImpulse;
+    this.kinematics.vy -= Math.sin(this.kinematics.angle) * effectiveImpulse;
   }
 
   private refreshBodyTexture(): void {
     const suit = this.getActiveVisualSuit();
-    const key = suit
-      ? `tank_${this.palette.id}_${suit}_${this.treadFrame}`
-      : `tank_${this.palette.id}_${this.treadFrame}`;
+    const key = AssetFactory.ensureTankTexture(
+      this.scene,
+      this.palette.id,
+      this.skinId,
+      suit,
+      this.treadFrame,
+      false,
+    );
     this.bodySprite.setTexture(key);
   }
 
@@ -637,7 +677,8 @@ export class Tank {
       }
     } else if (!this.isShielded()) {
       if (this.onIceFloor && this.cryoRefreezeImmunitySec <= 0) {
-        this.cryoChillExposureSec += dt;
+        const chillRate = Math.max(0.35, 1 - this.skinStats.iceResistRatio * 0.65);
+        this.cryoChillExposureSec += dt * chillRate;
         if (this.cryoChillExposureSec >= POWERUP_CONFIG.cryoChillToFreezeSec) {
           if (this.applyCryoFreeze(POWERUP_CONFIG.cryoFreezeDurationSec)) {
             frozeFromCryoZone = true;
@@ -780,31 +821,47 @@ export class Tank {
 
     const rawTurnDir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
     const turnDir = this.empJamRemainingSec > 0 ? -rawTurnDir : rawTurnDir;
-    const turnMul = this.onIceFloor ? POWERUP_CONFIG.cryoDriftTurnMultiplier : 1.0;
+    const iceTurnMul =
+      POWERUP_CONFIG.cryoDriftTurnMultiplier +
+      (1 - POWERUP_CONFIG.cryoDriftTurnMultiplier) * this.skinStats.iceResistRatio;
+    const turnMul = (this.onIceFloor ? iceTurnMul : 1.0) * this.skinStats.turnSpeedScale;
     if (turnDir !== 0) {
       this.kinematics.angle = Phaser.Math.Angle.Wrap(
         this.kinematics.angle + turnDir * BASE_GAMEPLAY.tankTurnSpeedRad * turnMul * dt,
       );
     }
 
-    const speedMul =
+    const iceSpeedMul =
+      POWERUP_CONFIG.cryoDriftSpeedMultiplier +
+      (1 - POWERUP_CONFIG.cryoDriftSpeedMultiplier) * this.skinStats.iceResistRatio;
+    const envSpeedMul =
       (this.phantomRemainingSec > 0 ? POWERUP_CONFIG.phantomSpeedMultiplier : 1.0) *
       (this.empJamRemainingSec > 0 ? POWERUP_CONFIG.empMoveSpeedMultiplier : 1.0) *
-      (this.onIceFloor ? POWERUP_CONFIG.cryoDriftSpeedMultiplier : 1.0);
+      (this.onIceFloor ? iceSpeedMul : 1.0);
 
     const moveIntent = (input.forward ? 1 : 0) - (input.backward ? 1 : 0);
     let targetSpeed = 0;
     if (moveIntent > 0) {
-      targetSpeed = BASE_GAMEPLAY.tankForwardSpeed * this.scaleRatio * speedMul;
+      targetSpeed =
+        BASE_GAMEPLAY.tankForwardSpeed *
+        this.scaleRatio *
+        this.skinStats.forwardSpeedScale *
+        envSpeedMul;
     } else if (moveIntent < 0) {
-      targetSpeed = -BASE_GAMEPLAY.tankBackwardSpeed * this.scaleRatio * speedMul;
+      targetSpeed =
+        -BASE_GAMEPLAY.tankBackwardSpeed *
+        this.scaleRatio *
+        this.skinStats.backwardSpeedScale *
+        envSpeedMul;
     }
 
     const targetVx = Math.cos(this.kinematics.angle) * targetSpeed;
     const targetVy = Math.sin(this.kinematics.angle) * targetSpeed;
-    const velLerp = this.onIceFloor
-      ? POWERUP_CONFIG.cryoDriftVelocityLerp
-      : BASE_GAMEPLAY.tankVelocityLerp;
+    const iceLerp =
+      POWERUP_CONFIG.cryoDriftVelocityLerp +
+      (BASE_GAMEPLAY.tankVelocityLerp - POWERUP_CONFIG.cryoDriftVelocityLerp) *
+        this.skinStats.iceResistRatio;
+    const velLerp = this.onIceFloor ? iceLerp : BASE_GAMEPLAY.tankVelocityLerp;
     const blend = Math.min(1, velLerp * dt);
 
     this.kinematics.vx += (targetVx - this.kinematics.vx) * blend;
@@ -825,11 +882,25 @@ export class Tank {
       }
     }
 
+    const skinDesc = getTankSkinDescriptor(this.skinId);
     if (linearStep > 0.05) {
+      this.trailSampleAccum += linearStep;
+      if (this.trailSampleAccum >= 6.5 * this.scaleRatio) {
+        this.trailSampleAccum = 0;
+        this.trailHistory.unshift({
+          x: this.kinematics.x,
+          y: this.kinematics.y,
+          angle: this.kinematics.angle,
+        });
+        if (this.trailHistory.length > 12) {
+          this.trailHistory.pop();
+        }
+      }
+
       this.decalDistanceAccumulator += linearStep;
       if (this.decalDistanceAccumulator >= 10 * this.scaleRatio) {
         this.decalDistanceAccumulator = 0;
-        if (!this.isPhantom()) {
+        if (!this.isPhantom() && skinDesc.leavesTreadMarks) {
           onTreadMark(this.kinematics.x, this.kinematics.y, this.kinematics.angle);
         }
       }
@@ -943,7 +1014,18 @@ export class Tank {
     if (this.kinematics.alive) {
       const speed = Math.hypot(snap.vx, snap.vy);
       if (speed > 6) {
-        this.treadAccumulator += speed * dt;
+        const stepDist = speed * dt;
+        this.treadAccumulator += stepDist;
+        this.trailSampleAccum += stepDist;
+        if (this.trailSampleAccum >= 6.5 * this.scaleRatio) {
+          this.trailSampleAccum = 0;
+          this.trailHistory.unshift({
+            x: this.kinematics.x,
+            y: this.kinematics.y,
+            angle: this.kinematics.angle,
+          });
+          if (this.trailHistory.length > 12) this.trailHistory.pop();
+        }
         if (this.treadAccumulator >= 4.2 * this.scaleRatio) {
           this.treadAccumulator = 0;
           this.treadFrame = (this.treadFrame + 1) % 3;
@@ -990,10 +1072,13 @@ export class Tank {
     const rx = -Math.cos(this.kinematics.angle) * this.recoilOffset * this.scaleRatio + jitterX;
     const ry = -Math.sin(this.kinematics.angle) * this.recoilOffset * this.scaleRatio + jitterY;
 
+    const skinHoverAmp = getTankSkinDescriptor(this.skinId).hoverBobAmplitude;
     const hoverOffsetY =
       this.phantomRemainingSec > 0
         ? Math.sin(this.auraPulseClock * 9.5) * 2.4 * this.scaleRatio
-        : 0;
+        : skinHoverAmp > 0
+          ? Math.sin(this.auraPulseClock * 6.2 + this.index) * skinHoverAmp * this.scaleRatio
+          : 0;
 
     this.bodySprite.setPosition(this.kinematics.x + rx, this.kinematics.y + ry + hoverOffsetY);
     this.bodySprite.setRotation(this.kinematics.angle);
@@ -1013,11 +1098,14 @@ export class Tank {
       this.shadowSprite.setAlpha(0.16);
     } else {
       this.bodySprite.setAlpha(1);
-      this.shadowSprite.setAlpha(1);
+      this.shadowSprite.setAlpha(skinHoverAmp > 0 ? 0.65 : 1);
     }
 
     renderTankAurasAndOverlays({
       kinematics: this.kinematics,
+      skinId: this.skinId,
+      palette: this.palette,
+      trailHistory: this.trailHistory,
       scaleRatio: this.scaleRatio,
       auraPulseClock: this.auraPulseClock,
       hasArmorBar: this.hasArmorBar,
@@ -1051,25 +1139,26 @@ export class Tank {
   }
 
   triggerFireVisual(customCooldownSec?: number): void {
-    this.fireCooldown = customCooldownSec ?? BASE_GAMEPLAY.fireCooldownSec;
+    this.fireCooldown =
+      customCooldownSec ?? BASE_GAMEPLAY.fireCooldownSec * this.skinStats.fireCooldownScale;
     const isRapid = Boolean(customCooldownSec && customCooldownSec < 0.1);
-    this.recoilOffset = isRapid ? 3.1 : 3.5;
+    this.recoilOffset = (isRapid ? 3.1 : 3.5) * this.skinStats.recoilScale;
     this.scene.tweens.killTweensOf(this.bodySprite);
     this.bodySprite.setScale(
-      this.scaleRatio * (isRapid ? 0.89 : 0.92),
-      this.scaleRatio * (isRapid ? 1.11 : 1.08),
+      this.visualScale * (isRapid ? 0.89 : 0.92),
+      this.visualScale * (isRapid ? 1.11 : 1.08),
     );
     this.scene.tweens.add({
       targets: this.bodySprite,
-      scaleX: this.scaleRatio,
-      scaleY: this.scaleRatio,
+      scaleX: this.visualScale,
+      scaleY: this.visualScale,
       duration: isRapid ? 65 : 100,
       ease: 'Back.easeOut',
     });
   }
 
   getBarrelLength(): number {
-    return BASE_GAMEPLAY.tankBarrelLength * this.scaleRatio;
+    return BASE_GAMEPLAY.tankBarrelLength * this.scaleRatio * Math.max(0.88, this.skinStats.radiusScale);
   }
 
   getMuzzleWorldPos(): { x: number; y: number } {
@@ -1100,6 +1189,7 @@ export class Tank {
     this.skillState.warpBeaconPlaced = false;
     this.laserReadyToDischarge = false;
     this.spawnRing.setVisible(false);
+    this.trailHistory.length = 0;
     this.auraGraphics.clear();
     this.overlayGraphics.clear();
     this.bodySprite.setAlpha(1);

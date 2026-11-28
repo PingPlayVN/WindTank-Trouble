@@ -14,6 +14,16 @@ export type TouchScheme = 'vector_stick' | 'dual_pad';
 
 export type NetworkRole = 'offline' | 'host' | 'guest';
 
+export type TankSkinId =
+  | 'classic'
+  | 'viper_scout'
+  | 'titan_heavy'
+  | 'falcon_sniper'
+  | 'arachnid_barrage'
+  | 'hover_specter'
+  | 'magma_drake'
+  | 'cyber_omega';
+
 export interface PlayerKeyBindings {
   forward: string;
   backward: string;
@@ -40,6 +50,7 @@ export interface PlayerConfig {
   name: string;
   active: boolean;
   colorId: string;
+  skinId?: TankSkinId;
   bindings: PlayerKeyBindings;
   isAI: boolean;
   aiDifficulty: AIDifficulty;
@@ -175,6 +186,8 @@ export interface GameSettings {
   masterVolume: number;
   screenShake: boolean;
   playerColors: [string, string, string, string];
+  playerSkins: [TankSkinId, TankSkinId, TankSkinId, TankSkinId];
+  skinStatsEnabled: boolean;
   playerBindings: [PlayerKeyBindings, PlayerKeyBindings, PlayerKeyBindings, PlayerKeyBindings];
 }
 

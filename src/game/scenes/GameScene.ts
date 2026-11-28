@@ -63,10 +63,12 @@ export interface HudSnapshot {
     index: PlayerIndex;
     name: string;
     colorId: string;
+    skinId: import('../types/gameTypes').TankSkinId;
     isAI: boolean;
     aiDifficulty: AIDifficulty;
     score: number;
     ammo: number;
+    maxAmmo: number;
     hp: number;
     maxHp: number;
     alive: boolean;
@@ -173,6 +175,7 @@ export class GameScene extends Phaser.Scene {
           name: 'Xe 1 (Chủ Phòng)',
           active: true,
           colorId: this.onlineConfig.hostColorId,
+          skinId: this.onlineConfig.hostSkinId ?? 'classic',
           bindings: { ...s.playerBindings[0] },
           isAI: false,
           aiDifficulty: 'normal',
@@ -182,6 +185,7 @@ export class GameScene extends Phaser.Scene {
           name: 'Xe 2 (Khách)',
           active: true,
           colorId: this.onlineConfig.guestColorId,
+          skinId: this.onlineConfig.guestSkinId ?? 'classic',
           bindings: { ...s.playerBindings[1] },
           isAI: false,
           aiDifficulty: 'normal',
@@ -310,10 +314,28 @@ export class GameScene extends Phaser.Scene {
       effectiveTntOpt,
     );
 
+    const effectiveSkinStatsEnabled = this.onlineConfig
+      ? (this.onlineConfig.skinStatsEnabled ?? true)
+      : s.skinStatsEnabled;
+
     this.tanks = this.activePlayers.map((pCfg, idx) => {
       const spawn = this.arena.spawns[idx % this.arena.spawns.length];
-      const tank = new Tank(this, pCfg, spawn, this.arena.scaleRatio);
+      const normalizedCfg: PlayerConfig = {
+        ...pCfg,
+        skinId:
+          this.onlineConfig !== null
+            ? (pCfg.skinId ?? 'classic')
+            : settingsManager.getPlayerSkin(pCfg.index),
+      };
+      const tank = new Tank(
+        this,
+        normalizedCfg,
+        spawn,
+        this.arena.scaleRatio,
+        effectiveSkinStatsEnabled,
+      );
       tank.configureArmorMode(this.battleRules.hasArmorHp, this.battleRules.maxHp);
+      this.projectileSystem.configurePlayerMaxAmmo(tank.index, tank.getSkinStats().maxAmmo);
       return tank;
     });
     resolveAllTankCollisions(
@@ -936,8 +958,18 @@ export class GameScene extends Phaser.Scene {
             if (victim.isShielded()) {
               audioManager.playShieldDeflect();
               this.effectsSystem.emitShieldDeflect(hit.x, hit.y);
-            } else if (this.applyCombatHitToTank(victim, variant, hit.x, hit.y)) {
-              hudDirty = true;
+            } else {
+              const shooter = this.tanks.find((t) => t.index === hit.ownerIndex);
+              const explicitDmg =
+                variant === 'standard' && shooter
+                  ? Math.round(
+                      computeWeaponDamage('standard') *
+                        shooter.getSkinStats().standardBulletDamageScale,
+                    )
+                  : undefined;
+              if (this.applyCombatHitToTank(victim, variant, hit.x, hit.y, explicitDmg)) {
+                hudDirty = true;
+              }
             }
           }
         }
@@ -1298,10 +1330,12 @@ export class GameScene extends Phaser.Scene {
         index: t.index,
         name: t.config.name,
         colorId: t.config.colorId,
+        skinId: t.getSkinId(),
         isAI: isOnline ? false : Boolean(s.playerIsAI[t.index]),
         aiDifficulty: s.playerAIDifficulty[t.index] ?? 'normal',
         score: this.scoreManager.getScore(t.index),
         ammo: this.projectileSystem ? this.projectileSystem.getRemainingAmmo(t.index) : 10,
+        maxAmmo: this.projectileSystem ? this.projectileSystem.getMaxAmmoForPlayer(t.index) : 10,
         hp: t.getHp(),
         maxHp: t.getMaxHp(),
         alive: t.kinematics.alive,

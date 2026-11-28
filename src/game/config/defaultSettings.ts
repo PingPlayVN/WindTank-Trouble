@@ -26,6 +26,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   masterVolume: 0.75,
   screenShake: true,
   playerColors: ['red', 'green', 'blue', 'gold'],
+  playerSkins: ['classic', 'classic', 'classic', 'classic'],
+  skinStatsEnabled: true,
   playerBindings: [
     { ...DEFAULT_PLAYER_BINDINGS[0] },
     { ...DEFAULT_PLAYER_BINDINGS[1] },

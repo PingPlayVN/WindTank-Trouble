@@ -518,11 +518,12 @@ export class NightVisionSystem {
       let bCount = 0;
       for (const tank of viewerTanks) {
         if (!tank.kinematics.alive || bCount >= 2) continue;
+        const tankRange = coneRange * tank.getSkinStats().headlightRangeScale;
         this.volumetricShader.setUniform(`uBeam${bCount}.value`, {
           x: tank.kinematics.x - ox,
           y: tank.kinematics.y - oy,
           z: tank.kinematics.angle,
-          w: coneRange,
+          w: tankRange,
         });
         bCount++;
       }
@@ -612,12 +613,13 @@ export class NightVisionSystem {
       const lampOriginX = tank.kinematics.x;
       const lampOriginY = tank.kinematics.y;
 
+      const tankRange = coneRange * tank.getSkinStats().headlightRangeScale;
       const samples = castFlashlightRaySamples(
         lampOriginX,
         lampOriginY,
         angle,
         outerHalfRad,
-        coneRange,
+        tankRange,
         this.arena.walls,
         barrels,
         60,

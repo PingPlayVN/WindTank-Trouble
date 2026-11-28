@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { AssetFactory } from '../art/AssetFactory';
 import {
   AI_DIFFICULTY_DESCRIPTORS,
   DESIGN_HEIGHT,
@@ -7,6 +8,7 @@ import {
   formatKeyCodeLabel,
   getAIDifficultyDescriptor,
   getPaletteById,
+  getTankSkinDescriptor,
   UI_COLORS,
 } from '../config/constants';
 import { audioManager } from '../managers/AudioManager';
@@ -26,6 +28,7 @@ import { createMobileFullscreenControls } from '../../ui/components/FullscreenPr
 import { MatchRulesModal } from '../../ui/components/MatchRulesModal';
 import { SettingsModal } from '../../ui/components/SettingsModal';
 import { SkillGuideModal } from '../../ui/components/SkillGuideModal';
+import { TankGarageModal } from '../../ui/components/TankGarageModal';
 
 export class SetupScene extends Phaser.Scene {
   private cardsContainer!: Phaser.GameObjects.Container;
@@ -38,6 +41,8 @@ export class SetupScene extends Phaser.Scene {
   private activeModal: SettingsModal | null = null;
   private activeSkillModal: SkillGuideModal | null = null;
   private activeRulesModal: MatchRulesModal | null = null;
+  private activeGarageModal: TankGarageModal | null = null;
+  private skinModeBtn!: ArcadeButtonHandle;
   private onKeyDownBound!: (e: KeyboardEvent) => void;
 
   constructor() {
@@ -49,6 +54,7 @@ export class SetupScene extends Phaser.Scene {
       this.activeModal ||
         this.activeSkillModal ||
         this.activeRulesModal ||
+        this.activeGarageModal ||
         this.scoreStepper?.isEditing(),
     );
   }
@@ -59,6 +65,7 @@ export class SetupScene extends Phaser.Scene {
     this.activeModal = null;
     this.activeSkillModal = null;
     this.activeRulesModal = null;
+    this.activeGarageModal = null;
 
     mobileOrientationManager.syncLayout();
     const isMobile = settingsManager.isTouchControlsActive();
@@ -101,14 +108,14 @@ export class SetupScene extends Phaser.Scene {
       const counts: Array<2 | 3 | 4> = [2, 3, 4];
       counts.forEach((cnt, idx) => {
         const btn = createArcadeButton(this, {
-          x: DESIGN_WIDTH / 2 + (idx - 1) * 158,
+          x: DESIGN_WIDTH / 2 - 270 + idx * 146,
           y: 102,
-          width: 144,
+          width: 136,
           height: 40,
           label: `${cnt} XE ĐẤU`,
-          fontSize: 15,
+          fontSize: 14.5,
           onClick: () => {
-            if (this.activeModal || this.activeSkillModal || this.activeRulesModal) return;
+            if (this.isOverlayBusy()) return;
             this.scoreStepper?.commitAndStopEditing();
             settingsManager.setPlayerCount(cnt);
             this.refreshAll(cnt - 1);
@@ -118,6 +125,39 @@ export class SetupScene extends Phaser.Scene {
         topItems.push(btn.container);
       });
     }
+
+    const topRowY = isMobile ? 84 : 102;
+    const garageTopBtn = createArcadeButton(this, {
+      x: isMobile ? DESIGN_WIDTH / 2 - 190 : DESIGN_WIDTH / 2 + 178,
+      y: topRowY,
+      width: 196,
+      height: isMobile ? 36 : 40,
+      lipHeight: 2.5,
+      label: '🛡️ XƯỞNG CHIẾN XA',
+      fontSize: 13,
+      fillColor: 0xffb300,
+      hoverColor: 0xffca28,
+      textColor: '#18191B',
+      onClick: () => this.openGarageForPlayer(0),
+    });
+    topItems.push(garageTopBtn.container);
+
+    this.skinModeBtn = createArcadeButton(this, {
+      x: isMobile ? DESIGN_WIDTH / 2 + 165 : DESIGN_WIDTH / 2 + 398,
+      y: topRowY,
+      width: 224,
+      height: isMobile ? 36 : 40,
+      lipHeight: 2.5,
+      label: '',
+      fontSize: 12,
+      onClick: () => {
+        if (this.isOverlayBusy()) return;
+        settingsManager.toggleSkinStatsEnabled();
+        this.refreshRulesRow();
+        this.rebuildPlayerCards();
+      },
+    });
+    topItems.push(this.skinModeBtn.container);
 
     this.cardsContainer = this.add.container(0, 0);
 
@@ -346,6 +386,8 @@ export class SetupScene extends Phaser.Scene {
       this.activeSkillModal = null;
       this.activeRulesModal?.close(true);
       this.activeRulesModal = null;
+      this.activeGarageModal?.close(true);
+      this.activeGarageModal = null;
       this.scoreStepper?.destroy();
     });
   }
@@ -411,6 +453,33 @@ export class SetupScene extends Phaser.Scene {
         ? '⚙ LUẬT (TẮT)'
         : `⚙ LUẬT (${s.powerUpSpawnIntervalSec}s)`,
     );
+    if (this.skinModeBtn) {
+      this.skinModeBtn.setLabel(
+        s.skinStatsEnabled ? '⚡ SKIN: THỰC CHIẾN' : '🎨 SKIN: CHUẨN 100%',
+      );
+      this.skinModeBtn.setFill(
+        s.skinStatsEnabled ? 0xe8f5e9 : 0xe3f2fd,
+        s.skinStatsEnabled ? 0xc8e6c9 : 0xbbdefb,
+        s.skinStatsEnabled ? '#1B5E20' : '#0D47A1',
+      );
+    }
+  }
+
+  private openGarageForPlayer(playerIndex: PlayerIndex): void {
+    if (this.isOverlayBusy()) return;
+    this.scoreStepper?.commitAndStopEditing();
+    this.activeGarageModal = new TankGarageModal(this, {
+      initialPlayerIndex: playerIndex,
+      onUpdated: () => {
+        this.refreshRulesRow();
+        this.rebuildPlayerCards();
+      },
+      onClose: () => {
+        this.activeGarageModal = null;
+        this.refreshRulesRow();
+        this.rebuildPlayerCards();
+      },
+    });
   }
 
   private rebuildPlayerCards(pulseCardIndex?: number, animateInitial = false): void {
@@ -467,52 +536,77 @@ export class SetupScene extends Phaser.Scene {
           })
           .setOrigin(0.5, 0.5);
 
-        const ringY = isMobile ? -100 : -94;
+        const skinId = settingsManager.getPlayerSkin(pIdx);
+        const skinDesc = getTankSkinDescriptor(skinId);
+        const texKey = AssetFactory.ensureTankTexture(this, palette.id, skinId, null, 0, false);
+
+        const ringY = isMobile ? -108 : -102;
         const ring = this.add
-          .circle(0, ringY, isMobile ? 42 : 38, isAI ? 0xe3f2fd : 0xf3f4f6, 1)
-          .setStrokeStyle(2.2, isAI ? aiDesc.fillColor : 0xd5d8de, 1);
+          .circle(0, ringY, isMobile ? 38 : 34, isAI ? 0xe3f2fd : 0xf3f4f6, 1)
+          .setStrokeStyle(2.2, isAI ? aiDesc.fillColor : skinDesc.rarityColor, 1);
         const tankSprite = this.add
-          .image(0, ringY, `tank_${palette.id}_0`)
-          .setScale(isMobile ? 1.24 : 1.12)
+          .image(0, ringY, texKey)
+          .setScale(isMobile ? 1.18 : 1.06)
           .setRotation(-Math.PI / 4 + i * 0.5);
         this.previewTanks.push(tankSprite);
 
-        const innerBtnW = isMobile ? 344 : 210;
+        const innerBtnW = isMobile ? 344 : 214;
         const colorBtn = createArcadeButton(this, {
           x: 0,
-          y: isMobile ? -32 : -32,
+          y: isMobile ? -50 : -46,
           width: innerBtnW,
-          height: isMobile ? 38 : 33,
-          lipHeight: 3,
+          height: isMobile ? 32 : 28,
+          lipHeight: 2.5,
           label: `◀  MÀU SƠN: ${palette.name.toUpperCase()}  ▶`,
-          fontSize: isMobile ? 14 : 13,
+          fontSize: isMobile ? 13 : 12,
           fillColor: UI_COLORS.cardAltBg,
           onClick: () => {
-            if (this.activeModal || this.activeSkillModal || this.activeRulesModal) return;
+            if (this.isOverlayBusy()) return;
             settingsManager.cyclePlayerColor(pIdx, 1);
             this.rebuildPlayerCards(i);
           },
         });
 
+        const skinBtn = createArcadeButton(this, {
+          x: 0,
+          y: isMobile ? -14 : -13,
+          width: innerBtnW,
+          height: isMobile ? 32 : 28,
+          lipHeight: 2.5,
+          label: `🛡️ SKIN: ${skinDesc.shortName.toUpperCase()} (ĐỔI)`,
+          fontSize: isMobile ? 12.5 : 11.5,
+          fillColor: 0xfff8e1,
+          hoverColor: 0xffecb3,
+          textColor: '#E65100',
+          onClick: () => this.openGarageForPlayer(pIdx),
+        });
+
         const modeToggleBtn = createArcadeButton(this, {
           x: 0,
-          y: isMobile ? 14 : 10,
+          y: isMobile ? 22 : 20,
           width: innerBtnW,
-          height: isMobile ? 40 : 34,
-          lipHeight: 3,
+          height: isMobile ? 34 : 29,
+          lipHeight: 2.5,
           label: isAI ? '● CHẾ ĐỘ: MÁY AI (BẤM ĐỂ TẮT)' : '● NGƯỜI CHƠI  •  BẬT MÁY AI',
-          fontSize: isMobile ? 13.5 : 12.5,
+          fontSize: isMobile ? 13 : 12,
           fillColor: isAI ? 0x1d2430 : UI_COLORS.cardBg,
           hoverColor: isAI ? 0x2b3648 : 0xe8f0fe,
           textColor: isAI ? '#40C4FF' : UI_COLORS.inkDarkHex,
           onClick: () => {
-            if (this.activeModal || this.activeSkillModal || this.activeRulesModal) return;
+            if (this.isOverlayBusy()) return;
             settingsManager.togglePlayerIsAI(pIdx);
             this.rebuildPlayerCards(i);
           },
         });
 
-        slotRoot.add([title, ring, tankSprite, colorBtn.container, modeToggleBtn.container]);
+        slotRoot.add([
+          title,
+          ring,
+          tankSprite,
+          colorBtn.container,
+          skinBtn.container,
+          modeToggleBtn.container,
+        ]);
 
         if (isAI) {
           const aiHdr = this.add

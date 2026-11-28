@@ -1,15 +1,18 @@
 import Phaser from 'phaser';
+import { AssetFactory } from '../art/AssetFactory';
 import {
   DESIGN_HEIGHT,
   DESIGN_WIDTH,
   getAIDifficultyDescriptor,
   getPaletteById,
+  getTankSkinDescriptor,
   UI_COLORS,
 } from '../config/constants';
 import { audioManager } from '../managers/AudioManager';
 import { mobileOrientationManager } from '../managers/MobileOrientationManager';
 import { settingsManager } from '../managers/SettingsManager';
 import { networkStatus } from '../network/networkStatus';
+import type { PlayerIndex } from '../types/gameTypes';
 import {
   animateStaggeredEntrance,
   createArcadeButton,
@@ -20,6 +23,7 @@ import {
 import { createMobileFullscreenControls } from '../../ui/components/FullscreenPromptWidget';
 import { SettingsModal } from '../../ui/components/SettingsModal';
 import { SkillGuideModal } from '../../ui/components/SkillGuideModal';
+import { TankGarageModal } from '../../ui/components/TankGarageModal';
 
 export class MenuScene extends Phaser.Scene {
   private countButtons: Map<2 | 3 | 4, ArcadeButtonHandle> = new Map();
@@ -31,6 +35,7 @@ export class MenuScene extends Phaser.Scene {
   private previewContainer!: Phaser.GameObjects.Container;
   private activeModal: SettingsModal | null = null;
   private activeSkillModal: SkillGuideModal | null = null;
+  private activeGarageModal: TankGarageModal | null = null;
   private onKeyDownBound!: (e: KeyboardEvent) => void;
 
   constructor() {
@@ -43,6 +48,7 @@ export class MenuScene extends Phaser.Scene {
     this.mobileDualHumanBtn = null;
     this.activeModal = null;
     this.activeSkillModal = null;
+    this.activeGarageModal = null;
     mobileOrientationManager.syncLayout();
     const isMobile = settingsManager.isTouchControlsActive();
     if (isMobile) {
@@ -100,7 +106,7 @@ export class MenuScene extends Phaser.Scene {
       hoverColor: 0xf44336,
       textColor: '#FFFFFF',
       onClick: () => {
-        if (this.activeModal || this.activeSkillModal) return;
+        if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
         this.scene.start('SetupScene');
       },
     });
@@ -117,7 +123,7 @@ export class MenuScene extends Phaser.Scene {
       hoverColor: 0x4caf50,
       textColor: '#FFFFFF',
       onClick: () => {
-        if (this.activeModal || this.activeSkillModal) return;
+        if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
         this.scene.start('GameScene', { freshMatch: true });
       },
     });
@@ -134,7 +140,7 @@ export class MenuScene extends Phaser.Scene {
       hoverColor: 0x1976d2,
       textColor: '#FFFFFF',
       onClick: () => {
-        if (this.activeModal || this.activeSkillModal) return;
+        if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
         if (!networkStatus.isOnline()) return;
         this.scene.start('OnlineLobbyScene');
       },
@@ -160,42 +166,55 @@ export class MenuScene extends Phaser.Scene {
       this.syncOnlineButtonAvailability();
     });
 
-    // Clean, aligned 3-button utility row directly matching the 3 primary CTA columns above!
-    const guideBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 - 256,
+    // Symmetrical 4-button utility row (`Xưởng Chiến Xa`, `Cẩm Nang 15 Kỹ Năng`, `Cài Đặt`, `Hướng Dẫn`)
+    const garageBtn = createArcadeButton(this, {
+      x: DESIGN_WIDTH / 2 - 360,
       y: 598,
-      width: 240,
+      width: 228,
       height: 48,
-      label: 'HƯỚNG DẪN CHƠI',
-      fontSize: 15,
-      fillColor: UI_COLORS.cardBg,
-      hoverColor: 0xf4f6f8,
-      onClick: () => this.openModal('controls'),
-    });
-
-    const settingsBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2,
-      y: 598,
-      width: 244,
-      height: 48,
-      label: isMobile ? '⚙ CÀI ĐẶT & ĐỘ NHẠY' : '⚙ CÀI ĐẶT & ĐỔI PHÍM',
-      fontSize: 15,
-      fillColor: UI_COLORS.cardBg,
-      hoverColor: 0xf4f6f8,
-      onClick: () => this.openModal('settings'),
+      label: '🛡️ XƯỞNG CHIẾN XA',
+      fontSize: 14.5,
+      fillColor: 0xffb300,
+      hoverColor: 0xffca28,
+      textColor: '#18191B',
+      onClick: () => this.openGarageModal(),
     });
 
     const codexBtn = createArcadeButton(this, {
-      x: DESIGN_WIDTH / 2 + 256,
+      x: DESIGN_WIDTH / 2 - 120,
       y: 598,
-      width: 240,
+      width: 228,
       height: 48,
-      label: '★ CẨM NANG 15 KỸ NĂNG',
+      label: '★ 15 KỸ NĂNG',
       fontSize: 14.5,
       fillColor: 0xfff8e1,
       hoverColor: 0xffecb3,
       textColor: '#E65100',
       onClick: () => this.openSkillGuide(),
+    });
+
+    const settingsBtn = createArcadeButton(this, {
+      x: DESIGN_WIDTH / 2 + 120,
+      y: 598,
+      width: 228,
+      height: 48,
+      label: isMobile ? '⚙ CÀI ĐẶT & ĐỘ NHẠY' : '⚙ CÀI ĐẶT & ĐỔI PHÍM',
+      fontSize: 14,
+      fillColor: UI_COLORS.cardBg,
+      hoverColor: 0xf4f6f8,
+      onClick: () => this.openModal('settings'),
+    });
+
+    const guideBtn = createArcadeButton(this, {
+      x: DESIGN_WIDTH / 2 + 360,
+      y: 598,
+      width: 228,
+      height: 48,
+      label: 'HƯỚNG DẪN CHƠI',
+      fontSize: 14.5,
+      fillColor: UI_COLORS.cardBg,
+      hoverColor: 0xf4f6f8,
+      onClick: () => this.openModal('controls'),
     });
 
     const footer = this.add
@@ -224,9 +243,10 @@ export class MenuScene extends Phaser.Scene {
         lobbyBtn.container,
         quickBtn.container,
         this.onlineBtn.container,
-        guideBtn.container,
-        settingsBtn.container,
+        garageBtn.container,
         codexBtn.container,
+        settingsBtn.container,
+        guideBtn.container,
         footer,
       ],
       14,
@@ -234,7 +254,7 @@ export class MenuScene extends Phaser.Scene {
     );
 
     this.onKeyDownBound = (e: KeyboardEvent) => {
-      if (this.activeModal || this.activeSkillModal || e.repeat) return;
+      if (this.activeModal || this.activeSkillModal || this.activeGarageModal || e.repeat) return;
       if (e.code === 'Enter' || e.code === 'Space') {
         audioManager.unlock();
         audioManager.playUiClick(false);
@@ -258,6 +278,8 @@ export class MenuScene extends Phaser.Scene {
       this.activeModal = null;
       this.activeSkillModal?.close();
       this.activeSkillModal = null;
+      this.activeGarageModal?.close(true);
+      this.activeGarageModal = null;
     });
   }
 
@@ -402,18 +424,21 @@ export class MenuScene extends Phaser.Scene {
     for (let i = 0; i < count; i++) {
       const px = (i - (count - 1) / 2) * 130;
       const palette = getPaletteById(s.playerColors[i]);
+      const skinId = settingsManager.getPlayerSkin(i as PlayerIndex);
+      const skinDesc = getTankSkinDescriptor(skinId);
+      const texKey = AssetFactory.ensureTankTexture(this, palette.id, skinId, null, 0, false);
       const shadow = this.add
         .image(px + 2, -6 + 3, 'tank_shadow')
         .setScale(0.95)
         .setRotation(-Math.PI / 2);
       const sprite = this.add
-        .image(px, -6, `tank_${palette.id}_0`)
+        .image(px, -6, texKey)
         .setScale(0.95)
         .setRotation(-Math.PI / 2);
       const isAI = Boolean(s.playerIsAI[i]);
       const slotCopy = isAI
         ? `XE ${i + 1} • ${getAIDifficultyDescriptor(s.playerAIDifficulty[i] ?? 'normal').shortBadge}`
-        : `XE ${i + 1} • ${palette.name.toUpperCase()}`;
+        : `XE ${i + 1} • ${skinDesc.shortName.toUpperCase()}`;
       const label = this.add
         .text(px, 30, slotCopy, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
@@ -439,7 +464,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private openModal(mode: 'settings' | 'controls'): void {
-    if (this.activeModal || this.activeSkillModal) return;
+    if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
     this.activeModal = new SettingsModal(this, {
       mode,
       onClose: () => {
@@ -460,10 +485,24 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private openSkillGuide(): void {
-    if (this.activeModal || this.activeSkillModal) return;
+    if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
     this.activeSkillModal = new SkillGuideModal(this, {
       onClose: () => {
         this.activeSkillModal = null;
+      },
+    });
+  }
+
+  private openGarageModal(): void {
+    if (this.activeModal || this.activeSkillModal || this.activeGarageModal) return;
+    this.activeGarageModal = new TankGarageModal(this, {
+      initialPlayerIndex: 0,
+      onUpdated: () => {
+        this.refreshTankPreview(false);
+      },
+      onClose: () => {
+        this.activeGarageModal = null;
+        this.refreshTankPreview(false);
       },
     });
   }

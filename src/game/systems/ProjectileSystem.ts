@@ -37,6 +37,12 @@ export class ProjectileSystem {
   private readonly trailGraphics: Phaser.GameObjects.Graphics;
   private readonly flameStreamGraphics: Phaser.GameObjects.Graphics;
   private readonly scaleRatio: number;
+  private readonly maxAmmoByPlayer: [number, number, number, number] = [
+    BASE_GAMEPLAY.maxProjectilesPerTank,
+    BASE_GAMEPLAY.maxProjectilesPerTank,
+    BASE_GAMEPLAY.maxProjectilesPerTank,
+    BASE_GAMEPLAY.maxProjectilesPerTank,
+  ];
 
   constructor(scene: Phaser.Scene, scaleRatio: number) {
     this.scaleRatio = scaleRatio;
@@ -73,10 +79,18 @@ export class ProjectileSystem {
     return count;
   }
 
+  configurePlayerMaxAmmo(playerIndex: PlayerIndex, maxAmmo: number): void {
+    this.maxAmmoByPlayer[playerIndex] = Math.max(1, Math.round(maxAmmo));
+  }
+
+  getMaxAmmoForPlayer(playerIndex: PlayerIndex): number {
+    return this.maxAmmoByPlayer[playerIndex] ?? BASE_GAMEPLAY.maxProjectilesPerTank;
+  }
+
   getRemainingAmmo(playerIndex: PlayerIndex): number {
     return Math.max(
       0,
-      BASE_GAMEPLAY.maxProjectilesPerTank - this.getActiveCountForPlayer(playerIndex),
+      this.getMaxAmmoForPlayer(playerIndex) - this.getActiveCountForPlayer(playerIndex),
     );
   }
 
@@ -126,12 +140,17 @@ export class ProjectileSystem {
     if (!tank.canFire()) {
       return { fired: false, muzzleX: 0, muzzleY: 0, immediateBounce: false };
     }
-    if (this.getActiveCountForPlayer(tank.index) >= BASE_GAMEPLAY.maxProjectilesPerTank) {
+    if (this.getActiveCountForPlayer(tank.index) >= this.getMaxAmmoForPlayer(tank.index)) {
       return { fired: false, muzzleX: 0, muzzleY: 0, immediateBounce: false };
     }
 
-    const radius = BASE_GAMEPLAY.projectileRadius * this.scaleRatio;
-    const speed = BASE_GAMEPLAY.projectileSpeed * this.scaleRatio;
+    const skinStats = tank.getSkinStats();
+    const radius = BASE_GAMEPLAY.projectileRadius * this.scaleRatio * skinStats.projectileRadiusScale;
+    const speed = BASE_GAMEPLAY.projectileSpeed * this.scaleRatio * skinStats.projectileSpeedScale;
+    const maxBounces = Math.max(
+      3,
+      BASE_GAMEPLAY.projectileMaxBounces + skinStats.projectileBonusBounces,
+    );
     const spawn = computeSafeMuzzleSpawn(
       tank.kinematics.x,
       tank.kinematics.y,
@@ -151,7 +170,7 @@ export class ProjectileSystem {
       vy: spawn.vy,
       radius,
       maxLifetime: BASE_GAMEPLAY.projectileLifetimeSec,
-      maxBounces: BASE_GAMEPLAY.projectileMaxBounces,
+      maxBounces,
       graceTimer: grace,
       variant: 'standard',
       bounceBehavior: 'reflect',

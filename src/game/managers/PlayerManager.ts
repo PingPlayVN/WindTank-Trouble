@@ -10,6 +10,7 @@ export class PlayerManager {
         name: `P${i + 1}`,
         active: i < settings.playerCount,
         colorId: settings.playerColors[i],
+        skinId: settings.playerSkins?.[i] ?? 'classic',
         bindings: { ...settings.playerBindings[i] },
         isAI: Boolean(settings.playerIsAI?.[i]),
         aiDifficulty: settings.playerAIDifficulty?.[i] ?? 'normal',

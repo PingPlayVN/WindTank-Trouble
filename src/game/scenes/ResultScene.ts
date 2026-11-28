@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { AssetFactory } from '../art/AssetFactory';
 import {
   DESIGN_HEIGHT,
   DESIGN_WIDTH,
@@ -111,8 +112,16 @@ export class ResultScene extends Phaser.Scene {
     const pedestal = this.add
       .circle(px, py - 106, 50, 0xf5f6f8, 1)
       .setStrokeStyle(2.5, winnerPalette.primary, 0.85);
+    const heroTex = AssetFactory.ensureTankTexture(
+      this,
+      winnerPalette.id,
+      winnerCfg?.skinId ?? 'classic',
+      null,
+      0,
+      false,
+    );
     this.heroTank = this.add
-      .image(px, py - 102, `tank_${winnerPalette.id}_0`)
+      .image(px, py - 102, heroTex)
       .setScale(1.45)
       .setRotation(-Math.PI / 2);
     const crown = this.add.image(px, py - 154, 'ui_crown').setScale(1.1);
@@ -158,7 +167,15 @@ export class ResultScene extends Phaser.Scene {
         })
         .setOrigin(0, 0.5);
 
-      const icon = this.add.image(-182, 0, `tank_icon_${pal.id}`).setScale(0.75);
+      const rowIconKey = AssetFactory.ensureTankTexture(
+        this,
+        pal.id,
+        entry.player.skinId ?? 'classic',
+        null,
+        0,
+        true,
+      );
+      const icon = this.add.image(-182, 0, rowIconKey).setScale(0.75);
 
       const rowTag = isOnline
         ? entry.player.index === 0

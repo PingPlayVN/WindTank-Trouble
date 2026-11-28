@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { AssetFactory } from '../art/AssetFactory';
 import {
   BATTLE_MODE_DESCRIPTORS,
   DESIGN_HEIGHT,
@@ -7,6 +8,7 @@ import {
   formatWinningScoreLabel,
   getBattleModeDescriptor,
   getPaletteById,
+  getTankSkinDescriptor,
   UI_COLORS,
 } from '../config/constants';
 import { audioManager } from '../managers/AudioManager';
@@ -27,6 +29,7 @@ import {
 } from '../../ui/components/ArcadeWidgets';
 import { createMobileFullscreenControls } from '../../ui/components/FullscreenPromptWidget';
 import { MatchRulesModal } from '../../ui/components/MatchRulesModal';
+import { TankGarageModal } from '../../ui/components/TankGarageModal';
 
 interface OnlineLobbyInitData {
   autoJoinCode?: string;
@@ -48,6 +51,7 @@ export class OnlineLobbyScene extends Phaser.Scene {
   private toastText!: Phaser.GameObjects.Text;
 
   private activeRulesModal: MatchRulesModal | null = null;
+  private activeGarageModal: TankGarageModal | null = null;
   private unsubLobby: (() => void) | null = null;
   private unsubMatchStart: (() => void) | null = null;
   private onKeyDownBound!: (e: KeyboardEvent) => void;
@@ -63,6 +67,7 @@ export class OnlineLobbyScene extends Phaser.Scene {
 
   create(): void {
     this.activeRulesModal = null;
+    this.activeGarageModal = null;
     this.previewSprites = [];
     mobileOrientationManager.syncLayout();
     this.cameras.main.fadeIn(200, 238, 238, 236);
@@ -217,6 +222,8 @@ export class OnlineLobbyScene extends Phaser.Scene {
       this.unsubMatchStart = null;
       this.activeRulesModal?.close(true);
       this.activeRulesModal = null;
+      this.activeGarageModal?.close(true);
+      this.activeGarageModal = null;
       if (this.copyToastTimer) {
         this.copyToastTimer.remove();
         this.copyToastTimer = null;
@@ -634,21 +641,15 @@ export class OnlineLobbyScene extends Phaser.Scene {
         this.roomPanelContainer.add(btn.container);
       });
 
-      // Quick TNT & Armor HP Sub-Modifier Row (`y = cy + 68`)
-      const tntLabel =
-        tntOpt === 'auto'
-          ? `🧨 TNT: TỰ ĐỘNG (${tntActive ? 'CÓ' : 'TẮT'})`
-          : tntOpt === 'on'
-            ? '🧨 TNT: LUÔN BẬT'
-            : '🧨 TNT: TẮT';
+      // Quick TNT, Armor HP & Fair-Play Skin Sub-Modifier Row (`y = cy + 68`)
       const tntBtn = createArcadeButton(this, {
-        x: cx - 123,
+        x: cx - 160,
         y: cy + 68,
-        width: 238,
+        width: 154,
         height: 34,
         lipHeight: 2.5,
-        label: tntLabel,
-        fontSize: 11.5,
+        label: tntOpt === 'off' ? '🧨 TNT: TẮT' : '🧨 TNT: BẬT',
+        fontSize: 11,
         fillColor: tntActive ? 0xfff3e0 : UI_COLORS.cardAltBg,
         hoverColor: tntActive ? 0xffe0b2 : 0xdce2ea,
         textColor: tntActive ? '#BF360C' : UI_COLORS.inkMutedHex,
@@ -659,13 +660,13 @@ export class OnlineLobbyScene extends Phaser.Scene {
       });
 
       const hpBtn = createArcadeButton(this, {
-        x: cx + 123,
+        x: cx,
         y: cy + 68,
-        width: 238,
+        width: 154,
         height: 34,
         lipHeight: 2.5,
-        label: bModeDesc.hasArmorHp ? `❤️ GIÁP XE: ${maxHp} HP (ĐỔI)` : '⚡ SÁT THƯƠNG: 1 VIÊN HẠ',
-        fontSize: 11.5,
+        label: bModeDesc.hasArmorHp ? `❤️ GIÁP: ${maxHp}HP` : '⚡ 1 VIÊN HẠ',
+        fontSize: 11,
         fillColor: bModeDesc.hasArmorHp ? 0xe8f5e9 : UI_COLORS.cardAltBg,
         hoverColor: bModeDesc.hasArmorHp ? 0xc8e6c9 : 0xdce2ea,
         textColor: bModeDesc.hasArmorHp ? '#1B5E20' : UI_COLORS.inkDarkHex,
@@ -677,6 +678,23 @@ export class OnlineLobbyScene extends Phaser.Scene {
               activeBattleMode === 'night_ops' ? 'night_armored' : 'armored_tnt',
             );
           }
+          peerMultiplayer.syncHostSettingsFromManager();
+        },
+      });
+
+      const skinRuleBtn = createArcadeButton(this, {
+        x: cx + 160,
+        y: cy + 68,
+        width: 154,
+        height: 34,
+        lipHeight: 2.5,
+        label: st.skinStatsEnabled ? '⚡ SKIN: THỰC CHIẾN' : '🎨 SKIN: CHUẨN 100%',
+        fontSize: 10.5,
+        fillColor: st.skinStatsEnabled ? 0xe8f5e9 : 0xe3f2fd,
+        hoverColor: st.skinStatsEnabled ? 0xc8e6c9 : 0xbbdefb,
+        textColor: st.skinStatsEnabled ? '#1B5E20' : '#0D47A1',
+        onClick: () => {
+          settingsManager.toggleSkinStatsEnabled();
           peerMultiplayer.syncHostSettingsFromManager();
         },
       });
@@ -751,6 +769,7 @@ export class OnlineLobbyScene extends Phaser.Scene {
       this.roomPanelContainer.add([
         tntBtn.container,
         hpBtn.container,
+        skinRuleBtn.container,
         rulesSummaryTxt,
         editRulesBtn.container,
         startMatchBtn.container,
@@ -779,11 +798,11 @@ export class OnlineLobbyScene extends Phaser.Scene {
 
       const guestSubCopy =
         `${bModeDesc.hasArmorHp ? `Giáp ${maxHp} HP` : '1 Viên Hạ Ngay'}  •  ` +
-        `${tntActive ? 'Có Thùng Nổ TNT' : 'Không TNT'}  •  MAP: ${mapDesc.label.toUpperCase()}\n` +
+        `${st.skinStatsEnabled ? 'Skin: Thực Chiến' : 'Skin: Chuẩn 100%'}  •  MAP: ${mapDesc.label.toUpperCase()}\n` +
         `${formatWinningScoreLabel(st.winningScore, true)}  •  ${formatCrateSpawnIntervalLabel(
           st.powerUpSpawnIntervalSec,
           true,
-        )}  •  KỸ NĂNG: ${st.enabledSkills.length}/10`;
+        )}  •  KỸ NĂNG: ${st.enabledSkills.length}/15`;
 
       const rulesSummaryTxt = this.add
         .text(cx, cy + 72, guestSubCopy, {
@@ -861,12 +880,16 @@ export class OnlineLobbyScene extends Phaser.Scene {
     this.roomPanelContainer.add([g, hdr]);
 
     if (joined) {
+      const slotSkinId = isHostSlot ? st.hostSkinId : st.guestSkinId;
+      const skinDesc = getTankSkinDescriptor(slotSkinId);
+      const texKey = AssetFactory.ensureTankTexture(this, pal.id, slotSkinId, null, 0, false);
+
       const ring = this.add
-        .circle(sx, sy - 16, 31, 0xf3f4f6, 1)
+        .circle(sx, sy - 24, 29, 0xf3f4f6, 1)
         .setStrokeStyle(2, pal.primary, 0.7);
       const sp = this.add
-        .image(sx, sy - 16, `tank_${pal.id}_0`)
-        .setScale(0.98)
+        .image(sx, sy - 24, texKey)
+        .setScale(0.95)
         .setRotation(isHostSlot ? -Math.PI / 4 : (Math.PI * 3) / 4);
       this.previewSprites.push(sp);
 
@@ -877,21 +900,45 @@ export class OnlineLobbyScene extends Phaser.Scene {
       if (canChangeMyColor) {
         const colBtn = createArcadeButton(this, {
           x: sx,
-          y: sy + 38,
-          width: 172,
-          height: 30,
-          lipHeight: 2.5,
-          label: `◀ ${pal.name.toUpperCase()} ▶`,
-          fontSize: 11.5,
+          y: sy + 22,
+          width: 176,
+          height: 26,
+          lipHeight: 2,
+          label: `◀ MÀU: ${pal.name.toUpperCase()} ▶`,
+          fontSize: 11,
           fillColor: UI_COLORS.cardAltBg,
           onClick: () => peerMultiplayer.cycleLobbyTankColor(slot),
         });
-        this.roomPanelContainer.add(colBtn.container);
+        const skinBtn = createArcadeButton(this, {
+          x: sx,
+          y: sy + 52,
+          width: 176,
+          height: 26,
+          lipHeight: 2,
+          label: `🛡️ SKIN: ${skinDesc.shortName.toUpperCase()}`,
+          fontSize: 11,
+          fillColor: 0xfff8e1,
+          hoverColor: 0xffecb3,
+          textColor: '#E65100',
+          onClick: () => {
+            if (this.activeRulesModal || this.activeGarageModal) return;
+            this.activeGarageModal = new TankGarageModal(this, {
+              initialPlayerIndex: 0,
+              lockSlotSelection: true,
+              onUpdated: () => peerMultiplayer.syncLobbyTankSkinFromWallet(),
+              onClose: () => {
+                this.activeGarageModal = null;
+                peerMultiplayer.syncLobbyTankSkinFromWallet();
+              },
+            });
+          },
+        });
+        this.roomPanelContainer.add([colBtn.container, skinBtn.container]);
       } else {
         const colLbl = this.add
-          .text(sx, sy + 38, `MÀU: ${pal.name.toUpperCase()}`, {
+          .text(sx, sy + 36, `${pal.name.toUpperCase()} • ${skinDesc.shortName.toUpperCase()}`, {
             fontFamily: "'Segoe UI', 'Inter', sans-serif",
-            fontSize: '12px',
+            fontSize: '11.5px',
             fontStyle: '800',
             color: pal.primaryHex,
           })
@@ -906,9 +953,9 @@ export class OnlineLobbyScene extends Phaser.Scene {
           : '⏳ ĐANG CHUẨN BỊ';
       const badgeColor = isHostSlot ? '#0D47A1' : st.guestReady ? '#1B5E20' : '#E65100';
       const badge = this.add
-        .text(sx, sy + 74, badgeCopy, {
+        .text(sx, sy + 80, badgeCopy, {
           fontFamily: "'Segoe UI', 'Inter', sans-serif",
-          fontSize: '12px',
+          fontSize: '11.5px',
           fontStyle: '900',
           color: badgeColor,
         })

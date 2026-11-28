@@ -2,16 +2,19 @@ import {
   AI_DIFFICULTY_ORDER,
   AI_TACTIC_ORDER,
   ALL_SKILL_IDS,
+  ALL_TANK_SKIN_IDS,
   BATTLE_MODE_ORDER,
   DEFAULT_PLAYER_BINDINGS,
   DEFAULT_SETTINGS,
   isTouchDeviceDetected,
+  isValidTankSkinId,
   normalizeCrateSpawnInterval,
   normalizeMaxCrates,
   normalizeWinningScore,
   TANK_PALETTES,
 } from '../config/constants';
 import { VALID_MAP_MODE_IDS } from '../maps/mapDefinitions';
+import { skinWalletManager } from './SkinWalletManager';
 import type {
   AIDifficulty,
   AITacticId,
@@ -22,6 +25,7 @@ import type {
   PlayerIndex,
   PlayerKeyBindings,
   SkillId,
+  TankSkinId,
   TntBarrelsOption,
   TouchScheme,
 } from '../types/gameTypes';
@@ -199,6 +203,44 @@ export class SettingsManager {
   setScreenShake(enabled: boolean): void {
     this.settings.screenShake = enabled;
     this.save();
+  }
+
+  setSkinStatsEnabled(enabled: boolean): void {
+    this.settings.skinStatsEnabled = Boolean(enabled);
+    this.save();
+  }
+
+  toggleSkinStatsEnabled(): boolean {
+    const next = !this.settings.skinStatsEnabled;
+    this.settings.skinStatsEnabled = next;
+    this.save();
+    return next;
+  }
+
+  getPlayerSkin(playerIndex: PlayerIndex): TankSkinId {
+    const raw = this.settings.playerSkins?.[playerIndex] ?? 'classic';
+    if (!isValidTankSkinId(raw)) return 'classic';
+    if (!skinWalletManager.isSkinOwned(raw)) return 'classic';
+    return raw;
+  }
+
+  setPlayerSkin(playerIndex: PlayerIndex, skinId: TankSkinId): boolean {
+    if (!isValidTankSkinId(skinId)) return false;
+    if (!skinWalletManager.isSkinOwned(skinId)) return false;
+    this.settings.playerSkins[playerIndex] = skinId;
+    this.save();
+    return true;
+  }
+
+  cyclePlayerOwnedSkin(playerIndex: PlayerIndex, direction: 1 | -1 = 1): TankSkinId {
+    const owned = ALL_TANK_SKIN_IDS.filter((id) => skinWalletManager.isSkinOwned(id));
+    if (owned.length === 0) return 'classic';
+    const cur = this.getPlayerSkin(playerIndex);
+    const idx = Math.max(0, owned.indexOf(cur));
+    const next = owned[(idx + direction + owned.length) % owned.length];
+    this.settings.playerSkins[playerIndex] = next;
+    this.save();
+    return next;
   }
 
   setTouchScheme(scheme: TouchScheme): void {
@@ -387,6 +429,13 @@ export class SettingsManager {
         AIDifficulty,
       ],
       playerColors: [...DEFAULT_SETTINGS.playerColors] as [string, string, string, string],
+      playerSkins: [...DEFAULT_SETTINGS.playerSkins] as [
+        TankSkinId,
+        TankSkinId,
+        TankSkinId,
+        TankSkinId,
+      ],
+      skinStatsEnabled: DEFAULT_SETTINGS.skinStatsEnabled,
       playerBindings: [
         { ...DEFAULT_PLAYER_BINDINGS[0] },
         { ...DEFAULT_PLAYER_BINDINGS[1] },
@@ -491,6 +540,14 @@ export class SettingsManager {
       }
       if (Array.isArray(parsed.playerColors) && parsed.playerColors.length === 4) {
         merged.playerColors = [...parsed.playerColors] as [string, string, string, string];
+      }
+      if (Array.isArray(parsed.playerSkins) && parsed.playerSkins.length === 4) {
+        merged.playerSkins = parsed.playerSkins.map((sk) =>
+          isValidTankSkinId(sk) ? sk : 'classic',
+        ) as [TankSkinId, TankSkinId, TankSkinId, TankSkinId];
+      }
+      if (typeof parsed.skinStatsEnabled === 'boolean') {
+        merged.skinStatsEnabled = parsed.skinStatsEnabled;
       }
       if (Array.isArray(parsed.playerBindings) && parsed.playerBindings.length === 4) {
         merged.playerBindings = parsed.playerBindings.map((b, idx) => ({
