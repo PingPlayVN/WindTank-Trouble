@@ -1053,9 +1053,10 @@ export function computeReaperBlades(
 }
 
 /**
- * 11. EMP Grenade (`Lựu Đạn Xung Điện EMP`): wall-piercing electromagnetic blast (`2.75` cells)
- * that shatters enemy shields, interrupts Laser/Reaper channels, jams enemy triggers & movement,
- * and neutralizes mines & energy barriers inside the blast sphere!
+ * 11. EMP Storm Nova (`Bão Xung Điện Từ`):
+ * - Wall-piercing radial electromagnetic shockwave (`3.05` cells) that shatters enemy Shields,
+ *   interrupts Laser/Reaper channels, scrambles enemy steering + misfires (`2.5s`), and wipes Mines & Barriers!
+ * - Direct High-Voltage Tesla Zap (`1.5` cells, line-of-sight unoccluded by walls) that strikes close enemies!
  */
 export function computeEmpBlastImpact(
   cx: number,
@@ -1065,16 +1066,28 @@ export function computeEmpBlastImpact(
   tanks: readonly TankKinematics[],
   mines: readonly ProximityMineState[],
   barriers: readonly EnergyBarrierState[],
+  zapRadius = 0,
+  walls: readonly WallRect[] = [],
 ): {
   hitEnemyIndices: PlayerIndex[];
+  zappedEnemyIndices: PlayerIndex[];
   clearedMineIds: number[];
   clearedBarrierIds: number[];
 } {
   const hitEnemyIndices: PlayerIndex[] = [];
+  const zappedEnemyIndices: PlayerIndex[] = [];
   for (const t of tanks) {
     if (!t.alive || t.index === ownerIndex) continue;
-    if (Math.hypot(t.x - cx, t.y - cy) <= blastRadius + t.radius * 0.7) {
+    const d = Math.hypot(t.x - cx, t.y - cy);
+    if (d <= blastRadius + t.radius * 0.7) {
       hitEnemyIndices.push(t.index);
+      if (
+        zapRadius > 0 &&
+        d <= zapRadius + t.radius * 0.6 &&
+        !hasWallOcclusion(cx, cy, t.x, t.y, 3.2, walls)
+      ) {
+        zappedEnemyIndices.push(t.index);
+      }
     }
   }
 
@@ -1095,7 +1108,69 @@ export function computeEmpBlastImpact(
     }
   }
 
-  return { hitEnemyIndices, clearedMineIds, clearedBarrierIds };
+  return { hitEnemyIndices, zappedEnemyIndices, clearedMineIds, clearedBarrierIds };
+}
+
+/**
+ * Magnetically hijacks & repels all enemy physical projectiles inside the EMP Nova radius,
+ * redirecting them away from the caster (and toward nearby visible rivals when aligned)!
+ */
+export function repelProjectilesWithEmpPulse(
+  cx: number,
+  cy: number,
+  blastRadius: number,
+  ownerIndex: PlayerIndex,
+  projectiles: ProjectileKinematics[],
+  tanks: readonly TankKinematics[],
+  walls: readonly WallRect[],
+  scaleRatio: number,
+): Array<{ x: number; y: number }> {
+  const hijackedCoords: Array<{ x: number; y: number }> = [];
+  const blastRSq = blastRadius * blastRadius;
+  const enemies = tanks.filter((t) => t.alive && t.index !== ownerIndex);
+
+  for (const p of projectiles) {
+    if (!p.active || p.ownerIndex === ownerIndex || p.variant === 'flame') continue;
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const dSq = dx * dx + dy * dy;
+    if (dSq > blastRSq) continue;
+
+    let outAngle = Math.atan2(dy, dx);
+
+    // Subtle magnetic homing assist toward an unoccluded rival if within +-55 deg of outward push!
+    let bestTargetAng: number | null = null;
+    let bestEnemyDist = Infinity;
+    for (const e of enemies) {
+      const ed = Math.hypot(e.x - p.x, e.y - p.y);
+      if (ed < bestEnemyDist && !hasWallOcclusion(p.x, p.y, e.x, e.y, p.radius, walls)) {
+        const angToE = Math.atan2(e.y - p.y, e.x - p.x);
+        if (Math.abs(wrapAngleRad(angToE - outAngle)) <= 0.96) {
+          bestEnemyDist = ed;
+          bestTargetAng = angToE;
+        }
+      }
+    }
+    if (bestTargetAng !== null) {
+      outAngle = bestTargetAng;
+    }
+
+    const baseSpeed = Math.max(
+      Math.hypot(p.vx, p.vy),
+      BASE_GAMEPLAY.projectileSpeed * scaleRatio * 0.95,
+    );
+    const maxCap = BASE_GAMEPLAY.projectileSpeed * scaleRatio * 1.55;
+    const boosted = Math.min(maxCap, baseSpeed * POWERUP_CONFIG.empBulletReflectSpeedBoost);
+
+    p.vx = Math.cos(outAngle) * boosted;
+    p.vy = Math.sin(outAngle) * boosted;
+    p.ownerIndex = ownerIndex;
+    p.graceTimer = 0.08;
+    p.bounces = Math.max(1, p.bounces);
+    hijackedCoords.push({ x: p.x, y: p.y });
+  }
+
+  return hijackedCoords;
 }
 
 /**
@@ -1191,7 +1266,8 @@ export function ejectTankFromInteriorWalls(
 }
 
 /**
- * 13. Cryo Cannon (`Pháo Đóng Băng`): identifies rival tanks sliding across active floor Cryo Zones.
+ * 13. Cryo Cannon (`Pháo Đóng Băng`): identifies ALL living tanks (both rivals AND the owner!)
+ * inside active floor Cryo Zones, slowing them by 2x (`0.5x` speed) and building freeze exposure!
  */
 export function findTanksInCryoZones(
   zones: readonly CryoZoneState[],
@@ -1201,7 +1277,7 @@ export function findTanksInCryoZones(
   for (const t of tanks) {
     if (!t.alive) continue;
     for (const z of zones) {
-      if (z.age >= z.duration || z.ownerIndex === t.index) continue;
+      if (z.age >= z.duration) continue;
       if (Math.hypot(t.x - z.x, t.y - z.y) <= z.radius + t.radius * 0.45) {
         affected.add(t.index);
         break;
@@ -1209,6 +1285,29 @@ export function findTanksInCryoZones(
     }
   }
   return affected;
+}
+
+/**
+ * Finds tanks caught directly inside the burst epicenter when a Cryo Orb shatters into a Cryo Zone
+ * (affecting rivals immediately, and affecting the owner too once the orb has bounced or cleared muzzle grace!).
+ */
+export function findDirectCryoBurstVictims(
+  cx: number,
+  cy: number,
+  zoneRadius: number,
+  ownerIndex: PlayerIndex,
+  allowOwnerHit: boolean,
+  tanks: readonly TankKinematics[],
+): PlayerIndex[] {
+  const victims: PlayerIndex[] = [];
+  for (const t of tanks) {
+    if (!t.alive) continue;
+    if (t.index === ownerIndex && !allowOwnerHit) continue;
+    if (Math.hypot(t.x - cx, t.y - cy) <= zoneRadius * 0.88 + t.radius * 0.45) {
+      victims.push(t.index);
+    }
+  }
+  return victims;
 }
 
 /**
@@ -1397,12 +1496,12 @@ export function findBarriersHitByPolyline(
 }
 
 /**
- * 15. Spatial Warp Beacon (`Mỏ Neo Không Gian`): finds rival tanks caught in the lethal
- * Spatial Rift Shockwave at the teleporter's departure position!
+ * 15. Spatial Warp Beacon (`Mỏ Neo Không Gian`): finds rival tanks caught in the compact
+ * Arrival Rift Explosion (`vụ nổ nhỏ`) right at the Warp Anchor destination `(arrivalX, arrivalY)`!
  */
 export function computeWarpBlastVictims(
-  departureX: number,
-  departureY: number,
+  arrivalX: number,
+  arrivalY: number,
   ownerIndex: PlayerIndex,
   blastRadius: number,
   tanks: readonly TankKinematics[],
@@ -1410,7 +1509,7 @@ export function computeWarpBlastVictims(
   const victims: PlayerIndex[] = [];
   for (const t of tanks) {
     if (!t.alive || t.index === ownerIndex) continue;
-    if (Math.hypot(t.x - departureX, t.y - departureY) <= blastRadius + t.radius * 0.6) {
+    if (Math.hypot(t.x - arrivalX, t.y - arrivalY) <= blastRadius + t.radius * 0.65) {
       victims.push(t.index);
     }
   }

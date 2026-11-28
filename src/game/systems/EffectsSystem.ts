@@ -1487,6 +1487,66 @@ export class EffectsSystem {
     this.addTrauma(0.38);
   }
 
+  emitTankFrozen(worldX: number, worldY: number): void {
+    const s = this.scaleRatio;
+    this.shardEmitter.setParticleTint([0xffffff, 0x84ffff, 0x00bcd4]);
+    this.shardEmitter.emitParticleAt(worldX, worldY, 18);
+    this.sparkEmitter.setParticleTint([0xffffff, 0xe0f7fa, 0x00e5ff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 16);
+    this.starEmitter.setParticleTint([0xffffff, 0x84ffff]);
+    this.starEmitter.emitParticleAt(worldX, worldY, 10);
+
+    const cubeFlash = this.scene.add
+      .rectangle(worldX, worldY, 44 * s, 40 * s, 0x84ffff, 0.85)
+      .setStrokeStyle(3.2 * s, 0xffffff, 0.98)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(24);
+    const frostRing = this.scene.add
+      .circle(worldX, worldY, 16 * s)
+      .setStrokeStyle(4.0 * s, 0x00acc1, 0.95)
+      .setDepth(23);
+
+    this.scene.tweens.add({
+      targets: cubeFlash,
+      scale: 1.45,
+      alpha: 0,
+      duration: 240,
+      ease: 'Cubic.easeOut',
+      onComplete: () => cubeFlash.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: frostRing,
+      scale: 2.9,
+      alpha: 0,
+      duration: 280,
+      ease: 'Quad.easeOut',
+      onComplete: () => frostRing.destroy(),
+    });
+    this.addTrauma(0.34);
+  }
+
+  emitIceBlockShatter(worldX: number, worldY: number): void {
+    const s = this.scaleRatio;
+    this.shardEmitter.setParticleTint([0xffffff, 0xb2ebf2, 0x84ffff, 0x00acc1]);
+    this.shardEmitter.emitParticleAt(worldX, worldY, 20);
+    this.sparkEmitter.setParticleTint([0xffffff, 0x84ffff]);
+    this.sparkEmitter.emitParticleAt(worldX, worldY, 14);
+
+    const ring = this.scene.add
+      .circle(worldX, worldY, 22 * s)
+      .setStrokeStyle(3.0 * s, 0x84ffff, 0.9)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(24);
+    this.scene.tweens.add({
+      targets: ring,
+      scale: 2.1,
+      alpha: 0,
+      duration: 210,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
   emitBarrierDeploy(x0: number, y0: number, x1: number, y1: number): void {
     const s = this.scaleRatio;
     const mx = (x0 + x1) * 0.5;
@@ -1622,62 +1682,85 @@ export class EffectsSystem {
     blastRadius: number,
   ): void {
     const s = this.scaleRatio;
-    this.scorchStamp.setRotation(Math.random() * Math.PI * 2);
-    this.scorchStamp.setScale(s * 0.85);
-    this.floorDecalRT.draw(
-      this.scorchStamp,
-      fromX - this.arenaOriginX,
-      fromY - this.arenaOriginY,
-    );
-    this.scorchStamp.setScale(s);
+    // Stamp scorch craters & spawn compact Rift Explosions (`vụ nổ nhỏ`) at BOTH Departure `(fromX, fromY)` AND Arrival `(toX, toY)`!
+    for (const [bx, by] of [
+      [fromX, fromY],
+      [toX, toY],
+    ] as const) {
+      this.scorchStamp.setRotation(Math.random() * Math.PI * 2);
+      this.scorchStamp.setScale(s * 0.78);
+      this.floorDecalRT.draw(
+        this.scorchStamp,
+        bx - this.arenaOriginX,
+        by - this.arenaOriginY,
+      );
+      this.scorchStamp.setScale(s);
 
-    this.starEmitter.setParticleTint([0xe040fb, 0x80d8ff, 0xffffff]);
-    this.starEmitter.emitParticleAt(fromX, fromY, 24);
-    this.starEmitter.emitParticleAt(toX, toY, 18);
-    this.sparkEmitter.setParticleTint([0xea80fc, 0x00e5ff, 0xffffff]);
-    this.sparkEmitter.emitParticleAt(fromX, fromY, 26);
-    this.sparkEmitter.emitParticleAt(toX, toY, 16);
-    this.shardEmitter.setParticleTint([0xaa00ff, 0xe040fb, 0x80d8ff]);
-    this.shardEmitter.emitParticleAt(fromX, fromY, 14);
+      this.starEmitter.setParticleTint([0xe040fb, 0x80d8ff, 0xffea00, 0xffffff]);
+      this.starEmitter.emitParticleAt(bx, by, 20);
+      this.sparkEmitter.setParticleTint([0xea80fc, 0x00e5ff, 0xff9100, 0xffffff]);
+      this.sparkEmitter.emitParticleAt(bx, by, 22);
+      this.shardEmitter.setParticleTint([0x070412, 0xaa00ff, 0xe040fb, 0xffea00]);
+      this.shardEmitter.emitParticleAt(bx, by, 14);
+      this.flameEmitter.emitParticleAt(bx, by, 9);
+      this.smokeEmitter.emitParticleAt(bx, by, 7);
 
-    // 1. Departure Spatial Rift Tear + Dual Shockwave Rings
-    const riftCore = this.scene.add
-      .circle(fromX, fromY, blastRadius * 0.34, 0xffffff, 0.96)
-      .setBlendMode(Phaser.BlendModes.ADD)
-      .setDepth(25);
-    const riftWave = this.scene.add
-      .circle(fromX, fromY, blastRadius * 0.22, 0xaa00ff, 0.45)
-      .setStrokeStyle(4.8 * s, 0xe040fb, 0.98)
-      .setDepth(24);
-    const cyanWave = this.scene.add
-      .circle(fromX, fromY, blastRadius * 0.14)
-      .setStrokeStyle(3.0 * s, 0x80d8ff, 0.96)
-      .setBlendMode(Phaser.BlendModes.ADD)
-      .setDepth(25);
+      const core = this.scene.add
+        .circle(bx, by, blastRadius * 0.36, 0xffffff, 0.98)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(25);
+      const wave = this.scene.add
+        .circle(bx, by, blastRadius * 0.24, 0xd500f9, 0.46)
+        .setStrokeStyle(4.8 * s, 0xe040fb, 0.98)
+        .setDepth(24);
+      const cyanWave = this.scene.add
+        .circle(bx, by, blastRadius * 0.16)
+        .setStrokeStyle(3.2 * s, 0x00e5ff, 0.96)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(25);
 
-    const riftStar = this.scene.add
-      .graphics()
-      .setPosition(fromX, fromY)
-      .setScale(0.32)
-      .setDepth(25)
-      .setBlendMode(Phaser.BlendModes.ADD);
-    riftStar.lineStyle(2.8 * s, 0xea80fc, 0.95);
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      const r = blastRadius * (i % 2 === 0 ? 1.04 : 0.66);
-      riftStar.lineBetween(0, 0, Math.cos(a) * r, Math.sin(a) * r);
+      const riftStar = this.scene.add
+        .graphics()
+        .setPosition(bx, by)
+        .setScale(0.32)
+        .setDepth(25)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      riftStar.lineStyle(2.8 * s, 0xffea00, 0.95);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const r = blastRadius * (i % 2 === 0 ? 1.06 : 0.68);
+        riftStar.lineBetween(0, 0, Math.cos(a) * r, Math.sin(a) * r);
+      }
+
+      this.scene.tweens.add({
+        targets: core,
+        scale: 2.45,
+        alpha: 0,
+        duration: 210,
+        ease: 'Quad.easeOut',
+        onComplete: () => core.destroy(),
+      });
+      this.scene.tweens.add({
+        targets: [wave, cyanWave],
+        radius: blastRadius,
+        alpha: 0,
+        duration: 320,
+        ease: 'Cubic.easeOut',
+        onComplete: () => {
+          wave.destroy();
+          cyanWave.destroy();
+        },
+      });
+      this.scene.tweens.add({
+        targets: riftStar,
+        scale: 1.08,
+        rotation: bx === fromX ? -0.35 : 0.35,
+        alpha: 0,
+        duration: 300,
+        ease: 'Cubic.easeOut',
+        onComplete: () => riftStar.destroy(),
+      });
     }
-
-    // 2. Arrival Dimensional Portal Flash
-    const arriveFlash = this.scene.add
-      .circle(toX, toY, 16 * s, 0xffffff, 0.94)
-      .setBlendMode(Phaser.BlendModes.ADD)
-      .setDepth(25);
-    const arriveRing = this.scene.add
-      .circle(toX, toY, 34 * s)
-      .setStrokeStyle(4.0 * s, 0x80d8ff, 0.98)
-      .setBlendMode(Phaser.BlendModes.ADD)
-      .setDepth(25);
 
     // 3. Multi-strand Jagged Chrono-Lightning Bridge from Departure -> Arrival!
     const streak = this.scene.add.graphics().setDepth(24).setBlendMode(Phaser.BlendModes.ADD);
@@ -1713,57 +1796,13 @@ export class EffectsSystem {
     }
 
     this.scene.tweens.add({
-      targets: riftCore,
-      scale: 2.5,
-      alpha: 0,
-      duration: 190,
-      ease: 'Quad.easeOut',
-      onComplete: () => riftCore.destroy(),
-    });
-    this.scene.tweens.add({
-      targets: [riftWave, cyanWave],
-      radius: blastRadius,
-      alpha: 0,
-      duration: 320,
-      ease: 'Cubic.easeOut',
-      onComplete: () => {
-        riftWave.destroy();
-        cyanWave.destroy();
-      },
-    });
-    this.scene.tweens.add({
-      targets: riftStar,
-      scale: 1.05,
-      rotation: -0.35,
-      alpha: 0,
-      duration: 300,
-      ease: 'Cubic.easeOut',
-      onComplete: () => riftStar.destroy(),
-    });
-    this.scene.tweens.add({
-      targets: arriveFlash,
-      scale: 2.6,
-      alpha: 0,
-      duration: 210,
-      ease: 'Cubic.easeOut',
-      onComplete: () => arriveFlash.destroy(),
-    });
-    this.scene.tweens.add({
-      targets: arriveRing,
-      scale: 0.3,
-      alpha: 0,
-      duration: 250,
-      ease: 'Cubic.easeIn',
-      onComplete: () => arriveRing.destroy(),
-    });
-    this.scene.tweens.add({
       targets: streak,
       alpha: 0,
       duration: 260,
       ease: 'Quad.easeOut',
       onComplete: () => streak.destroy(),
     });
-    this.addTrauma(0.74);
+    this.addTrauma(0.78);
   }
 
   addTrauma(amount: number): void {

@@ -102,6 +102,7 @@ export interface NetTankSnapshot {
   phantomRemaining?: number;
   empJamRemaining?: number;
   frozenRemaining?: number;
+  cryoChillRatio?: number;
   onIceFloor?: boolean;
   warpBeaconPlaced?: boolean;
 }

@@ -24,6 +24,7 @@ import {
   drillMazeWallAtPoint,
   ejectTankFromInteriorWalls,
   findBarriersHitByPolyline,
+  findDirectCryoBurstVictims,
   findGroundSpikeVictims,
   findTanksInCryoZones,
   findTriggeredMines,
@@ -31,6 +32,7 @@ import {
   pickMysteryCrateCell,
   previewEnergyBarrierEdge,
   removeEnergyBarrierFromArena,
+  repelProjectilesWithEmpPulse,
   rollWeightedSkill,
   steerHomingMissile,
   stepFlameThermodynamics,
@@ -96,6 +98,7 @@ interface ActiveEmpCataclysm {
   x: number;
   y: number;
   radius: number;
+  arcTargets: Array<{ x: number; y: number; lethal?: boolean }>;
   age: number;
   duration: number;
 }
@@ -639,26 +642,6 @@ export class PowerUpSystem {
       return { fired: false, hudDirty: false };
     }
 
-    // Remote Mid-Air Detonation for an active EMP Orb (`2nd BẮN press`!)
-    if (!tank.isFrozen() && !tank.isEmpJammed() && this.hasActiveEmpOrb(tank.index)) {
-      const empProj = this.projectileSystem
-        .getPool()
-        .find(
-          (p) =>
-            p.kinematics.active &&
-            p.kinematics.ownerIndex === tank.index &&
-            p.kinematics.variant === 'emp_orb' &&
-            p.kinematics.age >= 0.08,
-        );
-      if (empProj && consumeBufferedPress()) {
-        const bx = empProj.kinematics.x;
-        const by = empProj.kinematics.y;
-        empProj.deactivate();
-        this.pendingEmpBlasts.push({ x: bx, y: by, ownerIndex: tank.index });
-        return { fired: true, hudDirty: true };
-      }
-    }
-
     if (!tank.canFire()) {
       return { fired: false, hudDirty: false };
     }
@@ -1060,47 +1043,17 @@ export class PowerUpSystem {
       return { fired: true, hudDirty: true };
     }
 
-    // 12. EMP Grenade (`Lựu Đạn Xung Điện EMP` — 1 bouncing orb, press 2nd time or wait 2.0s to detonate!)
+    // 12. EMP Storm Nova (`Bão Xung Điện Từ` — 2 instant tank-centered radial pulses: bullet hijack + close Tesla zap + steering scramble!)
     if (skill === 'emp') {
-      const radius =
-        BASE_GAMEPLAY.projectileRadius * POWERUP_CONFIG.empOrbRadiusMultiplier * scale;
-      const speed =
-        BASE_GAMEPLAY.projectileSpeed * POWERUP_CONFIG.empOrbSpeedMultiplier * scale;
-      const spawn = computeSafeMuzzleSpawn(
-        tank.kinematics.x,
-        tank.kinematics.y,
-        tank.kinematics.angle,
-        tank.getBarrelLength(),
-        radius,
-        speed,
-        walls,
-      );
-
-      const proj = this.projectileSystem.spawnCustomProjectile({
+      tank.triggerFireVisual(POWERUP_CONFIG.empCooldownSec);
+      const { depleted } = tank.consumeSkillAmmo(1);
+      if (depleted) {
+        this.effectsSystem.emitSuitRevert(tank.kinematics.x, tank.kinematics.y);
+      }
+      this.pendingEmpBlasts.push({
+        x: tank.kinematics.x,
+        y: tank.kinematics.y,
         ownerIndex: tank.index,
-        x: spawn.x,
-        y: spawn.y,
-        vx: spawn.vx,
-        vy: spawn.vy,
-        radius,
-        maxLifetime: POWERUP_CONFIG.empFlightDetonateSec,
-        maxBounces: POWERUP_CONFIG.empOrbMaxBounces,
-        graceTimer: BASE_GAMEPLAY.selfHitGraceSec,
-        variant: 'emp_orb',
-        bounceBehavior: 'reflect',
-      });
-      if (!proj) return { fired: false, hudDirty: false };
-
-      tank.triggerFireVisual(0.1);
-      tank.consumeSkillAmmo(1);
-      audioManager.playEmpLaunch();
-      this.effectsSystem.emitEmpMuzzle(spawn.x, spawn.y, tank.kinematics.angle);
-      this.netEventSink?.({
-        kind: 'muzzle_fx',
-        variant: 'emp_orb',
-        x: spawn.x,
-        y: spawn.y,
-        angle: tank.kinematics.angle,
       });
       return { fired: true, hudDirty: true };
     }
@@ -1265,6 +1218,7 @@ export class PowerUpSystem {
       tank.clearSkill();
 
       audioManager.playWarpTeleport();
+      audioManager.playTankExplosion();
       this.effectsSystem.emitWarpTeleport(fromX, fromY, toX, toY, blastR);
       this.triggerWarpCataclysmVisual(fromX, fromY, toX, toY, blastR);
       this.netEventSink?.({
@@ -1276,7 +1230,11 @@ export class PowerUpSystem {
         y2: toY,
         radius: blastR,
       });
-      this.pendingWarpBlasts.push({ x: fromX, y: fromY, ownerIndex: tank.index });
+      // Create compact Rift Explosions (`vụ nổ nhỏ`) at BOTH Departure `(fromX, fromY)` AND Arrival `(toX, toY)`!
+      this.pendingWarpBlasts.push(
+        { x: fromX, y: fromY, ownerIndex: tank.index },
+        { x: toX, y: toY, ownerIndex: tank.index },
+      );
       return { fired: true, hudDirty: true };
     }
 
@@ -1305,21 +1263,28 @@ export class PowerUpSystem {
     y: number,
     variant: ProjectileKinematics['variant'],
     ownerIndex: PlayerIndex,
+    tanks: readonly Tank[] = [],
   ): void {
     if (variant === 'cryo_orb') {
-      this.spawnCryoZone(x, y, ownerIndex);
+      this.spawnCryoZone(x, y, ownerIndex, tanks, true);
     } else if (variant === 'emp_orb') {
       this.pendingEmpBlasts.push({ x, y, ownerIndex });
     }
   }
 
-  triggerEmpCataclysmVisual(x: number, y: number, radius: number): void {
+  triggerEmpCataclysmVisual(
+    x: number,
+    y: number,
+    radius: number,
+    arcTargets: Array<{ x: number; y: number; lethal?: boolean }> = [],
+  ): void {
     this.activeEmpCataclysms.push({
       x,
       y,
       radius,
+      arcTargets,
       age: 0,
-      duration: 0.88,
+      duration: 0.78,
     });
   }
 
@@ -1341,7 +1306,13 @@ export class PowerUpSystem {
     });
   }
 
-  private spawnCryoZone(cx: number, cy: number, ownerIndex: PlayerIndex): void {
+  private spawnCryoZone(
+    cx: number,
+    cy: number,
+    ownerIndex: PlayerIndex,
+    tanks: readonly Tank[] = [],
+    allowOwnerDirectFreeze = true,
+  ): void {
     const scale = this.arena.scaleRatio;
     const zoneR = this.arena.cellSize * POWERUP_CONFIG.cryoZoneCellsRadius;
     audioManager.playCryoShatter();
@@ -1353,6 +1324,26 @@ export class PowerUpSystem {
       y: cy,
       radius: zoneR,
     });
+
+    if (tanks.length > 0) {
+      const burstVictims = findDirectCryoBurstVictims(
+        cx,
+        cy,
+        zoneR,
+        ownerIndex,
+        allowOwnerDirectFreeze,
+        tanks.map((t) => t.kinematics),
+      );
+      for (const vIdx of burstVictims) {
+        const vt = tanks.find((t) => t.index === vIdx);
+        if (vt && !vt.isShielded()) {
+          const wasFrozen = vt.isFrozen();
+          if (vt.applyCryoFreeze(POWERUP_CONFIG.cryoFreezeDurationSec) && !wasFrozen) {
+            this.effectsSystem.emitTankFrozen(vt.kinematics.x, vt.kinematics.y);
+          }
+        }
+      }
+    }
 
     const disc = this.scene.add
       .circle(cx, cy, zoneR, 0x072638, 0.56)
@@ -1377,13 +1368,59 @@ export class PowerUpSystem {
     cy: number,
     ownerIndex: PlayerIndex,
     tanks: readonly Tank[],
-    onSkillHitTank: (victim: Tank, source: 'emp_blast') => void,
+    onSkillHitTank: (victim: Tank, source: 'emp_blast' | 'emp_zap') => void,
   ): boolean {
     let hudDirty = false;
+    const scale = this.arena.scaleRatio;
     const blastR = this.arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius;
+    const zapR = this.arena.cellSize * POWERUP_CONFIG.empZapCellsRadius;
+    const tankKinematics = tanks.map((t) => t.kinematics);
+
+    // 1. Magnetically hijack & reverse all enemy physical projectiles inside the EMP Nova!
+    const hijackedBullets = repelProjectilesWithEmpPulse(
+      cx,
+      cy,
+      blastR,
+      ownerIndex,
+      this.projectileSystem.getKinematicsList(),
+      tankKinematics,
+      this.arena.walls,
+      scale,
+    );
+    for (const hb of hijackedBullets) {
+      this.effectsSystem.emitShieldDeflect(hb.x, hb.y);
+    }
+
+    const impact = computeEmpBlastImpact(
+      cx,
+      cy,
+      blastR,
+      ownerIndex,
+      tankKinematics,
+      this.mines.map((m) => m.state),
+      this.barriers,
+      zapR,
+      this.arena.walls,
+    );
+    const zappedSet = new Set<PlayerIndex>(impact.zappedEnemyIndices);
+
+    const arcTargets: Array<{ x: number; y: number; lethal?: boolean }> = hijackedBullets.map(
+      (b) => ({ x: b.x, y: b.y, lethal: false }),
+    );
+    for (const vIdx of impact.hitEnemyIndices) {
+      const vt = tanks.find((t) => t.index === vIdx);
+      if (vt && vt.kinematics.alive) {
+        arcTargets.push({
+          x: vt.kinematics.x,
+          y: vt.kinematics.y,
+          lethal: zappedSet.has(vIdx) && !vt.isShielded(),
+        });
+      }
+    }
+
     audioManager.playEmpBlast();
     this.effectsSystem.emitEmpBlast(cx, cy, blastR);
-    this.triggerEmpCataclysmVisual(cx, cy, blastR);
+    this.triggerEmpCataclysmVisual(cx, cy, blastR, arcTargets);
     this.netEventSink?.({
       kind: 'hazard_fx',
       sub: 'emp_blast',
@@ -1391,16 +1428,6 @@ export class PowerUpSystem {
       y: cy,
       radius: blastR,
     });
-
-    const impact = computeEmpBlastImpact(
-      cx,
-      cy,
-      blastR,
-      ownerIndex,
-      tanks.map((t) => t.kinematics),
-      this.mines.map((m) => m.state),
-      this.barriers,
-    );
 
     if (impact.clearedMineIds.length > 0) {
       const clearSet = new Set(impact.clearedMineIds);
@@ -1435,17 +1462,16 @@ export class PowerUpSystem {
     for (const vIdx of impact.hitEnemyIndices) {
       const victim = tanks.find((t) => t.index === vIdx);
       if (!victim || !victim.kinematics.alive) continue;
+      const wasShielded = victim.isShielded();
       const jamRes = victim.applyEmpJam(POWERUP_CONFIG.empJamDurationSec);
       if (jamRes.brokeShield || jamRes.interruptedChannel) {
         this.effectsSystem.emitSuitRevert(victim.kinematics.x, victim.kinematics.y);
       }
-      onSkillHitTank(victim, 'emp_blast');
-      hudDirty = true;
-    }
-
-    const shooter = tanks.find((t) => t.index === ownerIndex);
-    if (shooter && !shooter.getEquippedSkill()) {
-      this.effectsSystem.emitSuitRevert(shooter.kinematics.x, shooter.kinematics.y);
+      if (!wasShielded && zappedSet.has(vIdx)) {
+        onSkillHitTank(victim, 'emp_zap');
+      } else {
+        onSkillHitTank(victim, 'emp_blast');
+      }
       hudDirty = true;
     }
 
@@ -1458,7 +1484,7 @@ export class PowerUpSystem {
     phase: RoundPhase,
     onSkillHitTank: (
       victim: Tank,
-      source: 'laser' | 'reaper' | 'emp_blast' | 'warp_blast',
+      source: 'laser' | 'reaper' | 'emp_blast' | 'emp_zap' | 'warp_blast',
     ) => void,
     onLaserBeamFired?: (points: Array<{ x: number; y: number }>) => void,
   ): { hudDirty: boolean } {
@@ -1775,9 +1801,22 @@ export class PowerUpSystem {
       }
     }
 
+    const warpHitKeys = new Set<string>();
     while (this.pendingWarpBlasts.length > 0) {
       const ev = this.pendingWarpBlasts.shift()!;
       const blastR = POWERUP_CONFIG.warpBlastRadius * scale;
+
+      // Clear any enemy mines sitting inside either Departure or Arrival blast zone!
+      for (let mIdx = this.mines.length - 1; mIdx >= 0; mIdx--) {
+        const m = this.mines[mIdx];
+        if (Math.hypot(m.state.x - ev.x, m.state.y - ev.y) <= blastR + m.state.triggerRadius * 0.35) {
+          this.effectsSystem.emitMineExplosion(m.state.x, m.state.y);
+          m.sprite.destroy();
+          m.armRing.destroy();
+          this.mines.splice(mIdx, 1);
+        }
+      }
+
       const victims = computeWarpBlastVictims(
         ev.x,
         ev.y,
@@ -1786,6 +1825,9 @@ export class PowerUpSystem {
         tanks.map((t) => t.kinematics),
       );
       for (const vIdx of victims) {
+        const hitKey = `${ev.ownerIndex}:${vIdx}`;
+        if (warpHitKeys.has(hitKey)) continue;
+        warpHitKeys.add(hitKey);
         const victim = tanks.find((t) => t.index === vIdx);
         if (!victim || !victim.kinematics.alive) continue;
         if (victim.isShielded()) {
@@ -1807,7 +1849,7 @@ export class PowerUpSystem {
     hits: readonly ProjectileHitEvent[],
     onHazardHitTank: (
       victim: Tank,
-      source: 'ground_spike' | 'mine' | 'emp_blast' | 'warp_blast',
+      source: 'ground_spike' | 'mine' | 'emp_blast' | 'emp_zap' | 'warp_blast',
     ) => void,
   ): boolean {
     let hudDirty = false;
@@ -1830,9 +1872,16 @@ export class PowerUpSystem {
       } else if (v === 'cryo_orb') {
         const victim = tanks.find((t) => t.index === hit.victimIndex);
         if (victim && !victim.isShielded()) {
-          victim.applyCryoFreeze(POWERUP_CONFIG.cryoFreezeDurationSec);
+          const wasFrozen = victim.isFrozen();
+          if (victim.applyCryoFreeze(POWERUP_CONFIG.cryoFreezeDurationSec) && !wasFrozen) {
+            this.effectsSystem.emitTankFrozen(victim.kinematics.x, victim.kinematics.y);
+          }
         }
-        this.spawnCryoZone(hit.x, hit.y, hit.ownerIndex);
+        const allowOwnerBurst =
+          hit.victimIndex === hit.ownerIndex ||
+          proj.kinematics.bounces > 0 ||
+          proj.kinematics.age >= 0.16;
+        this.spawnCryoZone(hit.x, hit.y, hit.ownerIndex, tanks, allowOwnerBurst);
       }
     }
 
@@ -2092,21 +2141,24 @@ export class PowerUpSystem {
     this.reaperShadowGraphics.clear();
     this.reaperGraphics.clear();
 
-    // A. Live Tactical Detonation Range Ring around flying `emp_orb`!
-    for (const proj of this.projectileSystem.getPool()) {
-      const k = proj.kinematics;
-      if (!k.active || k.variant !== 'emp_orb') continue;
-      const blastR = this.arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius;
-      const pulse = 0.7 + 0.3 * Math.sin(this.animClock * 14);
-      this.zoneGraphics.lineStyle(2.2 * scale, 0x0c091e, 0.36 * pulse);
-      this.zoneGraphics.strokeCircle(k.x, k.y, blastR);
-      const segs = 18;
+    // A. Live High-Voltage Tesla Zap Range Ring (`1.5` cells) around any tank holding `emp`!
+    for (const t of tanks) {
+      if (!t.kinematics.alive || t.getEquippedSkill() !== 'emp') continue;
+      const zapR = this.arena.cellSize * POWERUP_CONFIG.empZapCellsRadius;
+      const pulse = 0.72 + 0.28 * Math.sin(this.animClock * 12);
+      this.zoneGraphics.lineStyle(2.0 * scale, 0x0c091e, 0.34 * pulse);
+      this.zoneGraphics.strokeCircle(t.kinematics.x, t.kinematics.y, zapR);
+      const segs = 16;
       for (let sIdx = 0; sIdx < segs; sIdx += 2) {
-        const a0 = this.animClock * 1.4 + (sIdx / segs) * Math.PI * 2;
-        const a1 = a0 + (Math.PI * 2) / (segs * 1.6);
-        this.zoneGraphics.lineStyle(2.0 * scale, 0x651fff, 0.62 * pulse);
+        const a0 = this.animClock * 1.8 + (sIdx / segs) * Math.PI * 2;
+        const a1 = a0 + (Math.PI * 2) / (segs * 1.65);
+        this.zoneGraphics.lineStyle(
+          2.0 * scale,
+          sIdx % 4 === 0 ? 0xffea00 : 0x651fff,
+          0.74 * pulse,
+        );
         this.zoneGraphics.beginPath();
-        this.zoneGraphics.arc(k.x, k.y, blastR, a0, a1, false);
+        this.zoneGraphics.arc(t.kinematics.x, t.kinematics.y, zapR, a0, a1, false);
         this.zoneGraphics.strokePath();
       }
     }
@@ -2456,6 +2508,56 @@ export class PowerUpSystem {
         this.reaperGraphics.strokePath();
       }
 
+      // 2B. Targeted High-Voltage Chain-Lightning Arcs to Zapped Rivals & Hijacked Bullets!
+      for (const tgt of emp.arcTargets) {
+        const tdx = tgt.x - emp.x;
+        const tdy = tgt.y - emp.y;
+        const tLen = Math.hypot(tdx, tdy) || 1;
+        const tnx = -tdy / tLen;
+        const tny = tdx / tLen;
+        const arcPts: Array<{ x: number; y: number }> = [{ x: emp.x, y: emp.y }];
+        const aSteps = 7;
+        for (let sIdx = 1; sIdx < aSteps; sIdx++) {
+          const f = sIdx / aSteps;
+          const jit = (Math.random() - 0.5) * (tgt.lethal ? 22 : 14) * scale;
+          arcPts.push({
+            x: emp.x + tdx * f + tnx * jit,
+            y: emp.y + tdy * f + tny * jit,
+          });
+        }
+        arcPts.push({ x: tgt.x, y: tgt.y });
+
+        this.reaperShadowGraphics.lineStyle((tgt.lethal ? 13 : 8.5) * scale, 0x080618, 0.94 * fade);
+        this.reaperShadowGraphics.beginPath();
+        for (let sIdx = 0; sIdx < arcPts.length; sIdx++) {
+          if (sIdx === 0) this.reaperShadowGraphics.moveTo(arcPts[sIdx].x, arcPts[sIdx].y);
+          else this.reaperShadowGraphics.lineTo(arcPts[sIdx].x, arcPts[sIdx].y);
+        }
+        this.reaperShadowGraphics.strokePath();
+
+        this.reaperGraphics.lineStyle(
+          (tgt.lethal ? 6.8 : 4.2) * scale,
+          tgt.lethal ? 0xffea00 : 0x00e5ff,
+          1.0 * fade,
+        );
+        this.reaperGraphics.beginPath();
+        for (let sIdx = 0; sIdx < arcPts.length; sIdx++) {
+          if (sIdx === 0) this.reaperGraphics.moveTo(arcPts[sIdx].x, arcPts[sIdx].y);
+          else this.reaperGraphics.lineTo(arcPts[sIdx].x, arcPts[sIdx].y);
+        }
+        this.reaperGraphics.strokePath();
+
+        if (tgt.lethal) {
+          this.reaperGraphics.lineStyle(2.6 * scale, 0xffffff, 1.0 * fade);
+          this.reaperGraphics.beginPath();
+          for (let sIdx = 0; sIdx < arcPts.length; sIdx++) {
+            if (sIdx === 0) this.reaperGraphics.moveTo(arcPts[sIdx].x, arcPts[sIdx].y);
+            else this.reaperGraphics.lineTo(arcPts[sIdx].x, arcPts[sIdx].y);
+          }
+          this.reaperGraphics.strokePath();
+        }
+      }
+
       // Blazing central Tesla Singularity Eye
       this.reaperShadowGraphics.fillStyle(0x080618, 0.96 * fade);
       this.reaperShadowGraphics.fillCircle(emp.x, emp.y, 18 * scale);
@@ -2467,7 +2569,7 @@ export class PowerUpSystem {
       this.reaperGraphics.fillCircle(emp.x, emp.y, 5 * scale);
     }
 
-    // G. Reaper-Class 60-FPS Frame-Animated Black-Hole Singularity & Dimensional Cleave (`activeWarpCataclysms`)!
+    // G. Reaper-Class 60-FPS Frame-Animated Dimensional Cleave & Arrival Rift Explosion (`activeWarpCataclysms`)!
     for (let i = this.activeWarpCataclysms.length - 1; i >= 0; i--) {
       const wp = this.activeWarpCataclysms[i];
       wp.age += dt;
@@ -2492,7 +2594,6 @@ export class PowerUpSystem {
         this.reaperGraphics.lineStyle(4.2 * scale * beamFade, 0x00e5ff, 0.98 * beamFade);
         this.reaperGraphics.lineBetween(wp.fromX, wp.fromY, wp.toX, wp.toY);
 
-        // Crackling white-cyan void lightning along the Dimensional Cleave!
         const bdx = wp.toX - wp.fromX;
         const bdy = wp.toY - wp.fromY;
         const bLen = Math.hypot(bdx, bdy) || 1;
@@ -2512,72 +2613,50 @@ export class PowerUpSystem {
         this.reaperGraphics.strokePath();
       }
 
-      // 2. Departure Black-Hole Singularity + 4 Spinning Curved Accretion Scythe Arms!
-      this.reaperShadowGraphics.fillStyle(0x06030f, 0.92 * fade);
-      this.reaperShadowGraphics.fillCircle(wp.fromX, wp.fromY, r * 0.78);
-      this.reaperShadowGraphics.lineStyle(7.5 * scale, 0x090516, 0.95 * fade);
-      this.reaperShadowGraphics.strokeCircle(wp.fromX, wp.fromY, r * 1.15);
+      // 2. Twin Compact Rift Explosions & 4 Spinning Scythe Shockwave Arms at BOTH `(fromX, fromY)` AND `(toX, toY)`!
+      for (const [bx, by, spinSign] of [
+        [wp.fromX, wp.fromY, -1],
+        [wp.toX, wp.toY, 1],
+      ] as const) {
+        this.reaperShadowGraphics.fillStyle(0x06030f, 0.56 * fade);
+        this.reaperShadowGraphics.fillCircle(bx, by, r * 0.82);
+        this.reaperShadowGraphics.lineStyle(8.0 * scale, 0x090516, 0.95 * fade);
+        this.reaperShadowGraphics.strokeCircle(bx, by, r);
 
-      this.reaperGraphics.lineStyle(8.5 * scale, 0xe040fb, 0.92 * fade);
-      this.reaperGraphics.strokeCircle(wp.fromX, wp.fromY, r * 1.15);
-      this.reaperGraphics.lineStyle(3.2 * scale, 0x00e5ff, 0.98 * fade);
-      this.reaperGraphics.strokeCircle(wp.fromX, wp.fromY, r * 0.78);
+        this.reaperGraphics.lineStyle(9.0 * scale, 0xe040fb, 0.95 * fade);
+        this.reaperGraphics.strokeCircle(bx, by, r);
+        this.reaperGraphics.lineStyle(3.5 * scale, 0xffea00, 0.98 * fade);
+        this.reaperGraphics.strokeCircle(bx, by, r * 0.74);
 
-      const swirl = -wp.age * 9.5;
-      for (let arm = 0; arm < 4; arm++) {
-        const a0 = swirl + (arm * Math.PI) / 2;
-        this.reaperShadowGraphics.lineStyle(8.5 * scale, 0x070412, 0.85 * fade);
-        this.reaperShadowGraphics.beginPath();
-        for (let sIdx = 0; sIdx <= 8; sIdx++) {
-          const f = sIdx / 8;
-          const a = a0 + f * 1.55;
-          const rad = r * (0.2 + f * 1.18);
-          const px = wp.fromX + Math.cos(a) * rad;
-          const py = wp.fromY + Math.sin(a) * rad;
-          if (sIdx === 0) this.reaperShadowGraphics.moveTo(px, py);
-          else this.reaperShadowGraphics.lineTo(px, py);
+        const swirl = wp.age * 10.5 * spinSign;
+        for (let arm = 0; arm < 4; arm++) {
+          const a0 = swirl + (arm * Math.PI) / 2;
+          this.reaperShadowGraphics.lineStyle(7.5 * scale, 0x070412, 0.85 * fade);
+          this.reaperShadowGraphics.beginPath();
+          for (let sIdx = 0; sIdx <= 8; sIdx++) {
+            const f = sIdx / 8;
+            const a = a0 + f * 1.45 * spinSign;
+            const rad = r * (0.18 + f * 0.96);
+            const px = bx + Math.cos(a) * rad;
+            const py = by + Math.sin(a) * rad;
+            if (sIdx === 0) this.reaperShadowGraphics.moveTo(px, py);
+            else this.reaperShadowGraphics.lineTo(px, py);
+          }
+          this.reaperShadowGraphics.strokePath();
+
+          this.reaperGraphics.lineStyle(4.2 * scale, arm % 2 === 0 ? 0xe040fb : 0x00e5ff, 0.98 * fade);
+          this.reaperGraphics.beginPath();
+          for (let sIdx = 0; sIdx <= 8; sIdx++) {
+            const f = sIdx / 8;
+            const a = a0 + f * 1.45 * spinSign;
+            const rad = r * (0.18 + f * 0.96);
+            const px = bx + Math.cos(a) * rad;
+            const py = by + Math.sin(a) * rad;
+            if (sIdx === 0) this.reaperGraphics.moveTo(px, py);
+            else this.reaperGraphics.lineTo(px, py);
+          }
+          this.reaperGraphics.strokePath();
         }
-        this.reaperShadowGraphics.strokePath();
-
-        this.reaperGraphics.lineStyle(4.5 * scale, arm % 2 === 0 ? 0xe040fb : 0x00e5ff, 0.98 * fade);
-        this.reaperGraphics.beginPath();
-        for (let sIdx = 0; sIdx <= 8; sIdx++) {
-          const f = sIdx / 8;
-          const a = a0 + f * 1.55;
-          const rad = r * (0.2 + f * 1.18);
-          const px = wp.fromX + Math.cos(a) * rad;
-          const py = wp.fromY + Math.sin(a) * rad;
-          if (sIdx === 0) this.reaperGraphics.moveTo(px, py);
-          else this.reaperGraphics.lineTo(px, py);
-        }
-        this.reaperGraphics.strokePath();
-      }
-
-      // 3. Arrival Chrono-Starburst Nova at `(toX, toY)`!
-      const arrR = (42 * scale) * (1 - p * 0.3);
-      this.reaperShadowGraphics.fillStyle(0x070412, 0.82 * fade);
-      this.reaperShadowGraphics.fillCircle(wp.toX, wp.toY, arrR * 0.65);
-      this.reaperShadowGraphics.lineStyle(6.5 * scale, 0x070412, 0.9 * fade);
-      this.reaperShadowGraphics.strokeCircle(wp.toX, wp.toY, arrR);
-      this.reaperGraphics.lineStyle(4.5 * scale, 0x00e5ff, 0.98 * fade);
-      this.reaperGraphics.strokeCircle(wp.toX, wp.toY, arrR);
-      for (let k = 0; k < 8; k++) {
-        const ka = wp.age * 6 + (k * Math.PI) / 4;
-        const len = arrR * (k % 2 === 0 ? 1.5 : 0.95);
-        this.reaperShadowGraphics.lineStyle(5.2 * scale, 0x070412, 0.82 * fade);
-        this.reaperShadowGraphics.lineBetween(
-          wp.toX,
-          wp.toY,
-          wp.toX + Math.cos(ka) * len,
-          wp.toY + Math.sin(ka) * len,
-        );
-        this.reaperGraphics.lineStyle(2.8 * scale, k % 2 === 0 ? 0xe040fb : 0x80d8ff, 0.98 * fade);
-        this.reaperGraphics.lineBetween(
-          wp.toX,
-          wp.toY,
-          wp.toX + Math.cos(ka) * len,
-          wp.toY + Math.sin(ka) * len,
-        );
       }
     }
 

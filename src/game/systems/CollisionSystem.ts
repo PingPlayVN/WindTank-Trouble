@@ -571,10 +571,7 @@ function findEarliestTankHitOnSegment(
     if (!t.alive) continue;
     if (
       t.index === proj.ownerIndex &&
-      (proj.graceTimer > 0 ||
-        proj.variant === 'flame' ||
-        proj.variant === 'emp_orb' ||
-        proj.variant === 'cryo_orb')
+      (proj.graceTimer > 0 || proj.variant === 'flame' || proj.variant === 'emp_orb')
     ) {
       continue;
     }

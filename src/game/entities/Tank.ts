@@ -27,6 +27,7 @@ export class Tank {
   private readonly shadowSprite: Phaser.GameObjects.Image;
   private readonly auraGraphics: Phaser.GameObjects.Graphics;
   private readonly bodySprite: Phaser.GameObjects.Image;
+  private readonly overlayGraphics: Phaser.GameObjects.Graphics;
   private readonly spawnRing: Phaser.GameObjects.Arc;
   private readonly scaleRatio: number;
 
@@ -42,7 +43,11 @@ export class Tank {
   private shieldRemainingSec = 0;
   private phantomRemainingSec = 0;
   private empJamRemainingSec = 0;
+  private empMisfireTimer = 0;
+  private empPendingMisfire = false;
   private frozenRemainingSec = 0;
+  private cryoChillExposureSec = 0;
+  private cryoRefreezeImmunitySec = 0;
   private onIceFloor = false;
   private laserReadyToDischarge = false;
   private reaperGyroStartAngle = 0;
@@ -113,6 +118,8 @@ export class Tank {
       .setScale(scaleRatio)
       .setRotation(spawn.angle)
       .setDepth(14);
+
+    this.overlayGraphics = scene.add.graphics().setDepth(14.8);
   }
 
   getSkillState(): Readonly<PlayerSkillState> {
@@ -254,8 +261,15 @@ export class Tank {
     }
 
     this.empJamRemainingSec = Math.max(this.empJamRemainingSec, durationSec);
+    this.empMisfireTimer = 0.16;
     this.refreshBodyTexture();
     return { brokeShield, interruptedChannel };
+  }
+
+  consumeEmpMisfireTrigger(): boolean {
+    if (!this.empPendingMisfire) return false;
+    this.empPendingMisfire = false;
+    return true;
   }
 
   isFrozen(): boolean {
@@ -266,11 +280,30 @@ export class Tank {
     return this.frozenRemainingSec;
   }
 
+  getCryoChillRatio(): number {
+    return Math.max(
+      0,
+      Math.min(1, this.cryoChillExposureSec / POWERUP_CONFIG.cryoChillToFreezeSec),
+    );
+  }
+
   applyCryoFreeze(durationSec = POWERUP_CONFIG.cryoFreezeDurationSec): boolean {
+    if (durationSec <= 0) {
+      this.frozenRemainingSec = 0;
+      this.cryoChillExposureSec = 0;
+      if (this.hitFlashTimer <= 0) {
+        this.bodySprite.clearTint();
+      }
+      return false;
+    }
     if (!this.kinematics.alive || this.isShielded()) return false;
     this.frozenRemainingSec = Math.max(this.frozenRemainingSec, durationSec);
+    this.cryoChillExposureSec = 0;
     this.kinematics.vx = 0;
     this.kinematics.vy = 0;
+    if (this.hitFlashTimer <= 0) {
+      this.bodySprite.setTint(0x9be7ff);
+    }
     return true;
   }
 
@@ -563,22 +596,32 @@ export class Tank {
     shieldJustExpired: boolean;
     phantomJustExpired: boolean;
     reaperJustEnded: boolean;
+    frozenJustExpired: boolean;
+    frozeFromCryoZone: boolean;
     emitCriticalDamage: boolean;
   } {
     let shieldJustExpired = false;
     let phantomJustExpired = false;
     let reaperJustEnded = false;
+    let frozenJustExpired = false;
+    let frozeFromCryoZone = false;
 
     if (!this.kinematics.alive) {
       return {
         shieldJustExpired,
         phantomJustExpired,
         reaperJustEnded,
+        frozenJustExpired,
+        frozeFromCryoZone,
         emitCriticalDamage: false,
       };
     }
 
     this.auraPulseClock += dt;
+
+    if (this.cryoRefreezeImmunitySec > 0) {
+      this.cryoRefreezeImmunitySec = Math.max(0, this.cryoRefreezeImmunitySec - dt);
+    }
 
     if (this.shieldRemainingSec > 0) {
       this.shieldRemainingSec = Math.max(0, this.shieldRemainingSec - dt);
@@ -598,10 +641,43 @@ export class Tank {
 
     if (this.empJamRemainingSec > 0) {
       this.empJamRemainingSec = Math.max(0, this.empJamRemainingSec - dt);
+      if (this.empJamRemainingSec > 0 && this.frozenRemainingSec <= 0) {
+        this.empMisfireTimer -= dt;
+        if (this.empMisfireTimer <= 0) {
+          this.empMisfireTimer = POWERUP_CONFIG.empMisfireIntervalSec;
+          this.empPendingMisfire = true;
+        }
+      } else if (this.empJamRemainingSec <= 0) {
+        this.empPendingMisfire = false;
+      }
     }
 
     if (this.frozenRemainingSec > 0) {
       this.frozenRemainingSec = Math.max(0, this.frozenRemainingSec - dt);
+      if (this.frozenRemainingSec <= 0) {
+        frozenJustExpired = true;
+        this.cryoChillExposureSec = 0;
+        this.cryoRefreezeImmunitySec = POWERUP_CONFIG.cryoRefreezeImmunitySec;
+        if (this.hitFlashTimer <= 0) {
+          this.bodySprite.clearTint();
+        }
+      }
+    } else if (!this.isShielded()) {
+      if (this.onIceFloor && this.cryoRefreezeImmunitySec <= 0) {
+        this.cryoChillExposureSec += dt;
+        if (this.cryoChillExposureSec >= POWERUP_CONFIG.cryoChillToFreezeSec) {
+          if (this.applyCryoFreeze(POWERUP_CONFIG.cryoFreezeDurationSec)) {
+            frozeFromCryoZone = true;
+          }
+        }
+      } else if (!this.onIceFloor && this.cryoChillExposureSec > 0) {
+        this.cryoChillExposureSec = Math.max(
+          0,
+          this.cryoChillExposureSec - dt * POWERUP_CONFIG.cryoChillDecayPerSec,
+        );
+      }
+    } else {
+      this.cryoChillExposureSec = 0;
     }
 
     if (this.fireCooldown > 0) {
@@ -613,7 +689,7 @@ export class Tank {
       this.recoilOffset = 0;
     }
 
-    // Solid Cryo Freeze Lock: freezes linear velocity, rotation, and weapon trigger
+    // Solid Cryo Freeze Lock: freezes linear velocity, rotation, and weapon trigger inside 3D Ice Block!
     if (this.frozenRemainingSec > 0) {
       this.kinematics.vx = 0;
       this.kinematics.vy = 0;
@@ -623,13 +699,15 @@ export class Tank {
       if (this.hitFlashTimer > 0) {
         this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
         if (this.hitFlashTimer <= 0 && this.kinematics.alive) {
-          this.bodySprite.clearTint();
+          this.bodySprite.setTint(0x9be7ff);
         }
       }
       return {
         shieldJustExpired,
         phantomJustExpired,
         reaperJustEnded,
+        frozenJustExpired,
+        frozeFromCryoZone,
         emitCriticalDamage: false,
       };
     }
@@ -647,6 +725,8 @@ export class Tank {
         shieldJustExpired,
         phantomJustExpired,
         reaperJustEnded,
+        frozenJustExpired,
+        frozeFromCryoZone,
         emitCriticalDamage: false,
       };
     }
@@ -723,11 +803,15 @@ export class Tank {
         shieldJustExpired,
         phantomJustExpired,
         reaperJustEnded,
+        frozenJustExpired,
+        frozeFromCryoZone,
         emitCriticalDamage,
       };
     }
 
-    const turnDir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    const rawTurnDir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    // EMP Short-Circuit (`empJamRemainingSec > 0`) reverses Left <-> Right steering motors!
+    const turnDir = this.empJamRemainingSec > 0 ? -rawTurnDir : rawTurnDir;
     const turnMul = this.onIceFloor ? POWERUP_CONFIG.cryoDriftTurnMultiplier : 1.0;
     if (turnDir !== 0) {
       this.kinematics.angle = Phaser.Math.Angle.Wrap(
@@ -817,6 +901,8 @@ export class Tank {
       shieldJustExpired,
       phantomJustExpired,
       reaperJustEnded,
+      frozenJustExpired,
+      frozeFromCryoZone,
       emitCriticalDamage,
     };
   }
@@ -859,8 +945,16 @@ export class Tank {
     this.shieldRemainingSec = snap.shieldRemaining;
     this.phantomRemainingSec = snap.phantomRemaining ?? 0;
     this.empJamRemainingSec = snap.empJamRemaining ?? 0;
+    const wasFrozen = this.frozenRemainingSec > 0;
     this.frozenRemainingSec = snap.frozenRemaining ?? 0;
+    this.cryoChillExposureSec =
+      (snap.cryoChillRatio ?? 0) * POWERUP_CONFIG.cryoChillToFreezeSec;
     this.onIceFloor = Boolean(snap.onIceFloor);
+    if (this.frozenRemainingSec > 0 && !wasFrozen && this.hitFlashTimer <= 0) {
+      this.bodySprite.setTint(0x9be7ff);
+    } else if (this.frozenRemainingSec <= 0 && wasFrozen && this.hitFlashTimer <= 0) {
+      this.bodySprite.clearTint();
+    }
     if (typeof snap.maxHp === 'number' && snap.maxHp > 0) {
       this.maxHp = snap.maxHp;
     }
@@ -956,6 +1050,7 @@ export class Tank {
     }
 
     this.auraGraphics.clear();
+    this.overlayGraphics.clear();
 
     // 0. Floating World-Space Armor Durability Bar (`Độ Bền Giáp HP`)
     if (this.hasArmorBar && this.kinematics.alive) {
@@ -1094,38 +1189,78 @@ export class Tank {
       }
     }
 
-    // 1C. Towering 3D Jagged Glacier Tomb (`Cryo Freeze`) + Slippery Drift Halo!
-    if (this.onIceFloor && this.frozenRemainingSec <= 0) {
+    // 1C. 2x Cryo Slow & Freeze-Exposure Warning Ring + 3D Translucent Faceted Ice Block (`frozenRemainingSec > 0`)!
+    const chillRatio = this.getCryoChillRatio();
+    if ((this.onIceFloor || chillRatio > 0.04) && this.frozenRemainingSec <= 0) {
       const s = this.scaleRatio;
-      this.auraGraphics.lineStyle(2.6 * s, 0x062130, 0.65);
-      this.auraGraphics.strokeCircle(
-        this.kinematics.x,
-        this.kinematics.y,
-        this.kinematics.radius * 1.38,
-      );
-      this.auraGraphics.lineStyle(1.6 * s, 0x84ffff, 0.92);
-      this.auraGraphics.strokeCircle(
-        this.kinematics.x,
-        this.kinematics.y,
-        this.kinematics.radius * 1.38,
-      );
+      const cx = this.kinematics.x;
+      const cy = this.kinematics.y;
+      const ringR = this.kinematics.radius * 1.48;
+
+      this.auraGraphics.fillStyle(0x062233, 0.16 + chillRatio * 0.24);
+      this.auraGraphics.fillCircle(cx, cy, ringR * 0.94);
+      this.auraGraphics.lineStyle(3.0 * s, 0x051c2c, 0.72);
+      this.auraGraphics.strokeCircle(cx, cy, ringR);
+      this.auraGraphics.lineStyle(1.8 * s, 0x84ffff, 0.92);
+      this.auraGraphics.strokeCircle(cx, cy, ringR);
+
+      // Growing frost crystal spikes around treads as chill approaches 100% freeze!
+      const spikeCount = 6;
+      for (let i = 0; i < spikeCount; i++) {
+        const a = this.auraPulseClock * 1.8 + (i / spikeCount) * Math.PI * 2;
+        const inner = this.kinematics.radius * 0.95;
+        const outer = inner + (4 + chillRatio * 9) * s;
+        this.auraGraphics.lineStyle(2.8 * s, 0x051c2c, 0.8);
+        this.auraGraphics.lineBetween(
+          cx + Math.cos(a) * inner,
+          cy + Math.sin(a) * inner,
+          cx + Math.cos(a) * outer,
+          cy + Math.sin(a) * outer,
+        );
+        this.auraGraphics.lineStyle(1.6 * s, 0xe0f7fa, 0.96);
+        this.auraGraphics.lineBetween(
+          cx + Math.cos(a) * inner,
+          cy + Math.sin(a) * inner,
+          cx + Math.cos(a) * outer,
+          cy + Math.sin(a) * outer,
+        );
+      }
+
+      if (chillRatio > 0.03) {
+        const urgentColor = chillRatio > 0.68 ? 0xffffff : 0x00e5ff;
+        this.auraGraphics.lineStyle(3.8 * s, urgentColor, 0.98);
+        this.auraGraphics.beginPath();
+        this.auraGraphics.arc(
+          cx,
+          cy,
+          ringR * 1.12,
+          -Math.PI / 2,
+          -Math.PI / 2 + Math.PI * 2 * chillRatio,
+          false,
+        );
+        this.auraGraphics.strokePath();
+      }
     }
 
     if (this.frozenRemainingSec > 0) {
       const s = this.scaleRatio;
       const cx = this.kinematics.x;
       const cy = this.kinematics.y;
-      const iceR = this.kinematics.radius * 2.05;
+      const r = this.kinematics.radius;
+      const thawRatio = Math.max(
+        0,
+        Math.min(1, this.frozenRemainingSec / POWERUP_CONFIG.cryoFreezeDurationSec),
+      );
 
-      // Layer 1: Dark Midnight-Sapphire Base Glacier Spires (high contrast on #F3F3F1!)
-      this.auraGraphics.fillStyle(0x062233, 0.72);
-      this.auraGraphics.lineStyle(3.0 * s, 0x041520, 0.95);
+      // 1. Sub-zero ground frost pool & jagged perimeter icicles underneath the Ice Block (`auraGraphics` depth 13)
+      this.auraGraphics.fillStyle(0x052233, 0.72);
+      this.auraGraphics.lineStyle(2.8 * s, 0x031521, 0.94);
       this.auraGraphics.beginPath();
-      for (let i = 0; i < 10; i++) {
-        const a = -Math.PI / 10 + (i / 10) * Math.PI * 2;
-        const r = i % 2 === 0 ? iceR : iceR * 0.74;
-        const px = cx + Math.cos(a) * r;
-        const py = cy + Math.sin(a) * r;
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        const rad = i % 2 === 0 ? r * 2.28 : r * 1.68;
+        const px = cx + Math.cos(a) * rad;
+        const py = cy + Math.sin(a) * rad;
         if (i === 0) this.auraGraphics.moveTo(px, py);
         else this.auraGraphics.lineTo(px, py);
       }
@@ -1133,72 +1268,135 @@ export class Tank {
       this.auraGraphics.fillPath();
       this.auraGraphics.strokePath();
 
-      // Layer 2: Luminous Cyan Faceted Crystal Monolith
-      this.auraGraphics.fillStyle(0x00bcd4, 0.48);
-      this.auraGraphics.lineStyle(2.4 * s, 0x84ffff, 0.96);
-      this.auraGraphics.beginPath();
-      for (let i = 0; i < 8; i++) {
-        const a = (i / 8) * Math.PI * 2;
-        const r = i % 2 === 0 ? iceR * 0.86 : iceR * 0.64;
-        const px = cx + Math.cos(a) * r;
-        const py = cy + Math.sin(a) * r;
-        if (i === 0) this.auraGraphics.moveTo(px, py);
-        else this.auraGraphics.lineTo(px, py);
-      }
-      this.auraGraphics.closePath();
-      this.auraGraphics.fillPath();
-      this.auraGraphics.strokePath();
+      // 2. 3D Isometric Beveled Crystal Ice Cube Encasing OVER the Tank (`overlayGraphics` depth 14.8!)
+      const hw = r * 1.68;
+      const hh = r * 1.52;
+      const bev = r * 0.46;
+      const dropY = 6.0 * s;
 
-      // Layer 3: Pure-white internal crystal ridge lines & specular slashes
-      this.auraGraphics.lineStyle(2.0 * s, 0xffffff, 0.92);
-      for (let k = 0; k < 5; k++) {
-        const a = -0.4 + (k * Math.PI * 2) / 5;
-        this.auraGraphics.lineBetween(
-          cx + Math.cos(a) * (iceR * 0.2),
-          cy + Math.sin(a) * (iceR * 0.2),
-          cx + Math.cos(a) * (iceR * 0.84),
-          cy + Math.sin(a) * (iceR * 0.84),
+      const buildOctagon = (ox: number, oy: number, wHalf: number, hHalf: number, b: number) => [
+        { x: ox - wHalf + b, y: oy - hHalf },
+        { x: ox + wHalf - b, y: oy - hHalf },
+        { x: ox + wHalf, y: oy - hHalf + b },
+        { x: ox + wHalf, y: oy + hHalf - b },
+        { x: ox + wHalf - b, y: oy + hHalf },
+        { x: ox - wHalf + b, y: oy + hHalf },
+        { x: ox - wHalf, y: oy + hHalf - b },
+        { x: ox - wHalf, y: oy - hHalf + b },
+      ];
+
+      const basePoly = buildOctagon(cx, cy + dropY, hw, hh, bev);
+      const topPoly = buildOctagon(cx, cy - 2.5 * s, hw, hh, bev);
+
+      // Lower 3D extrusion wall (translucent deep-cyan side thickness)
+      this.overlayGraphics.fillStyle(0x00838f, 0.44);
+      this.overlayGraphics.lineStyle(3.0 * s, 0x041824, 0.96);
+      this.overlayGraphics.beginPath();
+      for (let i = 0; i < basePoly.length; i++) {
+        if (i === 0) this.overlayGraphics.moveTo(basePoly[i].x, basePoly[i].y);
+        else this.overlayGraphics.lineTo(basePoly[i].x, basePoly[i].y);
+      }
+      this.overlayGraphics.closePath();
+      this.overlayGraphics.fillPath();
+      this.overlayGraphics.strokePath();
+
+      // Translucent Glass-Cyan Crystal Ice Cube Face OVER the tank (tank stays clearly visible inside!)
+      this.overlayGraphics.fillStyle(0x4dd0e1, 0.34);
+      this.overlayGraphics.lineStyle(2.8 * s, 0x84ffff, 0.98);
+      this.overlayGraphics.beginPath();
+      for (let i = 0; i < topPoly.length; i++) {
+        if (i === 0) this.overlayGraphics.moveTo(topPoly[i].x, topPoly[i].y);
+        else this.overlayGraphics.lineTo(topPoly[i].x, topPoly[i].y);
+      }
+      this.overlayGraphics.closePath();
+      this.overlayGraphics.fillPath();
+      this.overlayGraphics.strokePath();
+
+      // Vertical 3D crystal pillar edges connecting top face to base face
+      this.overlayGraphics.lineStyle(2.0 * s, 0xe0f7fa, 0.92);
+      for (const idx of [2, 3, 4, 5, 6]) {
+        this.overlayGraphics.lineBetween(
+          topPoly[idx].x,
+          topPoly[idx].y,
+          basePoly[idx].x,
+          basePoly[idx].y,
         );
       }
+
+      // Inner crystal crown bezel + diagonal glass specular reflection stripes OVER tank!
+      const innerPoly = buildOctagon(cx, cy - 2.5 * s, hw * 0.74, hh * 0.74, bev * 0.74);
+      this.overlayGraphics.lineStyle(1.7 * s, 0xffffff, 0.9);
+      this.overlayGraphics.beginPath();
+      for (let i = 0; i < innerPoly.length; i++) {
+        if (i === 0) this.overlayGraphics.moveTo(innerPoly[i].x, innerPoly[i].y);
+        else this.overlayGraphics.lineTo(innerPoly[i].x, innerPoly[i].y);
+      }
+      this.overlayGraphics.closePath();
+      this.overlayGraphics.strokePath();
+
+      this.overlayGraphics.lineStyle(2.8 * s, 0xffffff, 0.94);
+      this.overlayGraphics.lineBetween(cx - hw * 0.65, cy - hh * 0.55, cx - hw * 0.1, cy - hh * 0.88);
+      this.overlayGraphics.lineBetween(cx - hw * 0.78, cy + hh * 0.18, cx + hw * 0.38, cy - hh * 0.82);
+      this.overlayGraphics.lineBetween(cx + hw * 0.15, cy + hh * 0.65, cx + hw * 0.74, cy + hh * 0.05);
+
+      // Thaw countdown arc around the Ice Block
+      this.overlayGraphics.lineStyle(3.2 * s, 0x00e5ff, 0.96);
+      this.overlayGraphics.beginPath();
+      this.overlayGraphics.arc(
+        cx,
+        cy,
+        r * 2.34,
+        -Math.PI / 2,
+        -Math.PI / 2 + Math.PI * 2 * thawRatio,
+        false,
+      );
+      this.overlayGraphics.strokePath();
     }
 
-    // 1D. Reaper-Grade EMP Lockdown Shroud & High-Voltage Lightning Chains!
+    // 1D. Reaper-Grade EMP Short-Circuit (`Chập Mạch Đảo Lái & Cướp Cò` — Spinning Inverted-Steering Arrows!)
     if (this.empJamRemainingSec > 0) {
       const s = this.scaleRatio;
       const cx = this.kinematics.x;
       const cy = this.kinematics.y;
       const jamR = this.kinematics.radius * 1.72;
 
-      this.auraGraphics.fillStyle(0x09071a, 0.56);
-      this.auraGraphics.fillCircle(cx, cy, jamR * 0.95);
+      this.auraGraphics.fillStyle(0x09071a, 0.42);
+      this.auraGraphics.fillCircle(cx, cy, jamR * 0.9);
       this.auraGraphics.lineStyle(2.6 * s, 0x651fff, 0.92);
       this.auraGraphics.strokeCircle(cx, cy, jamR);
 
       for (let k = 0; k < 6; k++) {
-        const baseA = this.auraPulseClock * 22 + (k * Math.PI * 2) / 6;
+        const baseA = this.auraPulseClock * 24 + (k * Math.PI * 2) / 6;
         const x0 = cx + Math.cos(baseA) * (jamR * 0.52);
         const y0 = cy + Math.sin(baseA) * (jamR * 0.52);
         const xm = cx + Math.cos(baseA + 0.28) * (jamR * 1.22);
         const ym = cy + Math.sin(baseA + 0.28) * (jamR * 1.22);
         const x1 = cx + Math.cos(baseA + 0.54) * (jamR * 0.66);
         const y1 = cy + Math.sin(baseA + 0.54) * (jamR * 0.66);
-        this.auraGraphics.lineStyle(4.2 * s, 0x09071a, 0.85);
-        this.auraGraphics.lineBetween(x0, y0, xm, ym);
-        this.auraGraphics.lineBetween(xm, ym, x1, y1);
-        this.auraGraphics.lineStyle(2.2 * s, k % 2 === 0 ? 0x00e5ff : 0xffea00, 0.98);
-        this.auraGraphics.lineBetween(x0, y0, xm, ym);
-        this.auraGraphics.lineBetween(xm, ym, x1, y1);
+        this.overlayGraphics.lineStyle(4.2 * s, 0x09071a, 0.85);
+        this.overlayGraphics.lineBetween(x0, y0, xm, ym);
+        this.overlayGraphics.lineBetween(xm, ym, x1, y1);
+        this.overlayGraphics.lineStyle(2.2 * s, k % 2 === 0 ? 0xffea00 : 0x00e5ff, 0.98);
+        this.overlayGraphics.lineBetween(x0, y0, xm, ym);
+        this.overlayGraphics.lineBetween(xm, ym, x1, y1);
       }
 
-      // Bold Obsidian + Crimson Jammed-Trigger Lock Cross above turret
-      const iy = cy - this.kinematics.radius * 1.55;
-      const sz = 5.0 * s;
-      this.auraGraphics.lineStyle(4.6 * s, 0x09071a, 0.92);
-      this.auraGraphics.lineBetween(cx - sz, iy - sz, cx + sz, iy + sz);
-      this.auraGraphics.lineBetween(cx + sz, iy - sz, cx - sz, iy + sz);
-      this.auraGraphics.lineStyle(2.5 * s, 0xff1744, 0.98);
-      this.auraGraphics.lineBetween(cx - sz, iy - sz, cx + sz, iy + sz);
-      this.auraGraphics.lineBetween(cx + sz, iy - sz, cx - sz, iy + sz);
+      // Bold Obsidian + Electric-Gold `⇄` Inverted-Steering Short-Circuit Icon above turret!
+      const iy = cy - this.kinematics.radius * 1.68;
+      const hw = 7.6 * s;
+      this.overlayGraphics.lineStyle(4.8 * s, 0x09071a, 0.95);
+      this.overlayGraphics.lineBetween(cx - hw, iy - 2.2 * s, cx + hw, iy - 2.2 * s);
+      this.overlayGraphics.lineBetween(cx - hw, iy + 2.6 * s, cx + hw, iy + 2.6 * s);
+
+      this.overlayGraphics.lineStyle(2.5 * s, 0xffea00, 1.0);
+      this.overlayGraphics.lineBetween(cx - hw, iy - 2.2 * s, cx + hw, iy - 2.2 * s);
+      this.overlayGraphics.lineBetween(cx + hw, iy - 2.2 * s, cx + hw - 3.6 * s, iy - 5.2 * s);
+      this.overlayGraphics.lineBetween(cx + hw, iy - 2.2 * s, cx + hw - 3.6 * s, iy + 0.8 * s);
+
+      this.overlayGraphics.lineStyle(2.5 * s, 0x00e5ff, 1.0);
+      this.overlayGraphics.lineBetween(cx + hw, iy + 2.6 * s, cx - hw, iy + 2.6 * s);
+      this.overlayGraphics.lineBetween(cx - hw, iy + 2.6 * s, cx - hw + 3.6 * s, iy - 0.4 * s);
+      this.overlayGraphics.lineBetween(cx - hw, iy + 2.6 * s, cx - hw + 3.6 * s, iy + 5.6 * s);
     }
 
     // 2. Equipped Skill Aura + Laser Charge / Reaper Windup Telegraphs
@@ -1352,7 +1550,6 @@ export class Tank {
     return (
       this.kinematics.alive &&
       this.fireCooldown <= 0 &&
-      this.empJamRemainingSec <= 0 &&
       this.frozenRemainingSec <= 0 &&
       this.skillState.chargingLaserRemaining <= 0 &&
       !this.isReaperWindingUp() &&
@@ -1399,7 +1596,10 @@ export class Tank {
     this.shieldRemainingSec = 0;
     this.phantomRemainingSec = 0;
     this.empJamRemainingSec = 0;
+    this.empPendingMisfire = false;
     this.frozenRemainingSec = 0;
+    this.cryoChillExposureSec = 0;
+    this.cryoRefreezeImmunitySec = 0;
     this.onIceFloor = false;
     this.skillState.chargingLaserRemaining = 0;
     this.skillState.reaperWindupRemaining = 0;
@@ -1408,6 +1608,7 @@ export class Tank {
     this.laserReadyToDischarge = false;
     this.spawnRing.setVisible(false);
     this.auraGraphics.clear();
+    this.overlayGraphics.clear();
     this.bodySprite.setAlpha(1);
     this.shadowSprite.setAlpha(1);
 
@@ -1425,6 +1626,7 @@ export class Tank {
     this.scene.tweens.killTweensOf(this.bodySprite);
     this.spawnRing.destroy();
     this.auraGraphics.destroy();
+    this.overlayGraphics.destroy();
     this.shadowSprite.destroy();
     this.bodySprite.destroy();
   }

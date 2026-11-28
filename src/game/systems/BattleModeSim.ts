@@ -20,6 +20,7 @@ export type DamageSourceKind =
   | 'ground_spike'
   | 'tnt_barrel'
   | 'emp_blast'
+  | 'emp_zap'
   | 'warp_blast';
 
 export const BATTLE_MODE_DAMAGE_TABLE: Record<DamageSourceKind, number> = {
@@ -37,7 +38,8 @@ export const BATTLE_MODE_DAMAGE_TABLE: Record<DamageSourceKind, number> = {
   reaper: 34,
   tnt_barrel: 48,
   emp_orb: 24,
-  emp_blast: 24,
+  emp_blast: 18,
+  emp_zap: 52,
   cryo_orb: 35,
   warp_blast: 68,
 };

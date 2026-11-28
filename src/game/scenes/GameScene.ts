@@ -749,6 +749,38 @@ export class GameScene extends Phaser.Scene {
               tank.getHpRatio(),
             );
           }
+          if (stateChanges.frozeFromCryoZone) {
+            audioManager.playCryoShatter();
+            this.effectsSystem.emitTankFrozen(tank.kinematics.x, tank.kinematics.y);
+            hudDirty = true;
+          }
+          if (stateChanges.frozenJustExpired) {
+            audioManager.playCryoShatter();
+            this.effectsSystem.emitIceBlockShatter(tank.kinematics.x, tank.kinematics.y);
+            hudDirty = true;
+          }
+          if (
+            this.matchSystem.getPhase() === 'playing' &&
+            tank.consumeEmpMisfireTrigger() &&
+            this.projectileSystem.getRemainingAmmo(tank.index) > 0
+          ) {
+            const shot = this.projectileSystem.tryFireFromTank(tank, this.arena.walls);
+            if (shot.fired) {
+              audioManager.playFire();
+              this.effectsSystem.emitMuzzleFlash(shot.muzzleX, shot.muzzleY, tank.kinematics.angle);
+              this.effectsSystem.emitEmpJammedTick(shot.muzzleX, shot.muzzleY);
+              if (this.networkRole === 'host') {
+                peerMultiplayer.sendEvent({
+                  kind: 'muzzle_fx',
+                  variant: 'standard',
+                  x: shot.muzzleX,
+                  y: shot.muzzleY,
+                  angle: tank.kinematics.angle,
+                });
+              }
+              hudDirty = true;
+            }
+          }
           if (stateChanges.phantomJustExpired) {
             ejectTankFromInteriorWalls(tank.kinematics, this.arena);
             this.effectsSystem.emitPhantomExit(tank.kinematics.x, tank.kinematics.y);
@@ -820,7 +852,7 @@ export class GameScene extends Phaser.Scene {
           (px, py, variant, ownerIndex) => {
             this.effectsSystem.emitShellExpire(px, py);
             this.nightVisionSystem.triggerFlareExpireEmber(px, py);
-            this.powerUpSystem.handleProjectileExpired(px, py, variant, ownerIndex);
+            this.powerUpSystem.handleProjectileExpired(px, py, variant, ownerIndex, this.tanks);
           },
           (proj, hx, hy) => this.powerUpSystem.handleDrillWallImpact(proj, hx, hy),
         );
@@ -1002,6 +1034,7 @@ export class GameScene extends Phaser.Scene {
           phantomRemaining: Math.round(t.getPhantomRemainingSec() * 100) / 100,
           empJamRemaining: Math.round(t.getEmpJamRemainingSec() * 100) / 100,
           frozenRemaining: Math.round(t.getFrozenRemainingSec() * 100) / 100,
+          cryoChillRatio: Math.round(t.getCryoChillRatio() * 100) / 100,
           onIceFloor: t.isOnIceFloor(),
           warpBeaconPlaced: Boolean(sk.warpBeaconPlaced),
         };
@@ -1272,9 +1305,11 @@ export class GameScene extends Phaser.Scene {
           const tx = ev.x2 ?? ev.x;
           const ty = ev.y2 ?? ev.y;
           audioManager.playWarpTeleport();
+          audioManager.playTankExplosion();
           this.effectsSystem.emitWarpTeleport(ev.x, ev.y, tx, ty, br);
           this.powerUpSystem.triggerWarpCataclysmVisual(ev.x, ev.y, tx, ty, br);
           this.nightVisionSystem.triggerExplosionFlash(ev.x, ev.y, 210);
+          this.nightVisionSystem.triggerExplosionFlash(tx, ty, 210);
         }
         return false;
 

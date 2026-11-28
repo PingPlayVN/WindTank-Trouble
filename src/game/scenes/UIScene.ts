@@ -461,8 +461,8 @@ export class UIScene extends Phaser.Scene {
     if (p.skill === 'drill') return `MŨI KHOAN ${p.skillAmmo}/${POWERUP_CONFIG.drillAmmo}`;
     if (p.skill === 'cryo') return `HÀN BĂNG ${p.skillAmmo}/${POWERUP_CONFIG.cryoAmmo}`;
     if (p.skill === 'barrier') return `XÂY TƯỜNG ${p.skillAmmo}/${POWERUP_CONFIG.barrierAmmo}`;
-    if (p.skill === 'warp') return p.warpBeaconPlaced ? 'BẤM: DỊCH CHUYỂN!' : 'MỎ NEO: ĐẶT CỔNG';
-    if (p.skill === 'emp') return 'XUNG EMP: 1 QUẢ';
+    if (p.skill === 'warp') return p.warpBeaconPlaced ? 'BẤM: BIẾN VỀ + NỔ!' : 'MỎ NEO: ĐẶT CỔNG';
+    if (p.skill === 'emp') return `XUNG ĐIỆN ${p.skillAmmo}/${POWERUP_CONFIG.empAmmo}`;
     if (p.skill === 'phantom') return 'BÓNG MA: SẴN SÀNG';
     if (p.skill === 'shield') return 'KHIÊN: SẴN SÀNG';
     if (p.skill === 'spike') return 'ĐẠN GAI: 1 VIÊN';

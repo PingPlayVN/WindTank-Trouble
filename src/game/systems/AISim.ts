@@ -1265,37 +1265,19 @@ export function computeBotDecision(
     barrels,
   );
 
-  // Branch 2: Defensive Aegis Shield / Phantom / Warp Recall / Remote EMP Detonation Reflexes!
-  if (ctx.hasActiveEmpOrb) {
-    const empOrb = ctx.projectiles.find(
-      (p) => p.active && p.ownerIndex === self.index && p.variant === 'emp_orb' && p.age >= 0.08,
-    );
-    if (empOrb) {
-      const blastR = arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius * 0.94;
-      const catchesEnemy = enemies.some(
-        (e) => Math.hypot(e.x - empOrb.x, e.y - empOrb.y) <= blastR,
-      );
-      if (catchesEnemy) {
-        return {
-          ...idle,
-          firePressed: true,
-          fireHeld: false,
-          fireBufferedUntil: mem.clock + 0.12,
-        };
-      }
-    }
-  }
+  // Branch 2: Defensive Aegis Shield / Phantom / Warp Recall Reflexes!
 
-  // Enemy Cryo Zones & Enemy Warp Beacons mild avoidance
+  // ALL Cryo Zones (including own!) slow by 2x & freeze after 1.25s -> actively steer out!
   if (difficulty !== 'easy') {
     for (const cz of ctx.cryoZones ?? []) {
-      if (cz.age >= cz.duration || cz.ownerIndex === self.index) continue;
+      if (cz.age >= cz.duration) continue;
       const dx = self.x - cz.x;
       const dy = self.y - cz.y;
       const d = Math.hypot(dx, dy) || 1;
-      const avoidR = cz.radius + self.radius + 10 * scale;
+      const avoidR = cz.radius + self.radius + 14 * scale;
       if (d < avoidR) {
-        const push = ((avoidR - d) / avoidR) * 1.4;
+        const insideMul = d <= cz.radius + self.radius * 0.45 ? 2.6 : 1.5;
+        const push = ((avoidR - d) / avoidR) * insideMul;
         danger.dodgeX += (dx / d) * push;
         danger.dodgeY += (dy / d) * push;
       }
@@ -1303,13 +1285,23 @@ export function computeBotDecision(
   }
 
   if (ctx.selfSkill === 'warp' && ctx.selfWarpBeaconPlaced && ctx.canFire) {
-    const riftKillReady = enemies.some(
+    const myBeacon = (ctx.warpBeacons ?? []).find((b) => b.ownerIndex === self.index);
+    const departureKillReady = enemies.some(
       (e) =>
         !ctx.shieldedTankIndices.has(e.index) &&
-        Math.hypot(e.x - self.x, e.y - self.y) <= POWERUP_CONFIG.warpBlastRadius * scale * 0.95,
+        Math.hypot(e.x - self.x, e.y - self.y) <= POWERUP_CONFIG.warpBlastRadius * scale * 0.96,
+    );
+    const arrivalKillReady = Boolean(
+      myBeacon &&
+        enemies.some(
+          (e) =>
+            !ctx.shieldedTankIndices.has(e.index) &&
+            Math.hypot(e.x - myBeacon.x, e.y - myBeacon.y) <=
+              POWERUP_CONFIG.warpBlastRadius * scale * 0.96,
+        ),
     );
     const emergencyEscape = danger.imminentBulletTimeSec < 0.52 || danger.threatLevel >= 0.92;
-    if (riftKillReady || emergencyEscape) {
+    if (departureKillReady || arrivalKillReady || emergencyEscape) {
       return {
         ...idle,
         firePressed: true,
@@ -1851,45 +1843,33 @@ export function computeBotDecision(
       mem.fireCooldownTimer = 0.85;
     }
   } else if (ctx.selfSkill === 'emp') {
-    // 14. LỰU ĐẠN XUNG ĐIỆN EMP: Launch toward shielded/channeling/nearby enemies (2nd press detonates mid-air!)
-    const empSpeed =
-      BASE_GAMEPLAY.projectileSpeed * POWERUP_CONFIG.empOrbSpeedMultiplier * scale;
-    const empR =
-      BASE_GAMEPLAY.projectileRadius * POWERUP_CONFIG.empOrbRadiusMultiplier * scale;
-    const highValueEnemy = enemies.find(
+    // 14. BÃO XUNG ĐIỆN TỪ (2 instant radial pulses: bullet hijack + close Tesla zap + steering scramble!)
+    const zapR = arena.cellSize * POWERUP_CONFIG.empZapCellsRadius * 0.96;
+    const blastR = arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius * 0.92;
+
+    const bulletParryUrgent = danger.imminentBulletTimeSec < 0.56;
+    const lethalZapReady = enemies.some(
       (e) =>
-        ctx.shieldedTankIndices.has(e.index) ||
-        ctx.reaperTankIndices.has(e.index) ||
-        Boolean(ctx.laserChargingTankIndices?.has(e.index)),
+        !ctx.shieldedTankIndices.has(e.index) &&
+        Math.hypot(e.x - self.x, e.y - self.y) <= zapR &&
+        !hasWallOcclusion(self.x, self.y, e.x, e.y, 3.2, arena.walls),
     );
-    const empTarget = highValueEnemy ?? primaryEnemy;
-    const empDist = Math.hypot(empTarget.x - self.x, empTarget.y - self.y);
-    if (ctx.canFire && mem.fireCooldownTimer <= 0 && empDist <= arena.cellSize * 5.8) {
-      const directAng = Math.atan2(empTarget.y - self.y, empTarget.x - self.x);
-      let bestEmpAng: number | null = null;
-      let bestEmpErr = arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius * 0.9;
-      const probes = [directAng, self.angle];
-      for (let k = 0; k < 20; k++) probes.push((k / 20) * Math.PI * 2 - Math.PI);
-      for (const ang of probes) {
-        const mx = self.x + Math.cos(ang) * barrelLen;
-        const my = self.y + Math.sin(ang) * barrelLen;
-        for (const tProbe of [0.45, 0.9, 1.4, 1.9]) {
-          const pt = simulateBallisticEndpoint(mx, my, ang, empSpeed, tProbe, empR, arena.walls, 6);
-          const err = Math.hypot(pt.x - empTarget.x, pt.y - empTarget.y);
-          if (err < bestEmpErr) {
-            bestEmpErr = err;
-            bestEmpAng = ang;
-          }
-        }
-      }
-      if (bestEmpAng !== null) {
-        if (Math.abs(wrapAngleRad(bestEmpAng - self.angle)) <= 0.18) {
-          wantFirePressed = true;
-          mem.fireCooldownTimer = 0.25;
-        } else {
-          desiredAimAngle = bestEmpAng;
-        }
-      }
+    const highValueDisrupt = enemies.some(
+      (e) =>
+        Math.hypot(e.x - self.x, e.y - self.y) <= blastR &&
+        (ctx.shieldedTankIndices.has(e.index) ||
+          ctx.reaperTankIndices.has(e.index) ||
+          Boolean(ctx.laserChargingTankIndices?.has(e.index)) ||
+          Math.hypot(e.x - self.x, e.y - self.y) <= arena.cellSize * 2.05),
+    );
+
+    if (
+      ctx.canFire &&
+      mem.fireCooldownTimer <= 0 &&
+      (bulletParryUrgent || lethalZapReady || highValueDisrupt)
+    ) {
+      wantFirePressed = true;
+      mem.fireCooldownTimer = POWERUP_CONFIG.empCooldownSec;
     }
   } else if (!ctx.selfReaperSweeping) {
     // Standard Cannon / Gatling / Spike / Cryo (`0.92x` bounce freeze orb)!

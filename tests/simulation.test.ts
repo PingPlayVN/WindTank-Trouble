@@ -74,12 +74,14 @@ import {
   drillMazeWallAtPoint,
   ejectTankFromInteriorWalls,
   findBarriersHitByPolyline,
+  findDirectCryoBurstVictims,
   findGroundSpikeVictims,
   findTanksInCryoZones,
   findTriggeredMines,
   incinerateProjectilesWithFlames,
   pickMysteryCrateCell,
   removeEnergyBarrierFromArena,
+  repelProjectilesWithEmpPulse,
   rollWeightedSkill,
   steerHomingMissile,
   stepFlameThermodynamics,
@@ -2792,7 +2794,7 @@ test('5 New Skills (#2 EMP, #3 Phantom, #4 Cryo, #5 Barrier, #6 Warp) physics & 
   );
   assert.deepEqual(laserHitIds, [501], 'Cross-map Laser beam must detect and shatter Energy Barrier');
 
-  // 3. EMP Pulse (`emp`): pierces walls to hit enemy tanks, clears mines, and clears barriers!
+  // 3. Reworked EMP Storm Nova (`emp`): 2-pulse bullet hijack + line-of-sight Tesla zap + wall-piercing scramble!
   const enemyMine: ProximityMineState = {
     id: 99,
     ownerIndex: 1,
@@ -2805,22 +2807,79 @@ test('5 New Skills (#2 EMP, #3 Phantom, #4 Cryo, #5 Barrier, #6 Warp) physics & 
     blastRadius: 44,
   };
   const empImpact = computeEmpBlastImpact(
-    barrier!.x0,
-    barrier!.y0,
+    architect.x,
+    architect.y,
     arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius,
     0,
     [architect, { ...rival, ...cc(2, 1) }],
     [enemyMine],
     [barrier!],
+    arena.cellSize * POWERUP_CONFIG.empZapCellsRadius,
+    arena.walls,
   );
-  assert.deepEqual(empImpact.hitEnemyIndices, [1], 'EMP shockwave must hit rival tank without hitting owner');
+  assert.deepEqual(empImpact.hitEnemyIndices, [1], 'EMP shockwave must hit rival tank through walls without hitting owner');
+  assert.deepEqual(
+    empImpact.zappedEnemyIndices,
+    [],
+    'Solid barrier between (1,1) and (2,1) must block direct lethal Tesla Zap while still allowing EMP scramble!',
+  );
   assert.deepEqual(empImpact.clearedMineIds, [99], 'EMP shockwave must neutralize mines in radius');
   assert.deepEqual(empImpact.clearedBarrierIds, [501], 'EMP shockwave must shatter Energy Barriers in radius');
 
   removeEnergyBarrierFromArena(barrier!, arena);
   assert.equal(arena.grid.vWalls[1][2], false);
 
-  // 4. Cryo Zone (`cryo`): affects rival tanks inside ice radius while sparing the owner!
+  const openEmpImpact = computeEmpBlastImpact(
+    architect.x,
+    architect.y,
+    arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius,
+    0,
+    [architect, { ...rival, ...cc(2, 1) }],
+    [],
+    [],
+    arena.cellSize * POWERUP_CONFIG.empZapCellsRadius,
+    arena.walls,
+  );
+  assert.deepEqual(
+    openEmpImpact.zappedEnemyIndices,
+    [1],
+    'Unoccluded close rival within 1.5 cells must be struck by High-Voltage Tesla Zap!',
+  );
+
+  const incomingEnemyShell: ProjectileKinematics = {
+    id: 77,
+    ownerIndex: 1,
+    x: architect.x + 28 * arena.scaleRatio,
+    y: architect.y,
+    prevX: architect.x + 34 * arena.scaleRatio,
+    prevY: architect.y,
+    vx: -280,
+    vy: 0,
+    radius: 4.5,
+    age: 0.2,
+    maxLifetime: 10,
+    bounces: 0,
+    maxBounces: 12,
+    graceTimer: 0,
+    active: true,
+    variant: 'standard',
+  };
+  const hijacked = repelProjectilesWithEmpPulse(
+    architect.x,
+    architect.y,
+    arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius,
+    0,
+    [incomingEnemyShell],
+    [architect, rival],
+    arena.walls,
+    arena.scaleRatio,
+  );
+  assert.equal(hijacked.length, 1, 'EMP Nova must hijack incoming enemy projectiles inside radius');
+  assert.equal(incomingEnemyShell.ownerIndex, 0, 'Hijacked projectile must switch ownership to EMP caster');
+  assert.ok(incomingEnemyShell.vx > 280, 'Hijacked projectile must reverse outward at boosted speed!');
+
+  // 4. Cryo Zone & Orb (`cryo`): slows BOTH owner & rivals by 2x (`0.5x`), freezes direct burst victims, and bounced orb hits owner!
+  assert.equal(POWERUP_CONFIG.cryoDriftSpeedMultiplier, 0.5, 'Cryo Zone must slow movement speed by 2x (0.5x)');
   const cryoZone = {
     id: 301,
     ownerIndex: 0 as const,
@@ -2836,57 +2895,81 @@ test('5 New Skills (#2 EMP, #3 Phantom, #4 Cryo, #5 Barrier, #6 Warp) physics & 
       { ...rival, ...cc(2, 2) },
     ],
   );
-  assert.equal(sliding.has(0), false, 'Owner must not suffer self-inflicted ice drift on own Cryo Zone');
-  assert.equal(sliding.has(1), true, 'Rival tank inside Cryo Zone must suffer ice drift');
+  assert.equal(sliding.has(0), true, 'Owner entering Cryo Zone must also suffer 2x slow & freeze buildup!');
+  assert.equal(sliding.has(1), true, 'Rival tank inside Cryo Zone must suffer 2x slow & freeze buildup!');
 
-  // 5. Spatial Warp (`warp`): departure rift shockwave catches point-blank pursuer!
-  const warpVictims = computeWarpBlastVictims(
+  const directBurst = findDirectCryoBurstVictims(
+    cryoZone.x,
+    cryoZone.y,
+    cryoZone.radius,
+    0,
+    true,
+    [
+      { ...architect, ...cc(2, 2) },
+      { ...rival, ...cc(2, 2) },
+    ],
+  );
+  assert.deepEqual(directBurst, [0, 1], 'Tanks standing directly in Cryo burst epicenter must freeze immediately!');
+
+  const bouncedCryoOrb: ProjectileKinematics = {
+    id: 88,
+    ownerIndex: 0,
+    x: architect.x - 10,
+    y: architect.y,
+    prevX: architect.x - 16,
+    prevY: architect.y,
+    vx: 240,
+    vy: 0,
+    radius: 5.2,
+    age: 0.4,
+    maxLifetime: 4.5,
+    bounces: 1,
+    maxBounces: 4,
+    graceTimer: 0,
+    active: true,
+    variant: 'cryo_orb',
+  };
+  const cryoSelfHit = stepProjectilesSimulation([bouncedCryoOrb], [architect, rival], arena.walls, 1 / 60);
+  assert.equal(cryoSelfHit.hits.length, 1);
+  assert.equal(cryoSelfHit.hits[0].victimIndex, 0, 'Reflected Cryo Orb must be able to hit and freeze its own shooter!');
+
+  // 5. Spatial Warp (`warp`): compact Rift Explosions at BOTH Departure `(fromX, fromY)` AND Arrival `(toX, toY)`!
+  const beaconPos = cc(3, 2);
+  const departureVictims = computeWarpBlastVictims(
     architect.x,
     architect.y,
     0,
     POWERUP_CONFIG.warpBlastRadius * arena.scaleRatio,
-    [architect, { ...rival, x: architect.x + 24 * arena.scaleRatio, y: architect.y }],
+    [architect, { ...rival, x: architect.x + 22 * arena.scaleRatio, y: architect.y }],
   );
-  assert.deepEqual(warpVictims, [1]);
+  const arrivalVictims = computeWarpBlastVictims(
+    beaconPos.x,
+    beaconPos.y,
+    0,
+    POWERUP_CONFIG.warpBlastRadius * arena.scaleRatio,
+    [architect, { ...rival, x: beaconPos.x + 22 * arena.scaleRatio, y: beaconPos.y }],
+  );
+  assert.deepEqual(departureVictims, [1], 'Departure Rift Explosion must hit enemies pursuing at current position');
+  assert.deepEqual(arrivalVictims, [1], 'Arrival Rift Explosion at Warp Anchor must hit enemies camping near the anchor');
 
-  // 6. AI Mastery of New Skills: remote EMP detonation & Warp recall under point-blank pursuit!
+  // 6. AI Mastery: EMP Nova bullet parry / close zap & Warp Anchor ambush recall!
   const aiMem = createAISlotMemory(0);
-  const empDetDecision = computeBotDecision(
+  const empNovaDecision = computeBotDecision(
     {
       difficulty: 'super_hard',
       dt: 1 / 60,
       self: architect,
-      selfSkill: null,
-      selfSkillAmmo: 0,
+      selfSkill: 'emp',
+      selfSkillAmmo: 2,
       selfAmmo: 10,
       selfShielded: false,
-      hasActiveEmpOrb: true,
       selfReaperSweeping: false,
       selfChargingLaser: false,
       canFire: true,
-      tanks: [architect, rival],
-      shieldedTankIndices: new Set([1]),
+      tanks: [architect, { ...rival, ...cc(2, 1) }],
+      shieldedTankIndices: new Set(),
       reaperTankIndices: new Set(),
-      projectiles: [
-        {
-          id: 12,
-          ownerIndex: 0,
-          x: rival.x - 20,
-          y: rival.y,
-          prevX: rival.x - 25,
-          prevY: rival.y,
-          vx: 180,
-          vy: 0,
-          radius: 5,
-          age: 0.35,
-          maxLifetime: 2.0,
-          bounces: 1,
-          maxBounces: 8,
-          graceTimer: 0,
-          active: true,
-          variant: 'emp_orb',
-        },
-      ],
+      projectiles: [],
       crates: [],
       spikeZones: [],
       mines: [],
@@ -2896,9 +2979,9 @@ test('5 New Skills (#2 EMP, #3 Phantom, #4 Cryo, #5 Barrier, #6 Warp) physics & 
     new SeededRng(9),
   );
   assert.equal(
-    empDetDecision.firePressed,
+    empNovaDecision.firePressed,
     true,
-    'AI must remotely detonate its flying EMP orb as soon as it enters blast range of a shielded enemy!',
+    'AI holding EMP Storm Nova must immediately zap an unshielded close rival within 1.5 cells!',
   );
 
   const warpRecallDecision = computeBotDecision(
@@ -2914,13 +2997,23 @@ test('5 New Skills (#2 EMP, #3 Phantom, #4 Cryo, #5 Barrier, #6 Warp) physics & 
       selfReaperSweeping: false,
       selfChargingLaser: false,
       canFire: true,
-      tanks: [architect, { ...rival, x: architect.x + 22 * arena.scaleRatio, y: architect.y }],
+      tanks: [architect, { ...rival, x: beaconPos.x + 20 * arena.scaleRatio, y: beaconPos.y }],
       shieldedTankIndices: new Set(),
       reaperTankIndices: new Set(),
       projectiles: [],
       crates: [],
       spikeZones: [],
       mines: [],
+      warpBeacons: [
+        {
+          id: 701,
+          ownerIndex: 0,
+          x: beaconPos.x,
+          y: beaconPos.y,
+          age: 1.2,
+          maxDuration: 12,
+        },
+      ],
       arena,
     },
     aiMem,
@@ -2929,7 +3022,7 @@ test('5 New Skills (#2 EMP, #3 Phantom, #4 Cryo, #5 Barrier, #6 Warp) physics & 
   assert.equal(
     warpRecallDecision.firePressed,
     true,
-    'AI with an active Warp Beacon must trigger instant recall + rift blast when an unshielded enemy closes to point-blank!',
+    'AI with a placed Warp Anchor must immediately teleport back when an unshielded enemy steps onto its anchor!',
   );
 });
 

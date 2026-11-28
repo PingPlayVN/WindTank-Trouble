@@ -817,7 +817,7 @@ export class TouchControlsOverlay {
         ratio = Math.min(1, (st.phantomRemaining ?? 0) / POWERUP_CONFIG.phantomDurationSec);
         subCopy = `MA ${(st.phantomRemaining ?? 0).toFixed(1)}s`;
       } else if (st.skill === 'warp') {
-        subCopy = st.warpBeaconPlaced ? 'BẤM BIẾN VỀ!' : 'ĐẶT CỔNG';
+        subCopy = st.warpBeaconPlaced ? 'BIẾN VỀ NỔ!' : 'ĐẶT CỔNG';
       } else if (st.skill === 'laser') {
         ratio = st.laserChargeProgress !== null ? st.laserChargeProgress : 1;
         subCopy =
