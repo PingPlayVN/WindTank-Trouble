@@ -1001,47 +1001,113 @@ export class Tank {
       this.auraGraphics.strokePath();
     }
 
-    // 1B. Active 3.5s Phantom Wraith Phase Aura + 3 Orbiting Spirit Wisps!
+    // 1B. Reaper-Grade Abyssal Wraith Form (`Phantom Phase` — Giant Spectral Scythe-Wings + Long Soul-Flame Comet!)
     if (this.phantomRemainingSec > 0) {
       const s = this.scaleRatio;
       const cx = this.kinematics.x;
       const cy = this.kinematics.y;
-      const ghostR = this.kinematics.radius * (1.56 + Math.sin(this.auraPulseClock * 10) * 0.1);
+      const rBase = this.kinematics.radius;
+      const ghostR = rBase * (2.15 + Math.sin(this.auraPulseClock * 9) * 0.14);
       const ratio = Math.max(0, Math.min(1, this.phantomRemainingSec / POWERUP_CONFIG.phantomDurationSec));
 
-      this.auraGraphics.fillStyle(0xb388ff, 0.18);
-      this.auraGraphics.fillCircle(cx, cy, ghostR);
-      this.auraGraphics.lineStyle(1.8 * s, 0xd1c4e9, 0.55);
-      this.auraGraphics.strokeCircle(cx, cy, ghostR * 1.14);
+      // 1. Concentric Abyssal Runic Rings (no flat gray blob — crisp dark-obsidian & neon-violet contrast!)
+      this.auraGraphics.fillStyle(0x0b0718, 0.44);
+      this.auraGraphics.fillCircle(cx, cy, rBase * 1.45);
+      this.auraGraphics.lineStyle(4.2 * s, 0x0b0718, 0.88);
+      this.auraGraphics.strokeCircle(cx, cy, ghostR);
+      this.auraGraphics.lineStyle(2.4 * s, 0xe040fb, 0.96);
+      this.auraGraphics.strokeCircle(cx, cy, ghostR);
 
-      // Radial timer arc around wraith tank
-      this.auraGraphics.lineStyle(2.8 * s, 0xea80fc, 0.92);
+      // 2. Twin Sweeping Spectral Wraith Wings (`2.9x` tank radius span, flapping subtly!)
+      const fwdX = Math.cos(this.kinematics.angle);
+      const fwdY = Math.sin(this.kinematics.angle);
+      const sideX = -fwdY;
+      const sideY = fwdX;
+      const wingFlap = Math.sin(this.auraPulseClock * 11) * 0.16;
+
+      for (const sign of [-1, 1]) {
+        const wSpan = rBase * (2.85 + wingFlap);
+        const rootX = cx - fwdX * (rBase * 0.15) + sideX * sign * (rBase * 0.65);
+        const rootY = cy - fwdY * (rBase * 0.15) + sideY * sign * (rBase * 0.65);
+        const tipX = cx - fwdX * (rBase * 1.35) + sideX * sign * wSpan;
+        const tipY = cy - fwdY * (rBase * 1.35) + sideY * sign * wSpan;
+        const midX = cx + fwdX * (rBase * 0.35) + sideX * sign * (wSpan * 0.72);
+        const midY = cy + fwdY * (rBase * 0.35) + sideY * sign * (wSpan * 0.72);
+
+        this.auraGraphics.fillStyle(0x0d071c, 0.84);
+        this.auraGraphics.lineStyle(2.2 * s, 0xe040fb, 0.96);
+        this.auraGraphics.beginPath();
+        this.auraGraphics.moveTo(rootX, rootY);
+        this.auraGraphics.lineTo(midX, midY);
+        this.auraGraphics.lineTo(tipX, tipY);
+        this.auraGraphics.closePath();
+        this.auraGraphics.fillPath();
+        this.auraGraphics.strokePath();
+
+        this.auraGraphics.lineStyle(1.5 * s, 0x80d8ff, 0.9);
+        this.auraGraphics.lineBetween(rootX, rootY, tipX, tipY);
+      }
+
+      // 3. Long Undulating Twin Abyssal Soul-Flame Streamers (`~72px` scaled wake!)
+      const backAng = this.kinematics.angle + Math.PI;
+      const perpX = -Math.sin(backAng);
+      const perpY = Math.cos(backAng);
+      for (const side of [-1, 1]) {
+        const tailSegs = 9;
+        for (let k = 1; k <= tailSegs; k++) {
+          const f0 = (k - 1) / tailSegs;
+          const f1 = k / tailSegs;
+          const len0 = (12 + f0 * 58) * s;
+          const len1 = (12 + f1 * 58) * s;
+          const wave0 =
+            side * (8 + f0 * 8) * s +
+            Math.sin(this.auraPulseClock * 16 - f0 * 5.6 + side) * (7.5 * f0 * s);
+          const wave1 =
+            side * (8 + f1 * 8) * s +
+            Math.sin(this.auraPulseClock * 16 - f1 * 5.6 + side) * (7.5 * f1 * s);
+          const x0 = cx + Math.cos(backAng) * len0 + perpX * wave0;
+          const y0 = cy + Math.sin(backAng) * len0 + perpY * wave0;
+          const x1 = cx + Math.cos(backAng) * len1 + perpX * wave1;
+          const y1 = cy + Math.sin(backAng) * len1 + perpY * wave1;
+          const fade = 1 - f1 * 0.85;
+          this.auraGraphics.lineStyle(8.5 * (1 - f0 * 0.68) * s, 0x0b0718, 0.78 * fade);
+          this.auraGraphics.lineBetween(x0, y0, x1, y1);
+          this.auraGraphics.lineStyle(3.6 * (1 - f0 * 0.68) * s, side > 0 ? 0xe040fb : 0x00e5ff, 0.95 * fade);
+          this.auraGraphics.lineBetween(x0, y0, x1, y1);
+        }
+      }
+
+      // 4. High-contrast radial duration gauge + 4 orbiting Will-o'-the-Wisp Soul Flames
+      this.auraGraphics.lineStyle(3.4 * s, 0x00e5ff, 0.96);
       this.auraGraphics.beginPath();
-      this.auraGraphics.arc(cx, cy, ghostR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
+      this.auraGraphics.arc(cx, cy, ghostR * 1.1, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
       this.auraGraphics.strokePath();
 
-      // 3 Orbiting ethereal spirit wisps with comet tails
-      for (let w = 0; w < 3; w++) {
-        const wa = this.auraPulseClock * 5.6 + (w * Math.PI * 2) / 3;
-        const wx = cx + Math.cos(wa) * (ghostR * 1.08);
-        const wy = cy + Math.sin(wa) * (ghostR * 1.08);
-        const tx = cx + Math.cos(wa - 0.42) * (ghostR * 1.04);
-        const ty = cy + Math.sin(wa - 0.42) * (ghostR * 1.04);
-        this.auraGraphics.lineStyle(2.2 * s, 0x80d8ff, 0.55);
-        this.auraGraphics.lineBetween(tx, ty, wx, wy);
-        this.auraGraphics.fillStyle(0xffffff, 0.95);
-        this.auraGraphics.fillCircle(wx, wy, 2.5 * s);
+      for (let w = 0; w < 4; w++) {
+        const wa = this.auraPulseClock * 5.8 + (w * Math.PI) / 2;
+        const wx = cx + Math.cos(wa) * (ghostR * 1.12);
+        const wy = cy + Math.sin(wa) * (ghostR * 1.12);
+        this.auraGraphics.fillStyle(0x0b0718, 0.92);
+        this.auraGraphics.fillCircle(wx, wy, 4.6 * s);
+        this.auraGraphics.fillStyle(w % 2 === 0 ? 0x00e5ff : 0xe040fb, 0.98);
+        this.auraGraphics.fillCircle(wx, wy, 2.8 * s);
       }
     }
 
-    // 1C. Faceted Glacial Iceberg Prism Encasement (`Cryo Freeze`) + Slippery Drift Halo!
+    // 1C. Towering 3D Jagged Glacier Tomb (`Cryo Freeze`) + Slippery Drift Halo!
     if (this.onIceFloor && this.frozenRemainingSec <= 0) {
       const s = this.scaleRatio;
-      this.auraGraphics.lineStyle(1.8 * s, 0x84ffff, 0.65);
+      this.auraGraphics.lineStyle(2.6 * s, 0x062130, 0.65);
       this.auraGraphics.strokeCircle(
         this.kinematics.x,
         this.kinematics.y,
-        this.kinematics.radius * 1.32,
+        this.kinematics.radius * 1.38,
+      );
+      this.auraGraphics.lineStyle(1.6 * s, 0x84ffff, 0.92);
+      this.auraGraphics.strokeCircle(
+        this.kinematics.x,
+        this.kinematics.y,
+        this.kinematics.radius * 1.38,
       );
     }
 
@@ -1049,15 +1115,31 @@ export class Tank {
       const s = this.scaleRatio;
       const cx = this.kinematics.x;
       const cy = this.kinematics.y;
-      const iceR = this.kinematics.radius * 1.68;
+      const iceR = this.kinematics.radius * 2.05;
 
-      // Outer jagged 8-vertex glacier crystal block
-      this.auraGraphics.fillStyle(0x80deea, 0.42);
-      this.auraGraphics.lineStyle(2.8 * s, 0x00acc1, 0.96);
+      // Layer 1: Dark Midnight-Sapphire Base Glacier Spires (high contrast on #F3F3F1!)
+      this.auraGraphics.fillStyle(0x062233, 0.72);
+      this.auraGraphics.lineStyle(3.0 * s, 0x041520, 0.95);
+      this.auraGraphics.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = -Math.PI / 10 + (i / 10) * Math.PI * 2;
+        const r = i % 2 === 0 ? iceR : iceR * 0.74;
+        const px = cx + Math.cos(a) * r;
+        const py = cy + Math.sin(a) * r;
+        if (i === 0) this.auraGraphics.moveTo(px, py);
+        else this.auraGraphics.lineTo(px, py);
+      }
+      this.auraGraphics.closePath();
+      this.auraGraphics.fillPath();
+      this.auraGraphics.strokePath();
+
+      // Layer 2: Luminous Cyan Faceted Crystal Monolith
+      this.auraGraphics.fillStyle(0x00bcd4, 0.48);
+      this.auraGraphics.lineStyle(2.4 * s, 0x84ffff, 0.96);
       this.auraGraphics.beginPath();
       for (let i = 0; i < 8; i++) {
-        const a = -Math.PI / 8 + (i / 8) * Math.PI * 2;
-        const r = i % 2 === 0 ? iceR : iceR * 0.84;
+        const a = (i / 8) * Math.PI * 2;
+        const r = i % 2 === 0 ? iceR * 0.86 : iceR * 0.64;
         const px = cx + Math.cos(a) * r;
         const py = cy + Math.sin(a) * r;
         if (i === 0) this.auraGraphics.moveTo(px, py);
@@ -1067,70 +1149,56 @@ export class Tank {
       this.auraGraphics.fillPath();
       this.auraGraphics.strokePath();
 
-      // Inner bright frost crystal facet + white specular sheen slashes!
-      this.auraGraphics.fillStyle(0xe0f7fa, 0.34);
-      this.auraGraphics.lineStyle(1.6 * s, 0xffffff, 0.92);
-      this.auraGraphics.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        const r = iceR * 0.62;
-        const px = cx + Math.cos(a) * r;
-        const py = cy + Math.sin(a) * r;
-        if (i === 0) this.auraGraphics.moveTo(px, py);
-        else this.auraGraphics.lineTo(px, py);
+      // Layer 3: Pure-white internal crystal ridge lines & specular slashes
+      this.auraGraphics.lineStyle(2.0 * s, 0xffffff, 0.92);
+      for (let k = 0; k < 5; k++) {
+        const a = -0.4 + (k * Math.PI * 2) / 5;
+        this.auraGraphics.lineBetween(
+          cx + Math.cos(a) * (iceR * 0.2),
+          cy + Math.sin(a) * (iceR * 0.2),
+          cx + Math.cos(a) * (iceR * 0.84),
+          cy + Math.sin(a) * (iceR * 0.84),
+        );
       }
-      this.auraGraphics.closePath();
-      this.auraGraphics.fillPath();
-      this.auraGraphics.strokePath();
-
-      // Diagonal ice reflection glints
-      this.auraGraphics.lineStyle(2.2 * s, 0xffffff, 0.88);
-      this.auraGraphics.lineBetween(
-        cx - iceR * 0.45,
-        cy - iceR * 0.25,
-        cx - iceR * 0.1,
-        cy - iceR * 0.6,
-      );
-      this.auraGraphics.lineBetween(
-        cx + iceR * 0.08,
-        cy + iceR * 0.52,
-        cx + iceR * 0.42,
-        cy + iceR * 0.18,
-      );
     }
 
-    // 1D. EMP Weapon-Jam & Slow High-Voltage Lightning Cage!
+    // 1D. Reaper-Grade EMP Lockdown Shroud & High-Voltage Lightning Chains!
     if (this.empJamRemainingSec > 0) {
       const s = this.scaleRatio;
       const cx = this.kinematics.x;
       const cy = this.kinematics.y;
-      const jamR = this.kinematics.radius * 1.54;
+      const jamR = this.kinematics.radius * 1.72;
 
-      this.auraGraphics.lineStyle(1.8 * s, 0x651fff, 0.72);
+      this.auraGraphics.fillStyle(0x09071a, 0.56);
+      this.auraGraphics.fillCircle(cx, cy, jamR * 0.95);
+      this.auraGraphics.lineStyle(2.6 * s, 0x651fff, 0.92);
       this.auraGraphics.strokeCircle(cx, cy, jamR);
 
-      for (let k = 0; k < 5; k++) {
-        const baseA = this.auraPulseClock * 20 + (k * Math.PI * 2) / 5;
-        const col = k % 2 === 0 ? 0x00e5ff : 0xffea00;
-        this.auraGraphics.lineStyle(2.1 * s, col, 0.95);
-        const x0 = cx + Math.cos(baseA) * (jamR * 0.58);
-        const y0 = cy + Math.sin(baseA) * (jamR * 0.58);
-        const xm = cx + Math.cos(baseA + 0.26) * (jamR * 1.18);
-        const ym = cy + Math.sin(baseA + 0.26) * (jamR * 1.18);
-        const x1 = cx + Math.cos(baseA + 0.52) * (jamR * 0.68);
-        const y1 = cy + Math.sin(baseA + 0.52) * (jamR * 0.68);
+      for (let k = 0; k < 6; k++) {
+        const baseA = this.auraPulseClock * 22 + (k * Math.PI * 2) / 6;
+        const x0 = cx + Math.cos(baseA) * (jamR * 0.52);
+        const y0 = cy + Math.sin(baseA) * (jamR * 0.52);
+        const xm = cx + Math.cos(baseA + 0.28) * (jamR * 1.22);
+        const ym = cy + Math.sin(baseA + 0.28) * (jamR * 1.22);
+        const x1 = cx + Math.cos(baseA + 0.54) * (jamR * 0.66);
+        const y1 = cy + Math.sin(baseA + 0.54) * (jamR * 0.66);
+        this.auraGraphics.lineStyle(4.2 * s, 0x09071a, 0.85);
+        this.auraGraphics.lineBetween(x0, y0, xm, ym);
+        this.auraGraphics.lineBetween(xm, ym, x1, y1);
+        this.auraGraphics.lineStyle(2.2 * s, k % 2 === 0 ? 0x00e5ff : 0xffea00, 0.98);
         this.auraGraphics.lineBetween(x0, y0, xm, ym);
         this.auraGraphics.lineBetween(xm, ym, x1, y1);
       }
 
-      // Blinking weapon-jammed X indicator above turret
-      if (Math.floor(this.auraPulseClock * 14) % 2 === 0) {
-        const iy = cy - this.kinematics.radius * 1.45;
-        const sz = 4.2 * s;
-        this.auraGraphics.lineStyle(2.4 * s, 0xff1744, 0.95);
-        this.auraGraphics.lineBetween(cx - sz, iy - sz, cx + sz, iy + sz);
-        this.auraGraphics.lineBetween(cx + sz, iy - sz, cx - sz, iy + sz);
-      }
+      // Bold Obsidian + Crimson Jammed-Trigger Lock Cross above turret
+      const iy = cy - this.kinematics.radius * 1.55;
+      const sz = 5.0 * s;
+      this.auraGraphics.lineStyle(4.6 * s, 0x09071a, 0.92);
+      this.auraGraphics.lineBetween(cx - sz, iy - sz, cx + sz, iy + sz);
+      this.auraGraphics.lineBetween(cx + sz, iy - sz, cx - sz, iy + sz);
+      this.auraGraphics.lineStyle(2.5 * s, 0xff1744, 0.98);
+      this.auraGraphics.lineBetween(cx - sz, iy - sz, cx + sz, iy + sz);
+      this.auraGraphics.lineBetween(cx + sz, iy - sz, cx - sz, iy + sz);
     }
 
     // 2. Equipped Skill Aura + Laser Charge / Reaper Windup Telegraphs

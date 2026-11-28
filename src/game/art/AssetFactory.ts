@@ -57,10 +57,10 @@ export class AssetFactory {
     AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_0', 46, 36, 0);
     AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_1', 46, 36, 1);
     AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_2', 46, 36, 2);
-    AssetFactory.createEmpOrbTexture(tex, 'projectile_emp_orb', 24);
-    AssetFactory.createCryoOrbTexture(tex, 'projectile_cryo_orb', 22);
+    AssetFactory.createEmpOrbTexture(tex, 'projectile_emp_orb', 32);
+    AssetFactory.createCryoOrbTexture(tex, 'projectile_cryo_orb', 30);
     AssetFactory.createMineTexture(tex, 'pickup_mine', 26);
-    AssetFactory.createWarpBeaconTexture(tex, 'pickup_warp_beacon', 36);
+    AssetFactory.createWarpBeaconTexture(tex, 'pickup_warp_beacon', 48);
     AssetFactory.createWoodenCrateTexture(tex, 'pickup_wood_crate', 44);
     AssetFactory.createTntBarrelTexture(tex, 'prop_tnt_barrel', 40);
     AssetFactory.createGroundSpikeTexture(tex, 'decal_ground_spike', 24);
@@ -153,8 +153,8 @@ export class AssetFactory {
     if (!tex.exists('projectile_spike_shard')) AssetFactory.createSpikeShardTexture(tex, 'projectile_spike_shard', 18, 10);
     if (!tex.exists('projectile_missile')) AssetFactory.createMissileTexture(tex, 'projectile_missile', 28, 16);
     if (!tex.exists('projectile_drill')) AssetFactory.createDrillProjectileTexture(tex, 'projectile_drill', 38, 22);
-    if (!tex.exists('projectile_emp_orb')) AssetFactory.createEmpOrbTexture(tex, 'projectile_emp_orb', 24);
-    if (!tex.exists('projectile_cryo_orb')) AssetFactory.createCryoOrbTexture(tex, 'projectile_cryo_orb', 22);
+    if (!tex.exists('projectile_emp_orb')) AssetFactory.createEmpOrbTexture(tex, 'projectile_emp_orb', 32);
+    if (!tex.exists('projectile_cryo_orb')) AssetFactory.createCryoOrbTexture(tex, 'projectile_cryo_orb', 30);
     report('Đang chế tạo kho vũ khí, mũi khoan & tên lửa định vị…');
     await yieldFrame();
 
@@ -163,7 +163,7 @@ export class AssetFactory {
     if (!tex.exists('projectile_flame_1')) AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_1', 46, 36, 1);
     if (!tex.exists('projectile_flame_2')) AssetFactory.createFlameProjectileTexture(tex, 'projectile_flame_2', 46, 36, 2);
     if (!tex.exists('pickup_mine')) AssetFactory.createMineTexture(tex, 'pickup_mine', 26);
-    if (!tex.exists('pickup_warp_beacon')) AssetFactory.createWarpBeaconTexture(tex, 'pickup_warp_beacon', 36);
+    if (!tex.exists('pickup_warp_beacon')) AssetFactory.createWarpBeaconTexture(tex, 'pickup_warp_beacon', 48);
     if (!tex.exists('pickup_wood_crate')) AssetFactory.createWoodenCrateTexture(tex, 'pickup_wood_crate', 44);
     if (!tex.exists('prop_tnt_barrel')) AssetFactory.createTntBarrelTexture(tex, 'prop_tnt_barrel', 40);
     if (!tex.exists('decal_ground_spike')) AssetFactory.createGroundSpikeTexture(tex, 'decal_ground_spike', 24);
@@ -317,74 +317,93 @@ export class AssetFactory {
       ctx.fillStyle = '#FF1744';
       ctx.fill();
     } else if (skill === 'emp') {
-      // Twin Tesla induction coil pylons flanking rear chassis
-      for (const sign of [-1, 1]) {
-        AssetFactory.roundRectPath(ctx, -21, sign > 0 ? 11.5 : -19.5, 14, 8, 2.5);
-        ctx.fillStyle = '#311B92';
-        ctx.fill();
-        ctx.lineWidth = 1.6;
-        ctx.strokeStyle = outline;
-        ctx.stroke();
-        ctx.strokeStyle = '#00E5FF';
-        ctx.lineWidth = 1.6;
-        for (const cxOff of [-17.5, -14, -10.5]) {
-          ctx.beginPath();
-          ctx.moveTo(cxOff, sign * 12);
-          ctx.lineTo(cxOff, sign * 19);
-          ctx.stroke();
-        }
-      }
-    } else if (skill === 'phantom') {
-      // Swept ethereal wraith tail-fins
+      // Swept Obsidian-Indigo Thunder-God Wing Pylons with high-voltage cyan/gold ribs!
       for (const sign of [-1, 1]) {
         ctx.beginPath();
         ctx.moveTo(-6, sign * 11);
-        ctx.quadraticCurveTo(-26, sign * 24, -12, sign * 14);
-        ctx.lineTo(8, sign * 12);
+        ctx.lineTo(-24, sign * 23);
+        ctx.lineTo(-7, sign * 22);
+        ctx.lineTo(10, sign * 13);
         ctx.closePath();
-        ctx.fillStyle = '#D1C4E9';
+        ctx.fillStyle = '#0D0A22';
         ctx.fill();
-        ctx.lineWidth = 1.6;
-        ctx.strokeStyle = '#4527A0';
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = '#651FFF';
+        ctx.stroke();
+
+        ctx.strokeStyle = '#00E5FF';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(-19, sign * 20.5);
+        ctx.lineTo(-4, sign * 16.5);
+        ctx.stroke();
+        ctx.fillStyle = '#FFEA00';
+        ctx.beginPath();
+        ctx.arc(-12, sign * 18.5, 2.0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (skill === 'phantom') {
+      // Reaper-tier Abyssal-Obsidian & Neon-Violet Wraith Scythe Wings!
+      for (const sign of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(-4, sign * 11);
+        ctx.quadraticCurveTo(-24, sign * 25.5, 13, sign * 23);
+        ctx.quadraticCurveTo(1, sign * 16.5, 9, sign * 12);
+        ctx.closePath();
+        ctx.fillStyle = '#0E091C';
+        ctx.fill();
+        ctx.lineWidth = 1.9;
+        ctx.strokeStyle = '#E040FB';
         ctx.stroke();
       }
     } else if (skill === 'cryo') {
-      // Faceted glacial ice-crystal shoulder shards
+      // Dramatic Midnight-Sapphire & Diamond-Cyan Glacial Crown Spikes!
       for (const sign of [-1, 1]) {
         ctx.beginPath();
-        ctx.moveTo(-12, sign * 13);
-        ctx.lineTo(-4, sign * 22);
-        ctx.lineTo(7, sign * 19);
-        ctx.lineTo(12, sign * 13);
+        ctx.moveTo(-15, sign * 12);
+        ctx.lineTo(-21, sign * 22.5);
+        ctx.lineTo(-7, sign * 18.5);
+        ctx.lineTo(2, sign * 23.5);
+        ctx.lineTo(13, sign * 13);
         ctx.closePath();
-        ctx.fillStyle = '#B2EBF2';
+        ctx.fillStyle = '#072233';
         ctx.fill();
-        ctx.lineWidth = 1.6;
-        ctx.strokeStyle = outline;
+        ctx.lineWidth = 1.7;
+        ctx.strokeStyle = '#00E5FF';
         ctx.stroke();
+        ctx.fillStyle = '#84FFFF';
+        ctx.beginPath();
+        ctx.arc(-3, sign * 18.5, 2.2, 0, Math.PI * 2);
+        ctx.fill();
       }
     } else if (skill === 'barrier') {
-      // Front-flanking holographic force-field projector bumpers
+      // Heavy Obsidian-Titanium & Neon-Emerald Force-Projector Bastion Shoulders!
       for (const sign of [-1, 1]) {
-        AssetFactory.roundRectPath(ctx, 11, sign > 0 ? 10 : -18, 8.5, 8, 2);
-        ctx.fillStyle = '#1B5E20';
+        AssetFactory.roundRectPath(ctx, -8, sign > 0 ? 11 : -21.5, 26, 10.5, 2.5);
+        ctx.fillStyle = '#0A1F15';
         ctx.fill();
-        ctx.lineWidth = 1.6;
-        ctx.strokeStyle = outline;
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = '#00E676';
         ctx.stroke();
         ctx.fillStyle = '#69F0AE';
-        ctx.fillRect(16, sign > 0 ? 11.5 : -16.5, 2.5, 5);
+        ctx.fillRect(11, sign > 0 ? 13 : -19.5, 5, 6.5);
       }
     } else if (skill === 'warp') {
-      // Rear chrono-portal ring stabilizer
+      // Floating Obsidian-Magenta-Cyan Stargate Halo Ring behind chassis!
       ctx.beginPath();
-      ctx.arc(-18, 0, 8.5, Math.PI * 0.55, Math.PI * 1.45);
-      ctx.lineWidth = 3.6;
+      ctx.arc(-15, 0, 13.5, Math.PI * 0.48, Math.PI * 1.52);
+      ctx.lineWidth = 5.2;
+      ctx.strokeStyle = '#090614';
+      ctx.stroke();
+      ctx.lineWidth = 2.6;
       ctx.strokeStyle = '#E040FB';
       ctx.stroke();
-      ctx.lineWidth = 1.4;
-      ctx.strokeStyle = outline;
-      ctx.stroke();
+      ctx.fillStyle = '#80D8FF';
+      for (const sy of [-12.5, 0, 12.5]) {
+        ctx.beginPath();
+        ctx.arc(sy === 0 ? -28.5 : -17, sy, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // 1. Left & Right Treads
@@ -789,70 +808,98 @@ export class AssetFactory {
         ctx.stroke();
       }
     } else if (skill === 'emp') {
-      // Twin-forked electromagnetic Tesla arc launcher
-      for (const py of [-4.8, 2.0]) {
-        AssetFactory.roundRectPath(ctx, 2, py, 24, 2.8, 1.2);
-        ctx.fillStyle = '#311B92';
+      // Heavy Obsidian Twin-Pronged Tesla Railgun + Suspended Plasma Core!
+      for (const py of [-5.8, 2.4]) {
+        AssetFactory.roundRectPath(ctx, 2, py, 26, 3.4, 1.3);
+        ctx.fillStyle = '#0D0A22';
         ctx.fill();
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = outline;
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = '#651FFF';
         ctx.stroke();
       }
       ctx.beginPath();
-      ctx.arc(24, 0, 4.2, 0, Math.PI * 2);
+      ctx.arc(25.5, 0, 4.8, 0, Math.PI * 2);
       ctx.fillStyle = '#00E5FF';
       ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = '#651FFF';
-      ctx.stroke();
-    } else if (skill === 'phantom') {
-      AssetFactory.roundRectPath(ctx, 2, -3.4, 25, 6.8, 2.2);
-      ctx.fillStyle = '#EDE7F6';
-      ctx.fill();
       ctx.lineWidth = 1.8;
-      ctx.strokeStyle = '#4527A0';
+      ctx.strokeStyle = '#0D0A22';
       ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(25.5, 0, 2.1, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill();
+    } else if (skill === 'phantom') {
+      // Twin Spectral Scythe-Bladed Soul Cannon!
+      for (const sign of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(4, sign * 2.2);
+        ctx.lineTo(28, sign * 5.8);
+        ctx.lineTo(23, sign * 1.4);
+        ctx.closePath();
+        ctx.fillStyle = '#0E091C';
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = '#E040FB';
+        ctx.stroke();
+      }
+      AssetFactory.roundRectPath(ctx, 2, -2.6, 24, 5.2, 1.8);
       ctx.fillStyle = '#B388FF';
-      ctx.fillRect(19, -4.0, 6, 8.0);
+      ctx.fill();
+      ctx.strokeStyle = '#0E091C';
+      ctx.stroke();
     } else if (skill === 'cryo') {
-      AssetFactory.roundRectPath(ctx, 2, -4.4, 23, 8.8, 2.2);
-      ctx.fillStyle = '#E0F7FA';
+      // Midnight-Sapphire & Diamond-Spike Cryo Howitzer!
+      AssetFactory.roundRectPath(ctx, 2, -4.8, 22, 9.6, 2.2);
+      ctx.fillStyle = '#072233';
       ctx.fill();
       ctx.lineWidth = 1.9;
       ctx.strokeStyle = outline;
       ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(22, -6.2);
-      ctx.lineTo(29.5, 0);
-      ctx.lineTo(22, 6.2);
+      ctx.moveTo(20, -7.2);
+      ctx.lineTo(30.5, 0);
+      ctx.lineTo(20, 7.2);
       ctx.closePath();
-      ctx.fillStyle = '#00E5FF';
+      ctx.fillStyle = '#84FFFF';
       ctx.fill();
+      ctx.lineWidth = 1.7;
+      ctx.strokeStyle = '#072233';
       ctx.stroke();
     } else if (skill === 'barrier') {
-      // Wide flat force-wall projector emitter bar
-      AssetFactory.roundRectPath(ctx, 2, -3.5, 19, 7.0, 1.8);
-      ctx.fillStyle = '#263238';
+      // Wide T-Shaped Obsidian-Emerald Hard-Light Emitter!
+      AssetFactory.roundRectPath(ctx, 2, -3.8, 19, 7.6, 1.8);
+      ctx.fillStyle = '#0A1F15';
       ctx.fill();
       ctx.lineWidth = 1.8;
       ctx.strokeStyle = outline;
       ctx.stroke();
-      AssetFactory.roundRectPath(ctx, 19.5, -8.5, 6.5, 17, 2);
-      ctx.fillStyle = '#00E676';
+      AssetFactory.roundRectPath(ctx, 19.5, -10.0, 7.2, 20.0, 2.2);
+      ctx.fillStyle = '#0A1F15';
       ctx.fill();
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = '#00E676';
       ctx.stroke();
+      ctx.fillStyle = '#69F0AE';
+      ctx.fillRect(21.8, -7.8, 2.8, 15.6);
     } else if (skill === 'warp') {
-      AssetFactory.roundRectPath(ctx, 2, -3.6, 22, 7.2, 2);
-      ctx.fillStyle = '#4A148C';
+      // Chrono-Abyssal Singularity Cannon!
+      AssetFactory.roundRectPath(ctx, 2, -4.2, 21, 8.4, 2);
+      ctx.fillStyle = '#090614';
       ctx.fill();
       ctx.lineWidth = 1.8;
-      ctx.strokeStyle = outline;
+      ctx.strokeStyle = '#E040FB';
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(24.5, 0, 4.6, 0, Math.PI * 2);
+      ctx.arc(25.0, 0, 5.4, 0, Math.PI * 2);
+      ctx.fillStyle = '#090614';
+      ctx.fill();
+      ctx.lineWidth = 2.0;
+      ctx.strokeStyle = '#80D8FF';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(25.0, 0, 2.2, 0, Math.PI * 2);
       ctx.fillStyle = '#EA80FC';
       ctx.fill();
-      ctx.stroke();
     } else {
       AssetFactory.roundRectPath(ctx, 2, -3.6, 25, 7.2, 2.0);
       const barrelGrad = ctx.createLinearGradient(2, -3.6, 2, 3.6);
@@ -1693,29 +1740,46 @@ export class AssetFactory {
     const c = size / 2;
     const r = size * 0.42;
 
-    const glow = ctx.createRadialGradient(c, c, 1, c, c, r * 1.12);
-    glow.addColorStop(0, '#FFFFFF');
-    glow.addColorStop(0.45, '#00E5FF');
-    glow.addColorStop(0.8, '#651FFF');
-    glow.addColorStop(1, 'rgba(49, 27, 146, 0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(c, c, r * 1.12, 0, Math.PI * 2);
-    ctx.fill();
+    // 1. Dark Obsidian Contrast Casing + 4 Sharp Tesla Prongs
+    ctx.fillStyle = '#0A0818';
+    ctx.strokeStyle = '#651FFF';
+    ctx.lineWidth = 1.6;
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2 + Math.PI / 4;
+      ctx.beginPath();
+      ctx.moveTo(c + Math.cos(a - 0.3) * (r * 0.62), c + Math.sin(a - 0.3) * (r * 0.62));
+      ctx.lineTo(c + Math.cos(a) * (r * 1.12), c + Math.sin(a) * (r * 1.12));
+      ctx.lineTo(c + Math.cos(a + 0.3) * (r * 0.62), c + Math.sin(a + 0.3) * (r * 0.62));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
 
     ctx.beginPath();
-    ctx.arc(c, c, r * 0.72, 0, Math.PI * 2);
-    ctx.strokeStyle = '#18191B';
-    ctx.lineWidth = 1.6;
+    ctx.arc(c, c, r * 0.78, 0, Math.PI * 2);
+    ctx.fillStyle = '#0C091E';
+    ctx.fill();
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = '#00E5FF';
     ctx.stroke();
 
-    ctx.strokeStyle = '#FFEA00';
-    ctx.lineWidth = 1.7;
+    // 2. Incandescent Plasma Core + Gold Lightning Rune
+    const glow = ctx.createRadialGradient(c, c, 0.8, c, c, r * 0.65);
+    glow.addColorStop(0, '#FFFFFF');
+    glow.addColorStop(0.5, '#00E5FF');
+    glow.addColorStop(1, '#651FFF');
+    ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.moveTo(c - 4, c - 2);
-    ctx.lineTo(c + 1, c - 5);
-    ctx.lineTo(c - 1, c + 2);
-    ctx.lineTo(c + 4, c + 4);
+    ctx.arc(c, c, r * 0.56, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#FFEA00';
+    ctx.lineWidth = 2.0;
+    ctx.beginPath();
+    ctx.moveTo(c + 1, c - 5);
+    ctx.lineTo(c - 3.5, c + 0.5);
+    ctx.lineTo(c + 1.5, c + 0.5);
+    ctx.lineTo(c - 1, c + 5);
     ctx.stroke();
 
     tex.addCanvas(key, canvas);
@@ -1728,26 +1792,35 @@ export class AssetFactory {
   ): void {
     const { canvas, ctx } = AssetFactory.makeCanvas(size, size);
     const c = size / 2;
-    const r = size * 0.42;
+    const outerR = size * 0.46;
+    const innerR = size * 0.24;
 
+    // 8-Pointed Midnight-Sapphire & Diamond-Cyan Glacial Star!
     ctx.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const r = i % 2 === 0 ? outerR : innerR;
       const px = c + Math.cos(a) * r;
       const py = c + Math.sin(a) * r;
       if (i === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     }
     ctx.closePath();
-    const grad = ctx.createRadialGradient(c - 2, c - 2, 1, c, c, r);
+    const grad = ctx.createRadialGradient(c, c, 1, c, c, outerR);
     grad.addColorStop(0, '#FFFFFF');
-    grad.addColorStop(0.55, '#84FFFF');
-    grad.addColorStop(1, '#00838F');
+    grad.addColorStop(0.45, '#84FFFF');
+    grad.addColorStop(0.82, '#00838F');
+    grad.addColorStop(1, '#062130');
     ctx.fillStyle = grad;
     ctx.fill();
-    ctx.lineWidth = 1.6;
-    ctx.strokeStyle = '#0D2933';
+    ctx.lineWidth = 2.0;
+    ctx.strokeStyle = '#062130';
     ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(c, c, innerR * 0.65, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
 
     tex.addCanvas(key, canvas);
   }
@@ -1759,28 +1832,36 @@ export class AssetFactory {
   ): void {
     const { canvas, ctx } = AssetFactory.makeCanvas(size, size);
     const c = size / 2;
-    const r = size * 0.42;
+    const r = size * 0.44;
 
+    // 1. Pitch-black Event Horizon Core Disc (high contrast on #F3F3F1 floor!)
     ctx.beginPath();
     ctx.arc(c, c, r, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(74, 20, 140, 0.88)';
+    ctx.fillStyle = '#070412';
     ctx.fill();
-    ctx.lineWidth = 2.2;
-    ctx.strokeStyle = '#EA80FC';
+    ctx.lineWidth = 2.8;
+    ctx.strokeStyle = '#E040FB';
     ctx.stroke();
 
-    ctx.strokeStyle = '#80D8FF';
-    ctx.lineWidth = 1.8;
-    for (let i = 0; i < 4; i++) {
-      const a = (i * Math.PI) / 2 + Math.PI / 4;
+    // 2. 8-Pointed Stargate Chrono-Star
+    ctx.strokeStyle = '#00E5FF';
+    ctx.lineWidth = 1.9;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
       ctx.beginPath();
-      ctx.moveTo(c + Math.cos(a) * (r * 0.42), c + Math.sin(a) * (r * 0.42));
-      ctx.lineTo(c + Math.cos(a) * (r * 0.92), c + Math.sin(a) * (r * 0.92));
+      ctx.moveTo(c + Math.cos(a) * (r * 0.36), c + Math.sin(a) * (r * 0.36));
+      ctx.lineTo(c + Math.cos(a) * (r * 0.88), c + Math.sin(a) * (r * 0.88));
       ctx.stroke();
     }
 
     ctx.beginPath();
-    ctx.arc(c, c, r * 0.34, 0, Math.PI * 2);
+    ctx.arc(c, c, r * 0.46, 0, Math.PI * 2);
+    ctx.strokeStyle = '#EA80FC';
+    ctx.lineWidth = 2.0;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(c, c, r * 0.24, 0, Math.PI * 2);
     ctx.fillStyle = '#FFFFFF';
     ctx.fill();
 

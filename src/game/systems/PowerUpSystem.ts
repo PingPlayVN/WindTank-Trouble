@@ -92,6 +92,24 @@ interface WarpBeaconVisualEntry {
   ring: Phaser.GameObjects.Arc;
 }
 
+interface ActiveEmpCataclysm {
+  x: number;
+  y: number;
+  radius: number;
+  age: number;
+  duration: number;
+}
+
+interface ActiveWarpCataclysm {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  blastRadius: number;
+  age: number;
+  duration: number;
+}
+
 export class PowerUpSystem {
   private readonly scene: Phaser.Scene;
   private readonly arena: BuiltArenaLayout;
@@ -120,6 +138,8 @@ export class PowerUpSystem {
   private readonly warpBeacons: WarpBeaconVisualEntry[] = [];
   private readonly pendingEmpBlasts: Array<{ x: number; y: number; ownerIndex: PlayerIndex }> = [];
   private readonly pendingWarpBlasts: Array<{ x: number; y: number; ownerIndex: PlayerIndex }> = [];
+  private readonly activeEmpCataclysms: ActiveEmpCataclysm[] = [];
+  private readonly activeWarpCataclysms: ActiveWarpCataclysm[] = [];
   private readonly zoneGraphics: Phaser.GameObjects.Graphics;
   private readonly barrierGraphics: Phaser.GameObjects.Graphics;
   private readonly holoGraphics: Phaser.GameObjects.Graphics;
@@ -450,8 +470,8 @@ export class PowerUpSystem {
         existing.state.age = z.age;
       } else {
         const disc = this.scene.add
-          .circle(z.x, z.y, z.radius, 0x80deea, 0.34)
-          .setStrokeStyle(2.2 * scale, 0x00acc1, 0.72)
+          .circle(z.x, z.y, z.radius, 0x072638, 0.56)
+          .setStrokeStyle(3.0 * scale, 0x041824, 0.88)
           .setDepth(5.5);
         this.cryoZones.push({
           state: {
@@ -1246,6 +1266,7 @@ export class PowerUpSystem {
 
       audioManager.playWarpTeleport();
       this.effectsSystem.emitWarpTeleport(fromX, fromY, toX, toY, blastR);
+      this.triggerWarpCataclysmVisual(fromX, fromY, toX, toY, blastR);
       this.netEventSink?.({
         kind: 'hazard_fx',
         sub: 'warp_teleport',
@@ -1292,6 +1313,34 @@ export class PowerUpSystem {
     }
   }
 
+  triggerEmpCataclysmVisual(x: number, y: number, radius: number): void {
+    this.activeEmpCataclysms.push({
+      x,
+      y,
+      radius,
+      age: 0,
+      duration: 0.88,
+    });
+  }
+
+  triggerWarpCataclysmVisual(
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+    blastRadius: number,
+  ): void {
+    this.activeWarpCataclysms.push({
+      fromX,
+      fromY,
+      toX,
+      toY,
+      blastRadius,
+      age: 0,
+      duration: 0.82,
+    });
+  }
+
   private spawnCryoZone(cx: number, cy: number, ownerIndex: PlayerIndex): void {
     const scale = this.arena.scaleRatio;
     const zoneR = this.arena.cellSize * POWERUP_CONFIG.cryoZoneCellsRadius;
@@ -1306,8 +1355,8 @@ export class PowerUpSystem {
     });
 
     const disc = this.scene.add
-      .circle(cx, cy, zoneR, 0x80deea, 0.34)
-      .setStrokeStyle(2.2 * scale, 0x00acc1, 0.72)
+      .circle(cx, cy, zoneR, 0x072638, 0.56)
+      .setStrokeStyle(3.0 * scale, 0x041824, 0.88)
       .setDepth(5.5);
     this.cryoZones.push({
       state: {
@@ -1334,6 +1383,7 @@ export class PowerUpSystem {
     const blastR = this.arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius;
     audioManager.playEmpBlast();
     this.effectsSystem.emitEmpBlast(cx, cy, blastR);
+    this.triggerEmpCataclysmVisual(cx, cy, blastR);
     this.netEventSink?.({
       kind: 'hazard_fx',
       sub: 'emp_blast',
@@ -2036,203 +2086,502 @@ export class PowerUpSystem {
       }
     }
 
-    // Update Cryo Zones, Energy Force Barriers & Warp Beacons with rich procedural geometry!
+    // Update Cryo Zones, Energy Force Barriers, Warp Stargates & Reaper-Tier Cataclysms!
     this.zoneGraphics.clear();
     this.holoGraphics.clear();
+    this.reaperShadowGraphics.clear();
+    this.reaperGraphics.clear();
 
+    // A. Live Tactical Detonation Range Ring around flying `emp_orb`!
+    for (const proj of this.projectileSystem.getPool()) {
+      const k = proj.kinematics;
+      if (!k.active || k.variant !== 'emp_orb') continue;
+      const blastR = this.arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius;
+      const pulse = 0.7 + 0.3 * Math.sin(this.animClock * 14);
+      this.zoneGraphics.lineStyle(2.2 * scale, 0x0c091e, 0.36 * pulse);
+      this.zoneGraphics.strokeCircle(k.x, k.y, blastR);
+      const segs = 18;
+      for (let sIdx = 0; sIdx < segs; sIdx += 2) {
+        const a0 = this.animClock * 1.4 + (sIdx / segs) * Math.PI * 2;
+        const a1 = a0 + (Math.PI * 2) / (segs * 1.6);
+        this.zoneGraphics.lineStyle(2.0 * scale, 0x651fff, 0.62 * pulse);
+        this.zoneGraphics.beginPath();
+        this.zoneGraphics.arc(k.x, k.y, blastR, a0, a1, false);
+        this.zoneGraphics.strokePath();
+      }
+    }
+
+    // B. Deep Midnight-Sapphire Glacial Cathedral (`cryoZones` — razor-sharp contrast on #F3F3F1!)
     for (const cz of this.cryoZones) {
       const rem = cz.state.duration - cz.state.age;
       const fade = rem < 1.0 ? Math.max(0.1, rem) : 1;
       const cx = cz.state.x;
       const cy = cz.state.y;
       const r = cz.state.radius;
-      cz.disc.setAlpha((0.24 + 0.07 * Math.sin(this.animClock * 5 + cz.state.id)) * fade);
+      cz.disc.setAlpha((0.54 + 0.06 * Math.sin(this.animClock * 5 + cz.state.id)) * fade);
 
-      // Rotating 6-branch glacial snowflake mandala + inner frost hexagon!
-      const slowRot = this.animClock * 0.45 + cz.state.id;
-      this.zoneGraphics.lineStyle(1.8 * scale, 0xffffff, 0.62 * fade);
-      for (let i = 0; i < 6; i++) {
-        const a = slowRot + (i * Math.PI) / 3;
-        const tipX = cx + Math.cos(a) * (r * 0.84);
-        const tipY = cy + Math.sin(a) * (r * 0.84);
-        this.zoneGraphics.lineBetween(cx, cy, tipX, tipY);
-
-        const branchDist = r * 0.52;
-        const bx = cx + Math.cos(a) * branchDist;
-        const by = cy + Math.sin(a) * branchDist;
-        for (const side of [-0.55, 0.55]) {
-          this.zoneGraphics.lineBetween(
-            bx,
-            by,
-            bx + Math.cos(a + side) * (r * 0.22),
-            by + Math.sin(a + side) * (r * 0.22),
-          );
-        }
-      }
-
-      // Inner crystal hexagon
-      this.zoneGraphics.lineStyle(1.5 * scale, 0x00bcd4, 0.52 * fade);
+      // 1. Jagged 16-tooth outer glacial ice cliff + inner cyan crystal ring
+      this.zoneGraphics.fillStyle(0x00838f, 0.42 * fade);
+      this.zoneGraphics.lineStyle(2.8 * scale, 0x00e5ff, 0.92 * fade);
       this.zoneGraphics.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = -slowRot * 0.8 + (i * Math.PI) / 3;
-        const px = cx + Math.cos(a) * (r * 0.42);
-        const py = cy + Math.sin(a) * (r * 0.42);
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2 + cz.state.id * 0.3;
+        const jr = r * (i % 2 === 0 ? 1.03 : 0.91);
+        const px = cx + Math.cos(a) * jr;
+        const py = cy + Math.sin(a) * jr;
         if (i === 0) this.zoneGraphics.moveTo(px, py);
         else this.zoneGraphics.lineTo(px, py);
       }
       this.zoneGraphics.closePath();
+      this.zoneGraphics.fillPath();
       this.zoneGraphics.strokePath();
 
-      // Twinkling frost glints across the ice sheet
-      for (let gIdx = 0; gIdx < 4; gIdx++) {
-        const ga = cz.state.id * 1.7 + gIdx * 1.57 + this.animClock * 0.9;
-        const gd = r * (0.28 + (gIdx % 2) * 0.38);
-        const twinkle = Math.max(0, Math.sin(this.animClock * 7 + gIdx * 2.1 + cz.state.id));
-        if (twinkle > 0.2) {
-          this.holoGraphics.fillStyle(0xffffff, 0.72 * twinkle * fade);
-          this.holoGraphics.fillCircle(
-            cx + Math.cos(ga) * gd,
-            cy + Math.sin(ga) * gd,
-            (1.6 + twinkle * 1.4) * scale,
+      // 2. Rotating 6-Pointed Diamond-Faceted Snowflake Cathedral!
+      const slowRot = this.animClock * 0.55 + cz.state.id;
+      for (let i = 0; i < 6; i++) {
+        const a = slowRot + (i * Math.PI) / 3;
+        const ux = Math.cos(a);
+        const uy = Math.sin(a);
+        const nx = -uy;
+        const ny = ux;
+        const tipR = r * 0.88;
+        const midR = r * 0.48;
+        const wingW = r * 0.13;
+
+        // Faceted ice spear blade (dark sapphire outline + bright cyan-white fill!)
+        this.zoneGraphics.fillStyle(0x84ffff, 0.72 * fade);
+        this.zoneGraphics.lineStyle(1.8 * scale, 0x041824, 0.9 * fade);
+        this.zoneGraphics.beginPath();
+        this.zoneGraphics.moveTo(cx, cy);
+        this.zoneGraphics.lineTo(cx + ux * midR + nx * wingW, cy + uy * midR + ny * wingW);
+        this.zoneGraphics.lineTo(cx + ux * tipR, cy + uy * tipR);
+        this.zoneGraphics.lineTo(cx + ux * midR - nx * wingW, cy + uy * midR - ny * wingW);
+        this.zoneGraphics.closePath();
+        this.zoneGraphics.fillPath();
+        this.zoneGraphics.strokePath();
+
+        // Pure white razor spine + barbs
+        this.zoneGraphics.lineStyle(2.0 * scale, 0xffffff, 0.94 * fade);
+        this.zoneGraphics.lineBetween(cx, cy, cx + ux * tipR, cy + uy * tipR);
+        const bx = cx + ux * (r * 0.58);
+        const by = cy + uy * (r * 0.58);
+        for (const side of [-0.58, 0.58]) {
+          this.zoneGraphics.lineBetween(
+            bx,
+            by,
+            bx + Math.cos(a + side) * (r * 0.24),
+            by + Math.sin(a + side) * (r * 0.24),
           );
         }
       }
+
+      // 3. Central Arctic Core Gem
+      this.zoneGraphics.fillStyle(0x041824, 0.92 * fade);
+      this.zoneGraphics.fillCircle(cx, cy, 7.5 * scale);
+      this.zoneGraphics.fillStyle(0xffffff, 0.96 * fade);
+      this.zoneGraphics.fillCircle(cx, cy, 4.2 * scale);
     }
 
+    // C. Chrono-Abyssal Stargate (`warpBeacons` — Black-Hole Event Horizon + Clockwork Runes!)
     for (const wb of this.warpBeacons) {
       wb.sprite.rotation += dt * 2.8;
       const rem = wb.state.maxDuration - wb.state.age;
-      const blink = rem < 2.0 ? 0.35 + 0.65 * Math.abs(Math.sin(rem * 16)) : 1;
+      const ratio = Math.max(0, Math.min(1, rem / wb.state.maxDuration));
+      const blink = rem < 2.0 ? 0.4 + 0.6 * Math.abs(Math.sin(rem * 16)) : 1;
       const bx = wb.state.x;
       const by = wb.state.y;
       wb.sprite.setAlpha(blink);
-      wb.ring
-        .setScale(1 + Math.sin(this.animClock * 7 + wb.state.id) * 0.14)
-        .setAlpha(0.75 * blink);
+      wb.ring.setVisible(false);
 
-      // Counter-rotating sacred-geometry square sigils + 3 orbiting dimensional satellites!
-      const sigilR = 19 * scale;
+      const gateR = 25 * scale;
+      // 1. Pitch-black Void Event Horizon Pool (`zoneGraphics`, `NORMAL` blend!)
+      this.zoneGraphics.fillStyle(0x070412, 0.88 * blink);
+      this.zoneGraphics.fillCircle(bx, by, gateR);
+      this.zoneGraphics.lineStyle(3.2 * scale, 0xe040fb, 0.95 * blink);
+      this.zoneGraphics.strokeCircle(bx, by, gateR);
+
+      // 12-tick Clockwork Duration Dial around Stargate
+      this.zoneGraphics.lineStyle(3.0 * scale, 0x00e5ff, 0.95 * blink);
+      this.zoneGraphics.beginPath();
+      this.zoneGraphics.arc(bx, by, gateR * 1.16, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
+      this.zoneGraphics.strokePath();
+
+      // 2. Counter-rotating Sacred-Geometry Hexagram Sigils (`holoGraphics` + `zoneGraphics`)
       for (const [dir, col] of [
         [1, 0xe040fb],
-        [-1.3, 0x80d8ff],
+        [-1.35, 0x00e5ff],
       ] as const) {
-        const rot = this.animClock * 2.4 * dir + wb.state.id;
-        this.holoGraphics.lineStyle(1.6 * scale, col, 0.68 * blink);
-        this.holoGraphics.beginPath();
+        const rot = this.animClock * 2.5 * dir + wb.state.id;
+        this.zoneGraphics.lineStyle(1.9 * scale, col, 0.88 * blink);
+        this.zoneGraphics.beginPath();
         for (let k = 0; k < 4; k++) {
           const a = rot + (k * Math.PI) / 2;
-          const px = bx + Math.cos(a) * sigilR;
-          const py = by + Math.sin(a) * sigilR;
-          if (k === 0) this.holoGraphics.moveTo(px, py);
-          else this.holoGraphics.lineTo(px, py);
+          const px = bx + Math.cos(a) * (gateR * 0.84);
+          const py = by + Math.sin(a) * (gateR * 0.84);
+          if (k === 0) this.zoneGraphics.moveTo(px, py);
+          else this.zoneGraphics.lineTo(px, py);
         }
-        this.holoGraphics.closePath();
-        this.holoGraphics.strokePath();
+        this.zoneGraphics.closePath();
+        this.zoneGraphics.strokePath();
       }
 
-      for (let m = 0; m < 3; m++) {
-        const ma = this.animClock * 5.2 + (m * Math.PI * 2) / 3;
-        const mx = bx + Math.cos(ma) * (23 * scale);
-        const my = by + Math.sin(ma) * (23 * scale);
-        this.holoGraphics.fillStyle(m % 2 === 0 ? 0x80d8ff : 0xea80fc, 0.92 * blink);
-        this.holoGraphics.fillCircle(mx, my, 2.3 * scale);
+      for (let m = 0; m < 4; m++) {
+        const ma = this.animClock * 5.2 + (m * Math.PI) / 2;
+        const mx = bx + Math.cos(ma) * (gateR * 1.24);
+        const my = by + Math.sin(ma) * (gateR * 1.24);
+        this.zoneGraphics.fillStyle(0x070412, 0.95 * blink);
+        this.zoneGraphics.fillCircle(mx, my, 4.0 * scale);
+        this.zoneGraphics.fillStyle(m % 2 === 0 ? 0x00e5ff : 0xe040fb, 0.98 * blink);
+        this.zoneGraphics.fillCircle(mx, my, 2.4 * scale);
       }
 
-      // Subtle quantum-tether pulses linking the beacon to its owner tank!
+      // 3. High-contrast Obsidian-Shrouded Quantum Tether pulsing to owner tank!
       const owner = tanks.find((t) => t.index === wb.state.ownerIndex && t.kinematics.alive);
       if (owner && owner.isWarpBeaconPlaced()) {
         const dx = owner.kinematics.x - bx;
         const dy = owner.kinematics.y - by;
         const dist = Math.hypot(dx, dy);
-        if (dist > 26 * scale) {
-          const dots = Math.min(14, Math.max(3, Math.floor(dist / (32 * scale))));
-          const phaseShift = (this.animClock * 2.2) % 1;
+        if (dist > 28 * scale) {
+          const dots = Math.min(16, Math.max(4, Math.floor(dist / (30 * scale))));
+          const phaseShift = (this.animClock * 2.4) % 1;
           for (let d = 0; d < dots; d++) {
             const u = 1 - ((d + phaseShift) / dots);
             const px = bx + dx * u;
             const py = by + dy * u;
-            this.holoGraphics.fillStyle(0xea80fc, 0.34 * blink);
-            this.holoGraphics.fillCircle(px, py, 2.0 * scale);
+            this.zoneGraphics.fillStyle(0x090614, 0.65 * blink);
+            this.zoneGraphics.fillCircle(px, py, 3.2 * scale);
+            this.zoneGraphics.fillStyle(d % 2 === 0 ? 0xe040fb : 0x00e5ff, 0.92 * blink);
+            this.zoneGraphics.fillCircle(px, py, 1.9 * scale);
           }
         }
       }
     }
 
-    // Live Holographic Doorway Preview when a tank holds `barrier` (`Súng Xây Tường Năng Lượng`)!
+    // D. High-Contrast Tactical Laser Blueprint when holding `barrier`!
     for (const tank of tanks) {
       if (!tank.kinematics.alive || tank.getEquippedSkill() !== 'barrier') continue;
       const preview = previewEnergyBarrierEdge(tank.kinematics, this.arena);
       if (!preview) continue;
-      const pulse = 0.45 + 0.35 * Math.sin(this.animClock * 10);
-      this.holoGraphics.lineStyle(7 * scale, 0x00e676, 0.24 * pulse);
-      this.holoGraphics.lineBetween(preview.x0, preview.y0, preview.x1, preview.y1);
+      const pulse = 0.65 + 0.35 * Math.sin(this.animClock * 10);
+      this.zoneGraphics.lineStyle(9 * scale, 0x071f14, 0.48 * pulse);
+      this.zoneGraphics.lineBetween(preview.x0, preview.y0, preview.x1, preview.y1);
 
       const segs = 7;
       for (let sIdx = 0; sIdx < segs; sIdx += 2) {
         const f0 = sIdx / segs;
         const f1 = Math.min(1, (sIdx + 1) / segs);
-        this.holoGraphics.lineStyle(2.6 * scale, 0x69f0ae, 0.72 * pulse);
-        this.holoGraphics.lineBetween(
+        this.zoneGraphics.lineStyle(3.4 * scale, 0x00e676, 0.92 * pulse);
+        this.zoneGraphics.lineBetween(
           preview.x0 + (preview.x1 - preview.x0) * f0,
           preview.y0 + (preview.y1 - preview.y0) * f0,
           preview.x0 + (preview.x1 - preview.x0) * f1,
           preview.y0 + (preview.y1 - preview.y0) * f1,
         );
       }
-      this.holoGraphics.fillStyle(0x69f0ae, 0.78 * pulse);
-      this.holoGraphics.fillCircle(preview.x0, preview.y0, 3.2 * scale);
-      this.holoGraphics.fillCircle(preview.x1, preview.y1, 3.2 * scale);
+      for (const [px, py] of [
+        [preview.x0, preview.y0],
+        [preview.x1, preview.y1],
+      ]) {
+        this.zoneGraphics.fillStyle(0x071f14, 0.9 * pulse);
+        this.zoneGraphics.fillCircle(px, py, 5.2 * scale);
+        this.zoneGraphics.fillStyle(0x69f0ae, 0.96 * pulse);
+        this.zoneGraphics.fillCircle(px, py, 2.8 * scale);
+      }
     }
 
+    // E. Titan Hard-Light Plasma Bastion (`barriers` — Obsidian Shroud + Honeycomb + Live Plasma Arc!)
     this.barrierGraphics.clear();
     for (const b of this.barriers) {
       const rem = b.duration - b.age;
-      const blink = rem < 1.5 ? 0.35 + 0.65 * Math.abs(Math.sin(rem * 18)) : 1;
-
-      // Additive neon emerald plasma aura (`holoGraphics`)
-      this.holoGraphics.lineStyle(18 * scale, 0x00e676, 0.28 * blink);
-      this.holoGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
-      this.holoGraphics.lineStyle(9 * scale, 0x69f0ae, 0.48 * blink);
-      this.holoGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
-
-      // Solid high-contrast energy core + scrolling interference nodes (`barrierGraphics`)
-      this.barrierGraphics.lineStyle(7.2 * scale, 0x00c853, 0.94 * blink);
-      this.barrierGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
-      this.barrierGraphics.lineStyle(2.8 * scale, 0xe8f5e9, 0.96 * blink);
-      this.barrierGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
-
+      const blink = rem < 1.5 ? 0.4 + 0.6 * Math.abs(Math.sin(rem * 18)) : 1;
       const dx = b.x1 - b.x0;
       const dy = b.y1 - b.y0;
       const len = Math.hypot(dx, dy) || 1;
       const nx = -dy / len;
       const ny = dx / len;
+
+      // 1. Dark Obsidian-Emerald Containment Shroud (`barrierGraphics`, `NORMAL` blend!)
+      this.barrierGraphics.lineStyle(16.5 * scale, 0x061b11, 0.88 * blink);
+      this.barrierGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
+      this.barrierGraphics.lineStyle(9.5 * scale, 0x00c853, 0.95 * blink);
+      this.barrierGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
+      this.barrierGraphics.lineStyle(3.6 * scale, 0xffffff, 0.98 * blink);
+      this.barrierGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
+
+      // 2. Additive Emerald-Cyan Glow + Live Crackling Lightning Arc (`reaperGraphics` `ADD` blend!)
+      this.reaperGraphics.lineStyle(20 * scale, 0x00e676, 0.34 * blink);
+      this.reaperGraphics.lineBetween(b.x0, b.y0, b.x1, b.y1);
+
+      this.reaperGraphics.lineStyle(2.2 * scale, 0x84ffff, 0.95 * blink);
+      this.reaperGraphics.beginPath();
+      const arcSteps = 8;
+      for (let k = 0; k <= arcSteps; k++) {
+        const f = k / arcSteps;
+        const jit = k > 0 && k < arcSteps ? (Math.random() - 0.5) * 11 * scale : 0;
+        const px = b.x0 + dx * f + nx * jit;
+        const py = b.y0 + dy * f + ny * jit;
+        if (k === 0) this.reaperGraphics.moveTo(px, py);
+        else this.reaperGraphics.lineTo(px, py);
+      }
+      this.reaperGraphics.strokePath();
+
+      // Scrolling Hard-Light Hexagonal Chevrons & Side Force-Fins!
       const scroll = (this.animClock * 1.8) % 1;
-      for (let k = 0; k < 4; k++) {
-        const f = (k / 4 + scroll) % 1;
+      for (let k = 0; k < 5; k++) {
+        const f = (k / 5 + scroll) % 1;
         const px = b.x0 + dx * f;
         const py = b.y0 + dy * f;
-        const rib = 4.5 * scale;
-        this.holoGraphics.lineStyle(1.8 * scale, 0x84ffff, 0.85 * blink);
-        this.holoGraphics.lineBetween(px - nx * rib, py - ny * rib, px + nx * rib, py + ny * rib);
+        const rib = 8.2 * scale;
+        this.barrierGraphics.lineStyle(3.2 * scale, 0x061b11, 0.85 * blink);
+        this.barrierGraphics.lineBetween(px - nx * rib, py - ny * rib, px + nx * rib, py + ny * rib);
+        this.barrierGraphics.lineStyle(1.8 * scale, 0x69f0ae, 0.98 * blink);
+        this.barrierGraphics.lineBetween(px - nx * rib, py - ny * rib, px + nx * rib, py + ny * rib);
       }
 
-      // Armored emitter pylons at both ends
+      // 3. Heavy Octagonal Obsidian-Emerald Anchor Pylons at both ends
       for (const [px, py] of [
         [b.x0, b.y0],
         [b.x1, b.y1],
       ]) {
-        this.barrierGraphics.fillStyle(0x1b5e20, 0.98 * blink);
-        this.barrierGraphics.fillCircle(px, py, 5.4 * scale);
-        this.barrierGraphics.lineStyle(1.5 * scale, 0x18191b, 0.95 * blink);
-        this.barrierGraphics.strokeCircle(px, py, 5.4 * scale);
-        this.barrierGraphics.fillStyle(0x69f0ae, 0.98 * blink);
-        this.barrierGraphics.fillCircle(px, py, 2.6 * scale);
+        this.barrierGraphics.fillStyle(0x061b11, 0.98 * blink);
+        this.barrierGraphics.fillCircle(px, py, 9.2 * scale);
+        this.barrierGraphics.lineStyle(2.4 * scale, 0x00e676, 0.98 * blink);
+        this.barrierGraphics.strokeCircle(px, py, 9.2 * scale);
+        this.barrierGraphics.fillStyle(0xffffff, 0.98 * blink);
+        this.barrierGraphics.fillCircle(px, py, 3.6 * scale);
+      }
+    }
+
+    // F. Reaper-Class 60-FPS Frame-Animated EMP Thunder-God Array (Open Concentric Runic Rings + Giant Thunderbolts!)
+    for (let i = this.activeEmpCataclysms.length - 1; i >= 0; i--) {
+      const emp = this.activeEmpCataclysms[i];
+      emp.age += dt;
+      if (emp.age >= emp.duration) {
+        this.activeEmpCataclysms.splice(i, 1);
+        continue;
+      }
+      const p = emp.age / emp.duration;
+      const expand = p < 0.16 ? 1 - Math.pow(1 - p / 0.16, 3) : 1.0;
+      const fade = p > 0.62 ? Math.max(0, 1 - (p - 0.62) / 0.38) : 1.0;
+      const r = emp.radius * expand;
+
+      // 1. Open Concentric Obsidian-Violet Magic Rings & Hexagram (keeps arena walls crisp underneath!)
+      this.reaperShadowGraphics.fillStyle(0x080618, 0.16 * fade);
+      this.reaperShadowGraphics.fillCircle(emp.x, emp.y, r);
+      this.reaperShadowGraphics.lineStyle(9.5 * scale, 0x080618, 0.92 * fade);
+      this.reaperShadowGraphics.strokeCircle(emp.x, emp.y, r);
+      this.reaperShadowGraphics.lineStyle(5.5 * scale, 0x080618, 0.85 * fade);
+      this.reaperShadowGraphics.strokeCircle(emp.x, emp.y, r * 0.64);
+
+      const runeSpin = emp.age * 3.6;
+      // Rotating 6-Pointed Thunder-God Star inside the ring!
+      for (const starOffset of [0, Math.PI / 3]) {
+        this.reaperShadowGraphics.lineStyle(4.8 * scale, 0x080618, 0.78 * fade);
+        this.reaperShadowGraphics.beginPath();
+        for (let v = 0; v < 3; v++) {
+          const va = runeSpin + starOffset + (v * Math.PI * 2) / 3;
+          const vx = emp.x + Math.cos(va) * (r * 0.88);
+          const vy = emp.y + Math.sin(va) * (r * 0.88);
+          if (v === 0) this.reaperShadowGraphics.moveTo(vx, vy);
+          else this.reaperShadowGraphics.lineTo(vx, vy);
+        }
+        this.reaperShadowGraphics.closePath();
+        this.reaperShadowGraphics.strokePath();
+
+        this.reaperGraphics.lineStyle(2.4 * scale, starOffset === 0 ? 0x651fff : 0x00e5ff, 0.92 * fade);
+        this.reaperGraphics.beginPath();
+        for (let v = 0; v < 3; v++) {
+          const va = runeSpin + starOffset + (v * Math.PI * 2) / 3;
+          const vx = emp.x + Math.cos(va) * (r * 0.88);
+          const vy = emp.y + Math.sin(va) * (r * 0.88);
+          if (v === 0) this.reaperGraphics.moveTo(vx, vy);
+          else this.reaperGraphics.lineTo(vx, vy);
+        }
+        this.reaperGraphics.closePath();
+        this.reaperGraphics.strokePath();
+      }
+
+      // Outer Blazing Plasma Rim + Expanding Shockwave Ring
+      this.reaperGraphics.lineStyle(10 * scale, 0x651fff, 0.65 * fade);
+      this.reaperGraphics.strokeCircle(emp.x, emp.y, r);
+      this.reaperGraphics.lineStyle(3.6 * scale, 0x00e5ff, 0.98 * fade);
+      this.reaperGraphics.strokeCircle(emp.x, emp.y, r);
+      this.reaperGraphics.lineStyle(2.4 * scale, 0xffea00, 0.9 * fade);
+      this.reaperGraphics.strokeCircle(emp.x, emp.y, r * 0.64);
+
+      for (let k = 0; k < 16; k++) {
+        const a = -runeSpin * 1.4 + (k / 16) * Math.PI * 2;
+        this.reaperGraphics.lineStyle(2.8 * scale, k % 2 === 0 ? 0x00e5ff : 0xffea00, 0.96 * fade);
+        this.reaperGraphics.lineBetween(
+          emp.x + Math.cos(a) * (r * 0.88),
+          emp.y + Math.sin(a) * (r * 0.88),
+          emp.x + Math.cos(a) * (r * 1.05),
+          emp.y + Math.sin(a) * (r * 1.05),
+        );
+      }
+
+      // 2. 10 Live Re-Striking Forked Thunderbolts (`Obsidian Shroud + Cyan/Gold Core`!)
+      const bolts = 10;
+      for (let b = 0; b < bolts; b++) {
+        const baseA = -runeSpin * 0.5 + (b / bolts) * Math.PI * 2;
+        const pts: Array<{ x: number; y: number }> = [{ x: emp.x, y: emp.y }];
+        const segs = 5;
+        for (let sIdx = 1; sIdx <= segs; sIdx++) {
+          const f = sIdx / segs;
+          const jit = sIdx < segs ? (Math.random() - 0.5) * 0.36 : 0;
+          pts.push({
+            x: emp.x + Math.cos(baseA + jit) * (r * f),
+            y: emp.y + Math.sin(baseA + jit) * (r * f),
+          });
+        }
+
+        this.reaperShadowGraphics.lineStyle(8.5 * scale, 0x080618, 0.88 * fade);
+        this.reaperShadowGraphics.beginPath();
+        for (let sIdx = 0; sIdx < pts.length; sIdx++) {
+          if (sIdx === 0) this.reaperShadowGraphics.moveTo(pts[sIdx].x, pts[sIdx].y);
+          else this.reaperShadowGraphics.lineTo(pts[sIdx].x, pts[sIdx].y);
+        }
+        this.reaperShadowGraphics.strokePath();
+
+        this.reaperGraphics.lineStyle(
+          (b % 2 === 0 ? 4.4 : 3.0) * scale,
+          b % 3 === 0 ? 0xffea00 : 0x00e5ff,
+          0.98 * fade,
+        );
+        this.reaperGraphics.beginPath();
+        for (let sIdx = 0; sIdx < pts.length; sIdx++) {
+          if (sIdx === 0) this.reaperGraphics.moveTo(pts[sIdx].x, pts[sIdx].y);
+          else this.reaperGraphics.lineTo(pts[sIdx].x, pts[sIdx].y);
+        }
+        this.reaperGraphics.strokePath();
+      }
+
+      // Blazing central Tesla Singularity Eye
+      this.reaperShadowGraphics.fillStyle(0x080618, 0.96 * fade);
+      this.reaperShadowGraphics.fillCircle(emp.x, emp.y, 18 * scale);
+      this.reaperGraphics.fillStyle(0x651fff, 0.85 * fade);
+      this.reaperGraphics.fillCircle(emp.x, emp.y, 15 * scale);
+      this.reaperGraphics.fillStyle(0x00e5ff, 0.95 * fade);
+      this.reaperGraphics.fillCircle(emp.x, emp.y, 10 * scale);
+      this.reaperGraphics.fillStyle(0xffffff, 1.0 * fade);
+      this.reaperGraphics.fillCircle(emp.x, emp.y, 5 * scale);
+    }
+
+    // G. Reaper-Class 60-FPS Frame-Animated Black-Hole Singularity & Dimensional Cleave (`activeWarpCataclysms`)!
+    for (let i = this.activeWarpCataclysms.length - 1; i >= 0; i--) {
+      const wp = this.activeWarpCataclysms[i];
+      wp.age += dt;
+      if (wp.age >= wp.duration) {
+        this.activeWarpCataclysms.splice(i, 1);
+        continue;
+      }
+      const p = wp.age / wp.duration;
+      const expand = p < 0.18 ? 1 - Math.pow(1 - p / 0.18, 3) : 1.0;
+      const fade = p > 0.58 ? Math.max(0, 1 - (p - 0.58) / 0.42) : 1.0;
+      const r = wp.blastRadius * expand;
+
+      // 1. Massive Reaper-Width Abyssal Dimensional Cleave Slash + Jagged Chrono-Lightning (`from -> to`)!
+      const beamFade = Math.max(0, 1 - p * 1.08);
+      if (beamFade > 0.02) {
+        this.reaperShadowGraphics.lineStyle(22 * scale * beamFade, 0x070412, 0.9 * beamFade);
+        this.reaperShadowGraphics.lineBetween(wp.fromX, wp.fromY, wp.toX, wp.toY);
+        this.reaperShadowGraphics.lineStyle(8 * scale * beamFade, 0xd500f9, 0.95 * beamFade);
+        this.reaperShadowGraphics.lineBetween(wp.fromX, wp.fromY, wp.toX, wp.toY);
+        this.reaperGraphics.lineStyle(14 * scale * beamFade, 0xe040fb, 0.78 * beamFade);
+        this.reaperGraphics.lineBetween(wp.fromX, wp.fromY, wp.toX, wp.toY);
+        this.reaperGraphics.lineStyle(4.2 * scale * beamFade, 0x00e5ff, 0.98 * beamFade);
+        this.reaperGraphics.lineBetween(wp.fromX, wp.fromY, wp.toX, wp.toY);
+
+        // Crackling white-cyan void lightning along the Dimensional Cleave!
+        const bdx = wp.toX - wp.fromX;
+        const bdy = wp.toY - wp.fromY;
+        const bLen = Math.hypot(bdx, bdy) || 1;
+        const bnx = -bdy / bLen;
+        const bny = bdx / bLen;
+        this.reaperGraphics.lineStyle(2.6 * scale, 0xffffff, 0.98 * beamFade);
+        this.reaperGraphics.beginPath();
+        const lSteps = 12;
+        for (let k = 0; k <= lSteps; k++) {
+          const f = k / lSteps;
+          const jit = k > 0 && k < lSteps ? (Math.random() - 0.5) * 16 * scale : 0;
+          const lx = wp.fromX + bdx * f + bnx * jit;
+          const ly = wp.fromY + bdy * f + bny * jit;
+          if (k === 0) this.reaperGraphics.moveTo(lx, ly);
+          else this.reaperGraphics.lineTo(lx, ly);
+        }
+        this.reaperGraphics.strokePath();
+      }
+
+      // 2. Departure Black-Hole Singularity + 4 Spinning Curved Accretion Scythe Arms!
+      this.reaperShadowGraphics.fillStyle(0x06030f, 0.92 * fade);
+      this.reaperShadowGraphics.fillCircle(wp.fromX, wp.fromY, r * 0.78);
+      this.reaperShadowGraphics.lineStyle(7.5 * scale, 0x090516, 0.95 * fade);
+      this.reaperShadowGraphics.strokeCircle(wp.fromX, wp.fromY, r * 1.15);
+
+      this.reaperGraphics.lineStyle(8.5 * scale, 0xe040fb, 0.92 * fade);
+      this.reaperGraphics.strokeCircle(wp.fromX, wp.fromY, r * 1.15);
+      this.reaperGraphics.lineStyle(3.2 * scale, 0x00e5ff, 0.98 * fade);
+      this.reaperGraphics.strokeCircle(wp.fromX, wp.fromY, r * 0.78);
+
+      const swirl = -wp.age * 9.5;
+      for (let arm = 0; arm < 4; arm++) {
+        const a0 = swirl + (arm * Math.PI) / 2;
+        this.reaperShadowGraphics.lineStyle(8.5 * scale, 0x070412, 0.85 * fade);
+        this.reaperShadowGraphics.beginPath();
+        for (let sIdx = 0; sIdx <= 8; sIdx++) {
+          const f = sIdx / 8;
+          const a = a0 + f * 1.55;
+          const rad = r * (0.2 + f * 1.18);
+          const px = wp.fromX + Math.cos(a) * rad;
+          const py = wp.fromY + Math.sin(a) * rad;
+          if (sIdx === 0) this.reaperShadowGraphics.moveTo(px, py);
+          else this.reaperShadowGraphics.lineTo(px, py);
+        }
+        this.reaperShadowGraphics.strokePath();
+
+        this.reaperGraphics.lineStyle(4.5 * scale, arm % 2 === 0 ? 0xe040fb : 0x00e5ff, 0.98 * fade);
+        this.reaperGraphics.beginPath();
+        for (let sIdx = 0; sIdx <= 8; sIdx++) {
+          const f = sIdx / 8;
+          const a = a0 + f * 1.55;
+          const rad = r * (0.2 + f * 1.18);
+          const px = wp.fromX + Math.cos(a) * rad;
+          const py = wp.fromY + Math.sin(a) * rad;
+          if (sIdx === 0) this.reaperGraphics.moveTo(px, py);
+          else this.reaperGraphics.lineTo(px, py);
+        }
+        this.reaperGraphics.strokePath();
+      }
+
+      // 3. Arrival Chrono-Starburst Nova at `(toX, toY)`!
+      const arrR = (42 * scale) * (1 - p * 0.3);
+      this.reaperShadowGraphics.fillStyle(0x070412, 0.82 * fade);
+      this.reaperShadowGraphics.fillCircle(wp.toX, wp.toY, arrR * 0.65);
+      this.reaperShadowGraphics.lineStyle(6.5 * scale, 0x070412, 0.9 * fade);
+      this.reaperShadowGraphics.strokeCircle(wp.toX, wp.toY, arrR);
+      this.reaperGraphics.lineStyle(4.5 * scale, 0x00e5ff, 0.98 * fade);
+      this.reaperGraphics.strokeCircle(wp.toX, wp.toY, arrR);
+      for (let k = 0; k < 8; k++) {
+        const ka = wp.age * 6 + (k * Math.PI) / 4;
+        const len = arrR * (k % 2 === 0 ? 1.5 : 0.95);
+        this.reaperShadowGraphics.lineStyle(5.2 * scale, 0x070412, 0.82 * fade);
+        this.reaperShadowGraphics.lineBetween(
+          wp.toX,
+          wp.toY,
+          wp.toX + Math.cos(ka) * len,
+          wp.toY + Math.sin(ka) * len,
+        );
+        this.reaperGraphics.lineStyle(2.8 * scale, k % 2 === 0 ? 0xe040fb : 0x80d8ff, 0.98 * fade);
+        this.reaperGraphics.lineBetween(
+          wp.toX,
+          wp.toY,
+          wp.toX + Math.cos(ka) * len,
+          wp.toY + Math.sin(ka) * len,
+        );
       }
     }
 
     // Draw Twin Giant Obsidian-Black & Blood-Crimson Crescent Scythes + Shadow Afterimages!
-    this.reaperShadowGraphics.clear();
-    this.reaperGraphics.clear();
     for (const tank of tanks) {
       if (!tank.kinematics.alive || !tank.isReaperSweeping()) continue;
       const extend = tank.getReaperExtendProgress();
@@ -2416,6 +2765,8 @@ export class PowerUpSystem {
     this.barriers.length = 0;
     this.pendingEmpBlasts.length = 0;
     this.pendingWarpBlasts.length = 0;
+    this.activeEmpCataclysms.length = 0;
+    this.activeWarpCataclysms.length = 0;
 
     this.zoneGraphics.destroy();
     this.barrierGraphics.destroy();

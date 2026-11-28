@@ -258,7 +258,7 @@ export class Projectile {
     if (variant === 'emp_orb') {
       const k = this.kinematics;
       const r = k.radius;
-      // 1. Dual-core jagged lightning wake behind flying EMP Orb!
+      // 1. Reaper-grade 3-pass Obsidian-Shrouded Thunderbolt Wake!
       for (let i = 1; i < this.trailPoints.length; i++) {
         const p0 = this.trailPoints[i - 1];
         const p1 = this.trailPoints[i];
@@ -268,35 +268,59 @@ export class Projectile {
         const len = Math.hypot(dx, dy) || 1;
         const nx = -dy / len;
         const ny = dx / len;
-        const jag = Math.sin(k.age * 48 + i * 2.7) * r * 0.65 * frac;
+        const jag = Math.sin(k.age * 52 + i * 2.9) * r * 0.85 * frac;
         const mx = (p0.x + p1.x) * 0.5 + nx * jag;
         const my = (p0.y + p1.y) * 0.5 + ny * jag;
 
-        graphics.lineStyle(r * 1.6 * frac, 0x651fff, 0.42 * frac);
+        // Pass A: Dark obsidian contrast shroud
+        graphics.lineStyle(r * 2.8 * frac, 0x090718, 0.72 * frac);
         graphics.lineBetween(p0.x, p0.y, mx, my);
         graphics.lineBetween(mx, my, p1.x, p1.y);
-
-        graphics.lineStyle(r * 0.72 * frac, 0x00e5ff, 0.92 * frac);
+        // Pass B: Electric indigo plasma
+        graphics.lineStyle(r * 1.65 * frac, 0x651fff, 0.88 * frac);
+        graphics.lineBetween(p0.x, p0.y, mx, my);
+        graphics.lineBetween(mx, my, p1.x, p1.y);
+        // Pass C: White-cyan core spine
+        graphics.lineStyle(r * 0.72 * frac, 0x00e5ff, 0.98 * frac);
         graphics.lineBetween(p0.x, p0.y, mx, my);
         graphics.lineBetween(mx, my, p1.x, p1.y);
       }
 
-      // 2. Live crackling Tesla corona + 2.0s shrinking detonation halo around orb!
+      // 2. Dark Void Halo + 2 Counter-Rotating Tilted Gyroscopic Plasma Rings + 6 Lightning Tendrils!
       const lifeLeft01 = Math.max(0.08, 1 - k.age / Math.max(0.2, k.maxLifetime));
-      graphics.fillStyle(0x651fff, 0.18);
-      graphics.fillCircle(k.x, k.y, r * 2.15);
-      graphics.lineStyle(1.8, 0x00e5ff, 0.85);
-      graphics.strokeCircle(k.x, k.y, r * (1.35 + lifeLeft01 * 0.85));
+      graphics.fillStyle(0x0a071c, 0.58);
+      graphics.fillCircle(k.x, k.y, r * 2.55);
+      graphics.lineStyle(2.4, 0x651fff, 0.92);
+      graphics.strokeCircle(k.x, k.y, r * (1.5 + lifeLeft01 * 1.1));
 
-      for (let b = 0; b < 4; b++) {
-        const a0 = k.age * 16 + (b * Math.PI) / 2;
-        const midR = r * 1.65;
-        const tipR = r * (2.25 + Math.sin(k.age * 38 + b) * 0.4);
-        const mx = k.x + Math.cos(a0 + 0.24) * midR;
-        const my = k.y + Math.sin(a0 + 0.24) * midR;
-        const tx = k.x + Math.cos(a0 - 0.18) * tipR;
-        const ty = k.y + Math.sin(a0 - 0.18) * tipR;
-        graphics.lineStyle(1.6, b % 2 === 0 ? 0x00e5ff : 0xffea00, 0.9);
+      for (const [dir, col] of [
+        [1, 0x00e5ff],
+        [-1.35, 0xffea00],
+      ] as const) {
+        const tilt = k.age * 7.5 * dir;
+        graphics.lineStyle(1.9, col, 0.92);
+        graphics.beginPath();
+        for (let s = 0; s <= 16; s++) {
+          const t = (s / 16) * Math.PI * 2;
+          const lx = Math.cos(t) * r * 2.45;
+          const ly = Math.sin(t) * r * 1.05;
+          const rx = k.x + lx * Math.cos(tilt) - ly * Math.sin(tilt);
+          const ry = k.y + lx * Math.sin(tilt) + ly * Math.cos(tilt);
+          if (s === 0) graphics.moveTo(rx, ry);
+          else graphics.lineTo(rx, ry);
+        }
+        graphics.strokePath();
+      }
+
+      for (let b = 0; b < 6; b++) {
+        const a0 = k.age * 18 + (b * Math.PI) / 3;
+        const midR = r * 1.9;
+        const tipR = r * (2.75 + Math.sin(k.age * 42 + b) * 0.55);
+        const mx = k.x + Math.cos(a0 + 0.26) * midR;
+        const my = k.y + Math.sin(a0 + 0.26) * midR;
+        const tx = k.x + Math.cos(a0 - 0.2) * tipR;
+        const ty = k.y + Math.sin(a0 - 0.2) * tipR;
+        graphics.lineStyle(2.1, b % 2 === 0 ? 0x00e5ff : 0xffea00, 0.96);
         graphics.lineBetween(k.x, k.y, mx, my);
         graphics.lineBetween(mx, my, tx, ty);
       }
@@ -306,25 +330,29 @@ export class Projectile {
     if (variant === 'cryo_orb') {
       const k = this.kinematics;
       const r = k.radius;
-      // 1. Shimmering glacial frost-mist wake
+      // 1. High-contrast Midnight-Sapphire & Cyan Glacial Comet Wake!
       for (let i = 1; i < this.trailPoints.length; i++) {
         const p0 = this.trailPoints[i - 1];
         const p1 = this.trailPoints[i];
         const frac = i / this.trailPoints.length;
-        graphics.lineStyle(r * 1.55 * frac, 0x00acc1, 0.34 * frac);
+        graphics.lineStyle(r * 2.65 * frac, 0x062130, 0.68 * frac);
         graphics.lineBetween(p0.x, p0.y, p1.x, p1.y);
-        graphics.lineStyle(r * 0.68 * frac, 0xe0f7fa, 0.85 * frac);
+        graphics.lineStyle(r * 1.55 * frac, 0x00bcd4, 0.88 * frac);
+        graphics.lineBetween(p0.x, p0.y, p1.x, p1.y);
+        graphics.lineStyle(r * 0.65 * frac, 0xffffff, 0.96 * frac);
         graphics.lineBetween(p0.x, p0.y, p1.x, p1.y);
       }
 
-      // 2. Spinning 6-pointed frost snowflake halo around Cryo Orb!
-      graphics.fillStyle(0x84ffff, 0.2);
-      graphics.fillCircle(k.x, k.y, r * 1.85);
-      graphics.lineStyle(1.5, 0xffffff, 0.82);
+      // 2. Dark-Arctic Halo + Rotating 6-Spoke Snowflake Astrolabe!
+      graphics.fillStyle(0x062130, 0.52);
+      graphics.fillCircle(k.x, k.y, r * 2.25);
+      graphics.lineStyle(2.0, 0x84ffff, 0.94);
+      graphics.strokeCircle(k.x, k.y, r * 1.95);
+      graphics.lineStyle(1.8, 0xffffff, 0.92);
       const rot = k.age * 6.5;
       for (let sIdx = 0; sIdx < 3; sIdx++) {
         const a = rot + (sIdx * Math.PI) / 3;
-        const span = r * 1.95;
+        const span = r * 2.35;
         graphics.lineBetween(
           k.x - Math.cos(a) * span,
           k.y - Math.sin(a) * span,

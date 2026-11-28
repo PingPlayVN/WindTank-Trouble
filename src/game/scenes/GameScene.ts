@@ -1243,12 +1243,10 @@ export class GameScene extends Phaser.Scene {
         } else if (ev.sub === 'bullet_burned') {
           this.effectsSystem.emitBulletIncinerated(ev.x, ev.y);
         } else if (ev.sub === 'emp_blast') {
+          const r = ev.radius ?? this.arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius;
           audioManager.playEmpBlast();
-          this.effectsSystem.emitEmpBlast(
-            ev.x,
-            ev.y,
-            ev.radius ?? this.arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius,
-          );
+          this.effectsSystem.emitEmpBlast(ev.x, ev.y, r);
+          this.powerUpSystem.triggerEmpCataclysmVisual(ev.x, ev.y, r);
           this.nightVisionSystem.triggerExplosionFlash(ev.x, ev.y, 240);
         } else if (ev.sub === 'phantom_activate') {
           audioManager.playPhantomActivate();
@@ -1264,19 +1262,18 @@ export class GameScene extends Phaser.Scene {
           audioManager.playBarrierDeploy();
           this.effectsSystem.emitBarrierDeploy(ev.x, ev.y, ev.x2 ?? ev.x, ev.y2 ?? ev.y);
         } else if (ev.sub === 'barrier_shatter') {
+          audioManager.playCryoShatter();
           this.effectsSystem.emitBarrierShatter(ev.x, ev.y, ev.x2 ?? ev.x, ev.y2 ?? ev.y);
         } else if (ev.sub === 'warp_plant') {
           audioManager.playWarpBeacon();
           this.effectsSystem.emitWarpBeaconPlant(ev.x, ev.y);
         } else if (ev.sub === 'warp_teleport') {
+          const br = ev.radius ?? POWERUP_CONFIG.warpBlastRadius * this.arena.scaleRatio;
+          const tx = ev.x2 ?? ev.x;
+          const ty = ev.y2 ?? ev.y;
           audioManager.playWarpTeleport();
-          this.effectsSystem.emitWarpTeleport(
-            ev.x,
-            ev.y,
-            ev.x2 ?? ev.x,
-            ev.y2 ?? ev.y,
-            ev.radius ?? POWERUP_CONFIG.warpBlastRadius * this.arena.scaleRatio,
-          );
+          this.effectsSystem.emitWarpTeleport(ev.x, ev.y, tx, ty, br);
+          this.powerUpSystem.triggerWarpCataclysmVisual(ev.x, ev.y, tx, ty, br);
           this.nightVisionSystem.triggerExplosionFlash(ev.x, ev.y, 210);
         }
         return false;
