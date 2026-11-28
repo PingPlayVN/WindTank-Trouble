@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview --host 127.0.0.1",
-    "test:unit": "npx tsx --test tests/simulation.test.ts",
+    "test:unit": "npx tsx --test tests/mazeAndMaps.test.ts tests/physicsAndRules.test.ts tests/skillsClassic.test.ts tests/skillsAdvanced.test.ts tests/aiAndTouch.test.ts tests/battleModesAndOnline.test.ts",
     "test:e2e": "playwright test",
     "inspect:canvas": "node scripts/inspect-phaser-canvas.mjs"
   },

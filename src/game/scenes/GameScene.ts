@@ -1,12 +1,6 @@
 import Phaser from 'phaser';
-import {
-  ARENA_VIEWPORT,
-  DEFAULT_PLAYER_BINDINGS,
-  getSkillDescriptor,
-  POWERUP_CONFIG,
-  resolveOnlineArenaViewport,
-  UI_COLORS,
-} from '../config/constants';
+import { DEFAULT_PLAYER_BINDINGS, POWERUP_CONFIG } from '../config/gameplayConfig';
+import { ARENA_VIEWPORT, resolveOnlineArenaViewport } from '../config/viewportConfig';
 import { Tank } from '../entities/Tank';
 import { audioManager } from '../managers/AudioManager';
 import { mobileOrientationManager } from '../managers/MobileOrientationManager';
@@ -17,9 +11,12 @@ import { resolveMazeForRound } from '../maps/mapDefinitions';
 import { buildArenaLayout } from '../maps/MazeBuilder';
 import {
   peerMultiplayer,
-  type NetGameEvent,
   type OnlineMatchConfig,
 } from '../network/PeerMultiplayerManager';
+import {
+  computeArenaPerimeterWalls,
+  ejectTankFromInteriorWalls,
+} from '../skills/items/phantomSkill';
 import { AISystem } from '../systems/AISystem';
 import {
   computeWeaponDamage,
@@ -33,11 +30,6 @@ import { InputSystem } from '../systems/InputSystem';
 import { MatchSystem } from '../systems/MatchSystem';
 import { isMazeValidAndConnected } from '../systems/MazeSystem';
 import { NightVisionSystem } from '../systems/NightVisionSystem';
-import {
-  computeArenaPerimeterWalls,
-  drillMazeWallAtPoint,
-  ejectTankFromInteriorWalls,
-} from '../systems/PowerUpSim';
 import { PowerUpSystem } from '../systems/PowerUpSystem';
 import { ProjectileSystem } from '../systems/ProjectileSystem';
 import { TntBarrelSystem } from '../systems/TntBarrelSystem';
@@ -53,6 +45,9 @@ import type {
   RoundResultSummary,
   SkillId,
 } from '../types/gameTypes';
+import { drawArenaFloorAndGrid, redrawArenaWalls } from './game/ArenaBoardRenderer';
+import { attachGameDiagnostics } from './game/GameDiagnostics';
+import { broadcastHostWorldSnapshot, handleGuestNetEvent } from './game/GameOnlineSync';
 import type { UIScene } from './UIScene';
 
 export interface HudSnapshot {
@@ -154,7 +149,9 @@ export class GameScene extends Phaser.Scene {
         this.scoreManager = new ScoreManager(s.playerCount, s.winningScore);
         this.matchBaseSeed = (data?.seed ?? ((Date.now() ^ 0x9e3779b9) >>> 0)) || 1337;
         this.matchCrateTimerSec =
-          s.powerUpSpawnIntervalSec > 0 ? s.powerUpSpawnIntervalSec : POWERUP_CONFIG.spawnIntervalSec;
+          s.powerUpSpawnIntervalSec > 0
+            ? s.powerUpSpawnIntervalSec
+            : POWERUP_CONFIG.spawnIntervalSec;
       }
       this.localKeyboardFireSeq = 0;
     }
@@ -235,7 +232,12 @@ export class GameScene extends Phaser.Scene {
     } else {
       mazeGrid = resolveMazeForRound(mapMode, roundNumber, effectiveCount, roundSeed);
       if (!isMazeValidAndConnected(mazeGrid)) {
-        mazeGrid = resolveMazeForRound('procedural_large', roundNumber, effectiveCount, roundSeed ^ 7);
+        mazeGrid = resolveMazeForRound(
+          'procedural_large',
+          roundNumber,
+          effectiveCount,
+          roundSeed ^ 7,
+        );
       }
       if (this.onlineConfig && this.networkRole === 'host') {
         this.onlineConfig.authoritativeRound = roundNumber;
@@ -258,7 +260,10 @@ export class GameScene extends Phaser.Scene {
         : ARENA_VIEWPORT;
 
     this.arena = buildArenaLayout(mazeGrid, this.activePlayers.length, roundSeed, viewport);
-    this.drawArenaEnvironment();
+    const boardLayers = drawArenaFloorAndGrid(this, this.arena);
+    this.arenaGraphics = boardLayers.arenaGraphics;
+    this.wallLayerGraphics = boardLayers.wallLayerGraphics;
+    this.perimeterWalls = computeArenaPerimeterWalls(this.arena);
 
     this.effectsSystem = new EffectsSystem(this, this.arena);
     this.projectileSystem = new ProjectileSystem(this, this.arena.scaleRatio);
@@ -278,7 +283,7 @@ export class GameScene extends Phaser.Scene {
       this.effectsSystem,
       roundSeed,
       this.matchCrateTimerSec,
-      () => this.redrawWallLayer(),
+      () => redrawArenaWalls(this.wallLayerGraphics, this.arena),
       {
         spawnIntervalSec: ruleSpawnSec,
         maxCratesOnFloor: ruleMaxCrates,
@@ -317,7 +322,7 @@ export class GameScene extends Phaser.Scene {
     );
 
     this.tntBarrelSystem = new TntBarrelSystem(this, this.arena, this.effectsSystem, () =>
-      this.redrawWallLayer(),
+      redrawArenaWalls(this.wallLayerGraphics, this.arena),
     );
     if (this.battleRules.hasTntBarrels && this.networkRole !== 'guest') {
       this.tntBarrelSystem.spawnInitialBarrels(this.tanks, roundSeed);
@@ -355,7 +360,7 @@ export class GameScene extends Phaser.Scene {
         this.events.emit('fight-start');
         if (this.networkRole === 'host') {
           peerMultiplayer.sendEvent({ kind: 'fight_start' });
-          this.broadcastHostWorldSnapshot();
+          this.sendHostSnapshot();
         }
       },
       onRoundResolved: (summary: RoundResultSummary) => {
@@ -363,7 +368,7 @@ export class GameScene extends Phaser.Scene {
         this.events.emit('round-resolved', summary);
         if (this.networkRole === 'host') {
           peerMultiplayer.sendEvent({ kind: 'round_resolved', summary });
-          this.broadcastHostWorldSnapshot();
+          this.sendHostSnapshot();
         }
       },
       onAdvanceNextRound: () => {
@@ -423,14 +428,28 @@ export class GameScene extends Phaser.Scene {
       if (this.networkRole !== 'guest') {
         this.matchSystem.startRoundCountdown();
         if (this.networkRole === 'host') {
-          this.broadcastHostWorldSnapshot();
+          this.sendHostSnapshot();
         }
       } else {
         this.guestRoundPhase = 'countdown';
       }
     });
 
-    this.registerDiagnostics();
+    attachGameDiagnostics({
+      scene: this,
+      getPhase: () => this.getEffectivePhase(),
+      getNetworkRole: () => this.networkRole,
+      getArena: () => this.arena,
+      getIsPaused: () => this.isPaused,
+      getScoreManager: () => this.scoreManager,
+      getBattleRules: () => this.battleRules,
+      getNightVisionSystem: () => this.nightVisionSystem,
+      getTntBarrelSystem: () => this.tntBarrelSystem,
+      getPowerUpSystem: () => this.powerUpSystem,
+      getProjectileSystem: () => this.projectileSystem,
+      getEffectsSystem: () => this.effectsSystem,
+      getTanks: () => this.tanks,
+    });
 
     if (this.networkRole === 'host') {
       peerMultiplayer.setHostArenaSyncResponder((requestedRound) => {
@@ -455,6 +474,19 @@ export class GameScene extends Phaser.Scene {
         peerMultiplayer.setHostArenaSyncResponder(null);
       }
       this.cleanupSceneResources();
+    });
+  }
+
+  private sendHostSnapshot(): void {
+    broadcastHostWorldSnapshot({
+      networkRole: this.networkRole,
+      arena: this.arena,
+      scoreManager: this.scoreManager,
+      matchSystem: this.matchSystem,
+      tanks: this.tanks,
+      projectileSystem: this.projectileSystem,
+      powerUpSystem: this.powerUpSystem,
+      tntBarrelSystem: this.tntBarrelSystem,
     });
   }
 
@@ -532,7 +564,12 @@ export class GameScene extends Phaser.Scene {
       if (this.inputSystem.consumeBufferedFire(altSlot)) return true;
     }
     const touch = this.getTouchOverlay();
-    if (touch && touch.isVisible() && touchSlot !== null && touch.consumePlayerBufferedFire(touchSlot)) {
+    if (
+      touch &&
+      touch.isVisible() &&
+      touchSlot !== null &&
+      touch.consumePlayerBufferedFire(touchSlot)
+    ) {
       return true;
     }
     return false;
@@ -567,7 +604,6 @@ export class GameScene extends Phaser.Scene {
     explicitDamage?: number,
   ): boolean {
     if (!victim.kinematics.alive || victim.isShielded()) return false;
-    // EMP & Cryo are non-lethal tactical disables in Classic 1-hit mode (shooter finishes them off!)
     if (
       !victim.hasArmorHpEnabled() &&
       (source === 'emp_orb' || source === 'emp_blast' || source === 'cryo_orb')
@@ -614,7 +650,6 @@ export class GameScene extends Phaser.Scene {
     const wallElapsedSec = (nowMs - this.lastFrameTimeMs) / 1000;
     this.lastFrameTimeMs = nowMs;
 
-    // In offline mode, pause freezes simulation; in online mode, P2P world keeps ticking smoothly!
     if (this.isPaused && this.networkRole === 'offline') {
       this.inputSystem.endFrame();
       return;
@@ -814,7 +849,14 @@ export class GameScene extends Phaser.Scene {
           this.tanks,
           this.matchSystem.getPhase(),
           (victim, source) => {
-            if (this.applyCombatHitToTank(victim, source, victim.kinematics.x, victim.kinematics.y)) {
+            if (
+              this.applyCombatHitToTank(
+                victim,
+                source,
+                victim.kinematics.x,
+                victim.kinematics.y,
+              )
+            ) {
               hudDirty = true;
             }
           },
@@ -829,14 +871,28 @@ export class GameScene extends Phaser.Scene {
                 this.tanks,
                 (vIdx, dmg) => {
                   const vt = this.tanks.find((t) => t.index === vIdx);
-                  if (vt && this.applyCombatHitToTank(vt, 'tnt_barrel', vt.kinematics.x, vt.kinematics.y, dmg)) {
+                  if (
+                    vt &&
+                    this.applyCombatHitToTank(
+                      vt,
+                      'tnt_barrel',
+                      vt.kinematics.x,
+                      vt.kinematics.y,
+                      dmg,
+                    )
+                  ) {
                     hudDirty = true;
                   }
                 },
                 (bx, by, br) => {
                   this.nightVisionSystem.triggerExplosionFlash(bx, by, br * 2.2);
                   if (this.networkRole === 'host') {
-                    peerMultiplayer.sendEvent({ kind: 'barrel_blast', x: bx, y: by, blastRadius: br });
+                    peerMultiplayer.sendEvent({
+                      kind: 'barrel_blast',
+                      x: bx,
+                      y: by,
+                      blastRadius: br,
+                    });
                   }
                 },
               );
@@ -893,14 +949,28 @@ export class GameScene extends Phaser.Scene {
             this.projectileSystem,
             (vIdx, dmg) => {
               const vt = this.tanks.find((t) => t.index === vIdx);
-              if (vt && this.applyCombatHitToTank(vt, 'tnt_barrel', vt.kinematics.x, vt.kinematics.y, dmg)) {
+              if (
+                vt &&
+                this.applyCombatHitToTank(
+                  vt,
+                  'tnt_barrel',
+                  vt.kinematics.x,
+                  vt.kinematics.y,
+                  dmg,
+                )
+              ) {
                 hudDirty = true;
               }
             },
             (bx, by, br) => {
               this.nightVisionSystem.triggerExplosionFlash(bx, by, br * 2.2);
               if (this.networkRole === 'host') {
-                peerMultiplayer.sendEvent({ kind: 'barrel_blast', x: bx, y: by, blastRadius: br });
+                peerMultiplayer.sendEvent({
+                  kind: 'barrel_blast',
+                  x: bx,
+                  y: by,
+                  blastRadius: br,
+                });
               }
             },
           )
@@ -914,7 +984,14 @@ export class GameScene extends Phaser.Scene {
             this.tanks,
             simEvents.hits,
             (victim, source) => {
-              if (this.applyCombatHitToTank(victim, source, victim.kinematics.x, victim.kinematics.y)) {
+              if (
+                this.applyCombatHitToTank(
+                  victim,
+                  source,
+                  victim.kinematics.x,
+                  victim.kinematics.y,
+                )
+              ) {
                 hudDirty = true;
               }
             },
@@ -974,84 +1051,14 @@ export class GameScene extends Phaser.Scene {
       this.hostSnapshotAccumulator += totalDt;
       if (this.hostSnapshotAccumulator >= 1 / 30) {
         this.hostSnapshotAccumulator = 0;
-        this.broadcastHostWorldSnapshot();
+        this.sendHostSnapshot();
       }
     }
 
     this.inputSystem.endFrame();
   }
 
-  private broadcastHostWorldSnapshot(): void {
-    if (this.networkRole !== 'host' || !peerMultiplayer.isActive()) return;
-    const entities = this.powerUpSystem.getNetworkWorldEntities();
-    const activeProjs = this.projectileSystem
-      .getPool()
-      .filter((p) => p.kinematics.active)
-      .map((p) => {
-        const k = p.kinematics;
-        return {
-          id: k.id,
-          ownerIndex: k.ownerIndex,
-          x: Math.round(k.x * 10) / 10,
-          y: Math.round(k.y * 10) / 10,
-          vx: Math.round(k.vx * 10) / 10,
-          vy: Math.round(k.vy * 10) / 10,
-          radius: Math.round(k.radius * 10) / 10,
-          age: Math.round(k.age * 100) / 100,
-          maxLifetime: k.maxLifetime,
-          variant: k.variant ?? 'standard',
-        };
-      });
-
-    peerMultiplayer.sendWorldSnapshot({
-      roundNumber: this.scoreManager.getRoundNumber(),
-      arenaKey: `${this.arena.grid.cols}x${this.arena.grid.rows}@${this.arena.originX},${this.arena.originY},${this.arena.cellSize}`,
-      phase: this.matchSystem.getPhase(),
-      scores: [this.scoreManager.getScore(0), this.scoreManager.getScore(1)],
-      ties: this.scoreManager.getTies(),
-      crateTimerSec: Math.round(this.powerUpSystem.getRemainingSpawnTimer() * 10) / 10,
-      tanks: this.tanks.map((t) => {
-        const sk = t.getSkillState();
-        return {
-          index: t.index,
-          x: Math.round(t.kinematics.x * 10) / 10,
-          y: Math.round(t.kinematics.y * 10) / 10,
-          vx: Math.round(t.kinematics.vx * 10) / 10,
-          vy: Math.round(t.kinematics.vy * 10) / 10,
-          angle: Math.round(t.kinematics.angle * 1000) / 1000,
-          alive: t.kinematics.alive,
-          ammo: this.projectileSystem.getRemainingAmmo(t.index),
-          hp: t.getHp(),
-          maxHp: t.getMaxHp(),
-          hasArmor: t.hasArmorHpEnabled(),
-          skill: sk.skill,
-          skillAmmo: sk.ammo,
-          chargingLaserRemaining: Math.round(sk.chargingLaserRemaining * 100) / 100,
-          reaperWindupRemaining: Math.round((sk.reaperWindupRemaining ?? 0) * 100) / 100,
-          reaperDeployRemaining: Math.round((sk.reaperDeployRemaining ?? 0) * 100) / 100,
-          reaperSpinRemaining: Math.round((sk.reaperSpinRemaining ?? 0) * 100) / 100,
-          shieldRemaining: Math.round(t.getShieldRemainingSec() * 100) / 100,
-          phantomRemaining: Math.round(t.getPhantomRemainingSec() * 100) / 100,
-          empJamRemaining: Math.round(t.getEmpJamRemainingSec() * 100) / 100,
-          frozenRemaining: Math.round(t.getFrozenRemainingSec() * 100) / 100,
-          cryoChillRatio: Math.round(t.getCryoChillRatio() * 100) / 100,
-          onIceFloor: t.isOnIceFloor(),
-          warpBeaconPlaced: Boolean(sk.warpBeaconPlaced),
-        };
-      }),
-      projectiles: activeProjs,
-      crates: entities.crates,
-      mines: entities.mines,
-      spikeZones: entities.spikeZones,
-      cryoZones: entities.cryoZones,
-      barriers: entities.barriers,
-      warpBeacons: entities.warpBeacons,
-      barrels: this.tntBarrelSystem.getNetworkSnapshots(),
-    });
-  }
-
   private updateOnlineGuestFrame(dt: number): void {
-    // 1. Stream Guest (`XE 2`) input to Host (`WASD + Space`, `Arrows + Enter`, and Mobile Touch!)
     const guestTank = this.tanks[1] ?? this.tanks[0];
     if (guestTank && !this.isPaused) {
       const merged = this.readMergedLocalHumanInput(guestTank, 1, true);
@@ -1066,16 +1073,34 @@ export class GameScene extends Phaser.Scene {
       });
     }
 
-    // 2. Process discrete reliable Host events (explosions, laser, carved walls, round advance, rematch)
     const events = peerMultiplayer.drainPendingEventsOnGuest();
     for (const ev of events) {
-      if (this.handleGuestNetEvent(ev)) {
-        // Scene restarted or transitioned!
+      if (
+        handleGuestNetEvent(ev, {
+          scene: this,
+          arena: this.arena,
+          currentRoundSeed: this.currentRoundSeed,
+          onlineConfig: this.onlineConfig,
+          activePlayers: this.activePlayers,
+          tanks: this.tanks,
+          scoreManager: this.scoreManager,
+          effectsSystem: this.effectsSystem,
+          powerUpSystem: this.powerUpSystem,
+          nightVisionSystem: this.nightVisionSystem,
+          setGuestRoundPhase: (p) => {
+            this.guestRoundPhase = p;
+          },
+          setMatchCrateTimerSec: (sec) => {
+            this.matchCrateTimerSec = sec;
+          },
+          redrawWallLayer: () => redrawArenaWalls(this.wallLayerGraphics, this.arena),
+          emitHudSync: () => this.emitHudSync(),
+        })
+      ) {
         return;
       }
     }
 
-    // 3. Reconcile latest Host WorldSnapshot (or smoothly dead-reckon between snapshots)
     const snap = peerMultiplayer.consumeLatestSnapshotOnGuest();
     if (snap) {
       if (snap.roundNumber !== this.scoreManager.getRoundNumber()) {
@@ -1159,241 +1184,6 @@ export class GameScene extends Phaser.Scene {
     return humanTanks.length > 0 ? humanTanks : this.tanks;
   }
 
-  private handleGuestNetEvent(ev: NetGameEvent): boolean {
-    switch (ev.kind) {
-      case 'countdown_step':
-        this.events.emit('countdown-step', ev.label);
-        return false;
-
-      case 'fight_start':
-        this.guestRoundPhase = 'playing';
-        for (const t of this.tanks) t.setCountdownHighlight(false);
-        this.events.emit('fight-start');
-        return false;
-
-      case 'muzzle_fx':
-        if (ev.variant === 'gatling') {
-          audioManager.playGatlingFire();
-          this.effectsSystem.emitGatlingMuzzle(ev.x, ev.y, ev.angle);
-        } else if (ev.variant === 'flame') {
-          audioManager.playFlameSpray();
-          this.effectsSystem.emitFlameMuzzle(ev.x, ev.y, ev.angle);
-        } else if (ev.variant === 'scatter') {
-          audioManager.playScatterShot();
-          this.effectsSystem.emitScatterMuzzle(ev.x, ev.y, ev.angle);
-        } else if (ev.variant === 'emp_orb') {
-          audioManager.playEmpLaunch();
-          this.effectsSystem.emitEmpMuzzle(ev.x, ev.y, ev.angle);
-        } else if (ev.variant === 'cryo_orb') {
-          audioManager.playCryoShot();
-          this.effectsSystem.emitCryoMuzzle(ev.x, ev.y, ev.angle);
-        } else {
-          audioManager.playFire();
-          this.effectsSystem.emitMuzzleFlash(ev.x, ev.y, ev.angle);
-        }
-        return false;
-
-      case 'wall_bounce':
-        audioManager.playWallBounce(ev.bounces);
-        this.effectsSystem.emitWallBounce(ev.x, ev.y);
-        this.nightVisionSystem.triggerFlareBounceFlash(ev.x, ev.y);
-        return false;
-
-      case 'wall_drilled': {
-        const res = drillMazeWallAtPoint(this.arena, ev.hitX, ev.hitY);
-        if (res.carved) {
-          audioManager.playWallDrill();
-          this.effectsSystem.emitWallDrilled(res.breakX, res.breakY);
-          this.redrawWallLayer();
-        }
-        return false;
-      }
-
-      case 'laser_blast':
-        audioManager.playLaserBlast();
-        this.effectsSystem.emitLaserBeamBlast(ev.points, ev.victims);
-        this.nightVisionSystem.triggerLaserFlashCorridor(ev.points);
-        return false;
-
-      case 'armor_hit': {
-        const victim = this.tanks.find((t) => t.index === ev.victimIndex);
-        audioManager.playWallBounce(2);
-        this.effectsSystem.emitArmorHitImpact(
-          ev.x,
-          ev.y,
-          victim ? victim.palette.primary : 0xffca28,
-          ev.hpRatio,
-        );
-        this.nightVisionSystem.triggerMuzzleFlashLight(ev.x, ev.y, false);
-        return false;
-      }
-
-      case 'barrel_blast':
-        audioManager.playTankExplosion();
-        this.effectsSystem.emitTntBarrelExplosion(ev.x, ev.y, ev.blastRadius);
-        this.nightVisionSystem.triggerExplosionFlash(ev.x, ev.y, ev.blastRadius * 2.2);
-        return false;
-
-      case 'shield_fx':
-        if (ev.sub === 'activate') {
-          audioManager.playShieldActivate();
-          this.effectsSystem.emitShieldActivate(ev.x, ev.y);
-        } else {
-          audioManager.playShieldDeflect();
-          this.effectsSystem.emitShieldDeflect(ev.x, ev.y);
-        }
-        return false;
-
-      case 'crate_fx':
-        if (ev.sub === 'spawn') {
-          audioManager.playCrateSpawn();
-          this.effectsSystem.emitCrateSpawn(ev.x, ev.y);
-        } else if (ev.skillId) {
-          const desc = getSkillDescriptor(ev.skillId);
-          audioManager.playPowerUpEquip();
-          this.effectsSystem.emitCratePickup(
-            ev.x,
-            ev.y,
-            desc.name,
-            desc.accentHex,
-            desc.accentColor,
-          );
-        }
-        return false;
-
-      case 'hazard_fx':
-        if (ev.sub === 'spike_burst') {
-          audioManager.playSpikeBurst();
-          this.effectsSystem.emitSpikeDetonation(ev.x, ev.y);
-        } else if (ev.sub === 'mine_deploy') {
-          audioManager.playMineDeploy();
-          this.effectsSystem.emitMineDeploy(ev.x, ev.y);
-        } else if (ev.sub === 'mine_blast') {
-          audioManager.playTankExplosion();
-          this.effectsSystem.emitMineExplosion(ev.x, ev.y);
-        } else if (ev.sub === 'reaper_unfurl') {
-          this.effectsSystem.emitReaperUnfurlBurst(ev.x, ev.y);
-        } else if (ev.sub === 'bullet_burned') {
-          this.effectsSystem.emitBulletIncinerated(ev.x, ev.y);
-        } else if (ev.sub === 'emp_blast') {
-          const r = ev.radius ?? this.arena.cellSize * POWERUP_CONFIG.empBlastCellsRadius;
-          audioManager.playEmpBlast();
-          this.effectsSystem.emitEmpBlast(ev.x, ev.y, r);
-          this.powerUpSystem.triggerEmpCataclysmVisual(ev.x, ev.y, r);
-          this.nightVisionSystem.triggerExplosionFlash(ev.x, ev.y, 240);
-        } else if (ev.sub === 'phantom_activate') {
-          audioManager.playPhantomActivate();
-          this.effectsSystem.emitPhantomActivate(ev.x, ev.y);
-        } else if (ev.sub === 'cryo_shatter') {
-          audioManager.playCryoShatter();
-          this.effectsSystem.emitCryoShatter(
-            ev.x,
-            ev.y,
-            ev.radius ?? this.arena.cellSize * POWERUP_CONFIG.cryoZoneCellsRadius,
-          );
-        } else if (ev.sub === 'barrier_deploy') {
-          audioManager.playBarrierDeploy();
-          this.effectsSystem.emitBarrierDeploy(ev.x, ev.y, ev.x2 ?? ev.x, ev.y2 ?? ev.y);
-        } else if (ev.sub === 'barrier_shatter') {
-          audioManager.playCryoShatter();
-          this.effectsSystem.emitBarrierShatter(ev.x, ev.y, ev.x2 ?? ev.x, ev.y2 ?? ev.y);
-        } else if (ev.sub === 'warp_plant') {
-          audioManager.playWarpBeacon();
-          this.effectsSystem.emitWarpBeaconPlant(ev.x, ev.y);
-        } else if (ev.sub === 'warp_teleport') {
-          const br = ev.radius ?? POWERUP_CONFIG.warpBlastRadius * this.arena.scaleRatio;
-          const tx = ev.x2 ?? ev.x;
-          const ty = ev.y2 ?? ev.y;
-          audioManager.playWarpTeleport();
-          audioManager.playTankExplosion();
-          this.effectsSystem.emitWarpTeleport(ev.x, ev.y, tx, ty, br);
-          this.powerUpSystem.triggerWarpCataclysmVisual(ev.x, ev.y, tx, ty, br);
-          this.nightVisionSystem.triggerExplosionFlash(ev.x, ev.y, 210);
-          this.nightVisionSystem.triggerExplosionFlash(tx, ty, 210);
-        }
-        return false;
-
-      case 'tank_eliminated': {
-        const victim = this.tanks.find((t) => t.index === ev.victimIndex);
-        if (victim) {
-          victim.eliminate();
-          audioManager.playTankExplosion();
-          this.effectsSystem.emitTankExplosion(ev.x, ev.y, victim.palette);
-          this.emitHudSync();
-        }
-        return false;
-      }
-
-      case 'round_resolved':
-        this.guestRoundPhase = 'round_end';
-        this.scoreManager.syncFromNetwork(
-          ev.summary.scores,
-          ev.summary.ties,
-          ev.summary.roundNumber,
-        );
-        this.emitHudSync();
-        this.events.emit('round-resolved', ev.summary);
-        return false;
-
-      case 'advance_round':
-        while (this.scoreManager.getRoundNumber() < ev.roundNumber) {
-          this.scoreManager.advanceToNextRound();
-        }
-        this.matchCrateTimerSec = ev.crateTimerSec;
-        if (this.onlineConfig) {
-          if (ev.grid) {
-            this.onlineConfig.authoritativeRound = ev.roundNumber;
-            this.onlineConfig.authoritativeGrid = ev.grid;
-          }
-          if (ev.viewport) {
-            this.onlineConfig.authoritativeViewport = ev.viewport;
-          }
-        }
-        this.scene.restart({
-          freshMatch: false,
-          onlineMatch: this.onlineConfig ?? undefined,
-        });
-        return true;
-
-      case 'arena_resync': {
-        const curLocalKey = `${this.arena.grid.cols}x${this.arena.grid.rows}@${this.arena.originX},${this.arena.originY},${this.arena.cellSize}`;
-        const syncedLayout = buildArenaLayout(ev.grid, 2, this.currentRoundSeed, ev.viewport);
-        const syncedKey = `${syncedLayout.grid.cols}x${syncedLayout.grid.rows}@${syncedLayout.originX},${syncedLayout.originY},${syncedLayout.cellSize}`;
-        if (curLocalKey === syncedKey) return false;
-        while (this.scoreManager.getRoundNumber() < ev.roundNumber) {
-          this.scoreManager.advanceToNextRound();
-        }
-        if (this.onlineConfig) {
-          this.onlineConfig.authoritativeRound = ev.roundNumber;
-          this.onlineConfig.authoritativeGrid = ev.grid;
-          this.onlineConfig.authoritativeViewport = ev.viewport;
-        }
-        this.scene.restart({
-          freshMatch: false,
-          onlineMatch: this.onlineConfig ?? undefined,
-        });
-        return true;
-      }
-
-      case 'match_victory':
-        this.guestRoundPhase = 'match_over';
-        this.scene.stop('UIScene');
-        this.scene.start('ResultScene', {
-          summary: ev.summary,
-          players: this.activePlayers,
-        });
-        return true;
-
-      case 'rematch_start':
-        this.scene.restart({
-          freshMatch: true,
-          seed: ev.config.matchSeed,
-          onlineMatch: ev.config,
-        });
-        return true;
-    }
-  }
-
   setPaused(paused: boolean): void {
     if (this.isPaused === paused) return;
     this.isPaused = paused;
@@ -1466,7 +1256,7 @@ export class GameScene extends Phaser.Scene {
       this.tanks.map((t) => t.kinematics),
     );
     if (spawned && this.networkRole === 'host') {
-      this.broadcastHostWorldSnapshot();
+      this.sendHostSnapshot();
     }
     return spawned !== null;
   }
@@ -1530,188 +1320,6 @@ export class GameScene extends Phaser.Scene {
 
   private emitHudSync(): void {
     this.events.emit('hud-sync', this.getHudSnapshot());
-  }
-
-  private drawArenaEnvironment(): void {
-    this.cameras.main.setBackgroundColor(UI_COLORS.menuBg);
-
-    const g = this.add.graphics().setDepth(2);
-    this.arenaGraphics = g;
-
-    const { originX, originY, width, height, cellSize } = this.arena;
-
-    g.fillStyle(0x000000, 0.12);
-    g.fillRoundedRect(originX - 6 + 4, originY - 6 + 6, width + 12, height + 12, 6);
-
-    g.fillStyle(UI_COLORS.arenaFloor, 1);
-    g.fillRect(originX, originY, width, height);
-
-    g.lineStyle(1, UI_COLORS.arenaGridLine, 0.85);
-    for (let c = 1; c < this.arena.grid.cols; c++) {
-      const gx = originX + c * cellSize;
-      g.lineBetween(gx, originY, gx, originY + height);
-    }
-    for (let r = 1; r < this.arena.grid.rows; r++) {
-      const gy = originY + r * cellSize;
-      g.lineBetween(originX, gy, originX + width, gy);
-    }
-
-    this.wallLayerGraphics = this.add.graphics().setDepth(10);
-    this.perimeterWalls = computeArenaPerimeterWalls(this.arena);
-    this.redrawWallLayer();
-  }
-
-  private redrawWallLayer(): void {
-    const wallLayer = this.wallLayerGraphics;
-    if (!wallLayer) return;
-    wallLayer.clear();
-
-    const { walls } = this.arena;
-
-    wallLayer.fillStyle(0x000000, 0.14);
-    for (const w of walls) {
-      wallLayer.fillRect(w.minX + 2.5, w.minY + 3.5, w.width, w.height);
-    }
-
-    wallLayer.fillStyle(UI_COLORS.wallStroke, 1);
-    for (const w of walls) {
-      wallLayer.fillRect(w.minX, w.minY, w.width, w.height);
-    }
-
-    const borderInset = Math.max(1.2, 1.8 * this.arena.scaleRatio);
-    wallLayer.fillStyle(UI_COLORS.wallFill, 1);
-    for (const w of walls) {
-      wallLayer.fillRect(
-        w.minX + borderInset,
-        w.minY + borderInset,
-        Math.max(1, w.width - borderInset * 2),
-        Math.max(1, w.height - borderInset * 2),
-      );
-    }
-
-    wallLayer.fillStyle(UI_COLORS.wallHighlight, 0.65);
-    for (const w of walls) {
-      if (w.width > w.height) {
-        wallLayer.fillRect(
-          w.minX + borderInset,
-          w.minY + borderInset,
-          Math.max(1, w.width - borderInset * 2),
-          1.4,
-        );
-      }
-    }
-  }
-
-  private registerDiagnostics(): void {
-    const self = this;
-    (window as unknown as { __PHASER_GAME_DIAGNOSTICS__?: unknown }).__PHASER_GAME_DIAGNOSTICS__ = {
-      get fps() {
-        return Math.round(self.game.loop.actualFps);
-      },
-      get renderer() {
-        return self.game.renderer.type === Phaser.WEBGL ? 'WEBGL' : 'CANVAS';
-      },
-      get phase() {
-        return self.getEffectivePhase();
-      },
-      get networkRole() {
-        return self.networkRole;
-      },
-      get roomCode() {
-        return peerMultiplayer.getState().formattedCode;
-      },
-      get pingMs() {
-        return peerMultiplayer.getPingMs();
-      },
-      get touchActive() {
-        return settingsManager.isTouchControlsActive();
-      },
-      get arenaBounds() {
-        return {
-          originX: self.arena?.originX ?? 0,
-          originY: self.arena?.originY ?? 0,
-          width: self.arena?.width ?? 0,
-          height: self.arena?.height ?? 0,
-        };
-      },
-      get paused() {
-        return self.isPaused;
-      },
-      get round() {
-        return self.scoreManager?.getRoundNumber() ?? 1;
-      },
-      get mapId() {
-        return self.arena?.grid.id ?? '';
-      },
-      get battleMode() {
-        return self.battleRules?.mode ?? 'classic';
-      },
-      get hasArmorHp() {
-        return Boolean(self.battleRules?.hasArmorHp);
-      },
-      get isNightOps() {
-        return Boolean(self.nightVisionSystem?.isEnabled());
-      },
-      get activeBarrels() {
-        return self.tntBarrelSystem?.getActiveCount() ?? 0;
-      },
-      get wallCount() {
-        return self.arena?.walls.length ?? 0;
-      },
-      get crateIntervalSec() {
-        return self.powerUpSystem?.getSpawnIntervalSec() ?? 0;
-      },
-      get crateTimerRemainingSec() {
-        return Number((self.powerUpSystem?.getRemainingSpawnTimer() ?? 0).toFixed(2));
-      },
-      get activeProjectiles() {
-        return self.projectileSystem?.getTotalActiveCount() ?? 0;
-      },
-      get activeCrates() {
-        return self.powerUpSystem?.getCrateCount() ?? 0;
-      },
-      get groundHazards() {
-        return self.powerUpSystem?.getGroundHazardCount() ?? 0;
-      },
-      get activeMines() {
-        return self.powerUpSystem?.getMineCount() ?? 0;
-      },
-      get activeParticles() {
-        return self.effectsSystem?.getActiveParticleCount() ?? 0;
-      },
-      get displayObjects() {
-        return self.children.length;
-      },
-      get tweens() {
-        return self.tweens.getTweens().length;
-      },
-      get texturesCount() {
-        return Object.keys(self.textures.list).length;
-      },
-      get players() {
-        const s = settingsManager.getSettings();
-        const isOnline = self.networkRole !== 'offline';
-        return self.tanks.map((t) => ({
-          index: t.index,
-          isAI: isOnline ? false : Boolean(s.playerIsAI[t.index]),
-          aiDifficulty: s.playerAIDifficulty[t.index] ?? 'normal',
-          x: Math.round(t.kinematics.x),
-          y: Math.round(t.kinematics.y),
-          angle: Number(t.kinematics.angle.toFixed(2)),
-          alive: t.kinematics.alive,
-          hp: t.getHp(),
-          maxHp: t.getMaxHp(),
-          score: self.scoreManager.getScore(t.index),
-          ammo: self.projectileSystem.getRemainingAmmo(t.index),
-          skill: t.getEquippedSkill(),
-          visualSuit: t.getActiveVisualSuit(),
-          skillAmmo: t.getSkillAmmo(),
-          chargingLaser: t.isChargingLaser(),
-          shielded: t.isShielded(),
-          reaperSweeping: t.isReaperSweeping(),
-        }));
-      },
-    };
   }
 
   private cleanupSceneResources(): void {

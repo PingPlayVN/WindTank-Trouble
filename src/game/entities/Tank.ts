@@ -1,12 +1,8 @@
 import Phaser from 'phaser';
-import {
-  BASE_GAMEPLAY,
-  getPaletteById,
-  getSkillDescriptor,
-  POWERUP_CONFIG,
-} from '../config/constants';
-import type { PlayerSkillState } from '../systems/PowerUpSim';
+import { BASE_GAMEPLAY, POWERUP_CONFIG } from '../config/gameplayConfig';
+import { getPaletteById } from '../config/paletteConfig';
 import type { NetTankSnapshot } from '../network/PeerMultiplayerManager';
+import type { PlayerSkillState } from '../skills/types';
 import type {
   PlayerConfig,
   PlayerIndex,
@@ -16,6 +12,7 @@ import type {
   TankColorPalette,
   TankKinematics,
 } from '../types/gameTypes';
+import { renderTankAurasAndOverlays } from './TankAuraRenderer';
 
 export class Tank {
   readonly index: PlayerIndex;
@@ -190,10 +187,6 @@ export class Tank {
     return this.skillState.skill;
   }
 
-  /**
-   * Returns whichever Superhero Suit should currently be displayed on the tank & HUD icon
-   * (preserving Aegis Paladin suit while the 5.5s shield dome is active!).
-   */
   getActiveVisualSuit(): SkillId | null {
     if (this.skillState.skill) return this.skillState.skill;
     if (this.shieldRemainingSec > 0) return 'shield';
@@ -340,10 +333,8 @@ export class Tank {
   }
 
   startReaperSweep(extraRandomAngleRad?: number): void {
-    const randomOffset =
-      extraRandomAngleRad ?? (0.35 + Math.random() * 1.55) * Math.PI;
+    const randomOffset = extraRandomAngleRad ?? (0.35 + Math.random() * 1.55) * Math.PI;
     this.reaperGyroStartAngle = this.kinematics.angle;
-    // Spin >1 full revolution quickly then glide to a smooth stop at a random angle!
     this.reaperGyroTotalDelta = Math.PI * 2 + randomOffset;
 
     this.skillState.reaperWindupRemaining = POWERUP_CONFIG.reaperWindupSec;
@@ -355,7 +346,6 @@ export class Tank {
     this.kinematics.vx = 0;
     this.kinematics.vy = 0;
 
-    // Smooth gyroscopic levitation pulse during the 1-turn spin-up!
     this.scene.tweens.killTweensOf(this.bodySprite);
     this.scene.tweens.add({
       targets: this.bodySprite,
@@ -404,9 +394,6 @@ export class Tank {
     return Math.max(0, Math.min(1, 1 - rem / POWERUP_CONFIG.reaperWindupSec));
   }
 
-  /**
-   * True whenever the Reaper shaft/blades are active on the field (Stages 2, 3, and 4).
-   */
   isReaperSweeping(): boolean {
     return (
       (this.skillState.reaperWindupRemaining ?? 0) <= 0 &&
@@ -415,13 +402,6 @@ export class Tank {
     );
   }
 
-  /**
-   * Stage 2 -> 4 axial Laser-Shaft extension (`0 -> 1`):
-   * - Stage 1 (Gyro Spin): `0`
-   * - Stage 2 (`0.26s`): shoots straight out `0 -> 1` to full 4.7-cell peak!
-   * - Stage 3 (`0.22s`, Crescent Unfurl): holds at `1.0` peak!
-   * - Stage 4 (`180°` Sweep): holds at `1.0`, retracting cleanly in the final `0.16s`.
-   */
   getReaperExtendProgress(): number {
     if ((this.skillState.reaperWindupRemaining ?? 0) > 0) return 0;
 
@@ -446,12 +426,6 @@ export class Tank {
     return 1.0;
   }
 
-  /**
-   * Stage 3 -> 4 transverse Crescent Scythe Blade extension (`0 -> 1`):
-   * - Stages 1 & 2 (Gyro Spin + Laser Shaft Shooting to Peak): strictly `0`!
-   * - Stage 3 (`0.22s`, after shaft reaches peak): snaps sideways out from the shaft tips `0 -> 1`!
-   * - Stage 4 (`180°` Sweep): holds at `1.0`, retracting cleanly in the final `0.16s`.
-   */
   getReaperCrescentProgress(): number {
     if ((this.skillState.reaperWindupRemaining ?? 0) > 0) return 0;
 
@@ -468,7 +442,6 @@ export class Tank {
         (elapsed - POWERUP_CONFIG.reaperShaftExtendSec) /
           Math.max(0.05, POWERUP_CONFIG.reaperCrescentUnfurlSec),
       );
-      // Crisp snappy lateral blade unfurl (`easeOutBack` clamped smoothly)
       const c1 = 1.45;
       const c3 = c1 + 1;
       const back = 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2);
@@ -689,12 +662,13 @@ export class Tank {
       this.recoilOffset = 0;
     }
 
-    // Solid Cryo Freeze Lock: freezes linear velocity, rotation, and weapon trigger inside 3D Ice Block!
     if (this.frozenRemainingSec > 0) {
       this.kinematics.vx = 0;
       this.kinematics.vy = 0;
       if (this.flameHitCooldown > 0) this.flameHitCooldown = Math.max(0, this.flameHitCooldown - dt);
-      if (this.reaperHitCooldown > 0) this.reaperHitCooldown = Math.max(0, this.reaperHitCooldown - dt);
+      if (this.reaperHitCooldown > 0) {
+        this.reaperHitCooldown = Math.max(0, this.reaperHitCooldown - dt);
+      }
       if (this.spikeHitCooldown > 0) this.spikeHitCooldown = Math.max(0, this.spikeHitCooldown - dt);
       if (this.hitFlashTimer > 0) {
         this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
@@ -712,7 +686,6 @@ export class Tank {
       };
     }
 
-    // 2.0s Laser Charge Lock: completely freezes movement & rotation
     if (this.skillState.chargingLaserRemaining > 0) {
       this.kinematics.vx = 0;
       this.kinematics.vy = 0;
@@ -731,11 +704,6 @@ export class Tank {
       };
     }
 
-    // Reaper 4-Stage Choreography (all linear movement locked on the spot!):
-    // Stage 1 (`windup > 0`): Fast gyroscopic >1-turn spin decelerating smoothly to a random stop angle
-    // Stage 2 (`deploy`: first `0.26s`): Straight laser shaft shoots out to peak (`4.7` cells), tank holds still
-    // Stage 3 (`deploy`: next `0.22s`): Crescent scythe heads snap out sideways from shaft tips, tank holds still
-    // Stage 4 (`spinning > 0`): Full Crescent Scythes rotate smoothly across `180°`!
     const windup = this.skillState.reaperWindupRemaining ?? 0;
     const deploy = this.skillState.reaperDeployRemaining ?? 0;
     const spinning = this.skillState.reaperSpinRemaining ?? 0;
@@ -748,7 +716,6 @@ export class Tank {
         const nextWindup = Math.max(0, windup - dt);
         this.skillState.reaperWindupRemaining = nextWindup;
         const u = Math.max(0, Math.min(1, 1 - nextWindup / POWERUP_CONFIG.reaperWindupSec));
-        // High-RPM initial gyro whip -> silky smooth deceleration stop at random target angle
         const eased = 1 - Math.pow(1 - u, 3.6);
         this.kinematics.angle = Phaser.Math.Angle.Wrap(
           this.reaperGyroStartAngle + this.reaperGyroTotalDelta * eased,
@@ -781,7 +748,9 @@ export class Tank {
       }
 
       if (this.flameHitCooldown > 0) this.flameHitCooldown = Math.max(0, this.flameHitCooldown - dt);
-      if (this.reaperHitCooldown > 0) this.reaperHitCooldown = Math.max(0, this.reaperHitCooldown - dt);
+      if (this.reaperHitCooldown > 0) {
+        this.reaperHitCooldown = Math.max(0, this.reaperHitCooldown - dt);
+      }
       if (this.spikeHitCooldown > 0) this.spikeHitCooldown = Math.max(0, this.spikeHitCooldown - dt);
       if (this.hitFlashTimer > 0) {
         this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
@@ -810,7 +779,6 @@ export class Tank {
     }
 
     const rawTurnDir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-    // EMP Short-Circuit (`empJamRemainingSec > 0`) reverses Left <-> Right steering motors!
     const turnDir = this.empJamRemainingSec > 0 ? -rawTurnDir : rawTurnDir;
     const turnMul = this.onIceFloor ? POWERUP_CONFIG.cryoDriftTurnMultiplier : 1.0;
     if (turnDir !== 0) {
@@ -876,7 +844,9 @@ export class Tank {
     }
 
     if (this.flameHitCooldown > 0) this.flameHitCooldown = Math.max(0, this.flameHitCooldown - dt);
-    if (this.reaperHitCooldown > 0) this.reaperHitCooldown = Math.max(0, this.reaperHitCooldown - dt);
+    if (this.reaperHitCooldown > 0) {
+      this.reaperHitCooldown = Math.max(0, this.reaperHitCooldown - dt);
+    }
     if (this.spikeHitCooldown > 0) this.spikeHitCooldown = Math.max(0, this.spikeHitCooldown - dt);
 
     if (this.hitFlashTimer > 0) {
@@ -907,9 +877,6 @@ export class Tank {
     };
   }
 
-  /**
-   * Guest-side P2P state reconciliation with smooth positional & angular interpolation.
-   */
   applyNetworkSnapshot(snap: NetTankSnapshot, dt: number): void {
     const prevSuit = this.getActiveVisualSuit();
     const wasAlive = this.kinematics.alive;
@@ -1049,501 +1016,27 @@ export class Tank {
       this.shadowSprite.setAlpha(1);
     }
 
-    this.auraGraphics.clear();
-    this.overlayGraphics.clear();
-
-    // 0. Floating World-Space Armor Durability Bar (`Độ Bền Giáp HP`)
-    if (this.hasArmorBar && this.kinematics.alive) {
-      const ratio = this.getHpRatio();
-      const bw = 34 * this.scaleRatio;
-      const bh = 5.2 * this.scaleRatio;
-      const bx = this.kinematics.x - bw / 2;
-      const by = this.kinematics.y - this.kinematics.radius - 13 * this.scaleRatio;
-      const barColor =
-        ratio > 0.6 ? 0x00c853 : ratio > 0.3 ? 0xffb300 : Math.floor(this.auraPulseClock * 12) % 2 === 0 ? 0xff1744 : 0xd50000;
-
-      this.auraGraphics.fillStyle(0x111318, 0.86);
-      this.auraGraphics.fillRoundedRect(bx - 1, by - 1, bw + 2, bh + 2, 2.5);
-      if (ratio > 0) {
-        this.auraGraphics.fillStyle(barColor, 0.98);
-        this.auraGraphics.fillRoundedRect(bx, by, Math.max(2, bw * ratio), bh, 2);
-      }
-      this.auraGraphics.lineStyle(1, 0xffffff, 0.35);
-      this.auraGraphics.strokeRoundedRect(bx - 1, by - 1, bw + 2, bh + 2, 2.5);
-    }
-
-    // 1. Active 5.5s Hexagonal Aegis Forcefield Dome!
-    if (this.shieldRemainingSec > 0) {
-      const shieldR = this.kinematics.radius * POWERUP_CONFIG.shieldRadiusFactor;
-      const blink =
-        this.shieldRemainingSec < 1.1
-          ? 0.35 + 0.65 * Math.abs(Math.sin(this.shieldRemainingSec * 22))
-          : 1;
-      const rot = this.auraPulseClock * 2.4;
-
-      this.auraGraphics.fillStyle(0x00e5ff, 0.14 * blink);
-      this.auraGraphics.lineStyle(2.6 * this.scaleRatio, 0x1de9b6, 0.92 * blink);
-      this.auraGraphics.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = rot + (i / 6) * Math.PI * 2;
-        const px = this.kinematics.x + Math.cos(a) * shieldR;
-        const py = this.kinematics.y + Math.sin(a) * shieldR;
-        if (i === 0) this.auraGraphics.moveTo(px, py);
-        else this.auraGraphics.lineTo(px, py);
-      }
-      this.auraGraphics.closePath();
-      this.auraGraphics.fillPath();
-      this.auraGraphics.strokePath();
-    }
-
-    // 1B. Reaper-Grade Abyssal Wraith Form (`Phantom Phase` — Giant Spectral Scythe-Wings + Long Soul-Flame Comet!)
-    if (this.phantomRemainingSec > 0) {
-      const s = this.scaleRatio;
-      const cx = this.kinematics.x;
-      const cy = this.kinematics.y;
-      const rBase = this.kinematics.radius;
-      const ghostR = rBase * (2.15 + Math.sin(this.auraPulseClock * 9) * 0.14);
-      const ratio = Math.max(0, Math.min(1, this.phantomRemainingSec / POWERUP_CONFIG.phantomDurationSec));
-
-      // 1. Concentric Abyssal Runic Rings (no flat gray blob — crisp dark-obsidian & neon-violet contrast!)
-      this.auraGraphics.fillStyle(0x0b0718, 0.44);
-      this.auraGraphics.fillCircle(cx, cy, rBase * 1.45);
-      this.auraGraphics.lineStyle(4.2 * s, 0x0b0718, 0.88);
-      this.auraGraphics.strokeCircle(cx, cy, ghostR);
-      this.auraGraphics.lineStyle(2.4 * s, 0xe040fb, 0.96);
-      this.auraGraphics.strokeCircle(cx, cy, ghostR);
-
-      // 2. Twin Sweeping Spectral Wraith Wings (`2.9x` tank radius span, flapping subtly!)
-      const fwdX = Math.cos(this.kinematics.angle);
-      const fwdY = Math.sin(this.kinematics.angle);
-      const sideX = -fwdY;
-      const sideY = fwdX;
-      const wingFlap = Math.sin(this.auraPulseClock * 11) * 0.16;
-
-      for (const sign of [-1, 1]) {
-        const wSpan = rBase * (2.85 + wingFlap);
-        const rootX = cx - fwdX * (rBase * 0.15) + sideX * sign * (rBase * 0.65);
-        const rootY = cy - fwdY * (rBase * 0.15) + sideY * sign * (rBase * 0.65);
-        const tipX = cx - fwdX * (rBase * 1.35) + sideX * sign * wSpan;
-        const tipY = cy - fwdY * (rBase * 1.35) + sideY * sign * wSpan;
-        const midX = cx + fwdX * (rBase * 0.35) + sideX * sign * (wSpan * 0.72);
-        const midY = cy + fwdY * (rBase * 0.35) + sideY * sign * (wSpan * 0.72);
-
-        this.auraGraphics.fillStyle(0x0d071c, 0.84);
-        this.auraGraphics.lineStyle(2.2 * s, 0xe040fb, 0.96);
-        this.auraGraphics.beginPath();
-        this.auraGraphics.moveTo(rootX, rootY);
-        this.auraGraphics.lineTo(midX, midY);
-        this.auraGraphics.lineTo(tipX, tipY);
-        this.auraGraphics.closePath();
-        this.auraGraphics.fillPath();
-        this.auraGraphics.strokePath();
-
-        this.auraGraphics.lineStyle(1.5 * s, 0x80d8ff, 0.9);
-        this.auraGraphics.lineBetween(rootX, rootY, tipX, tipY);
-      }
-
-      // 3. Long Undulating Twin Abyssal Soul-Flame Streamers (`~72px` scaled wake!)
-      const backAng = this.kinematics.angle + Math.PI;
-      const perpX = -Math.sin(backAng);
-      const perpY = Math.cos(backAng);
-      for (const side of [-1, 1]) {
-        const tailSegs = 9;
-        for (let k = 1; k <= tailSegs; k++) {
-          const f0 = (k - 1) / tailSegs;
-          const f1 = k / tailSegs;
-          const len0 = (12 + f0 * 58) * s;
-          const len1 = (12 + f1 * 58) * s;
-          const wave0 =
-            side * (8 + f0 * 8) * s +
-            Math.sin(this.auraPulseClock * 16 - f0 * 5.6 + side) * (7.5 * f0 * s);
-          const wave1 =
-            side * (8 + f1 * 8) * s +
-            Math.sin(this.auraPulseClock * 16 - f1 * 5.6 + side) * (7.5 * f1 * s);
-          const x0 = cx + Math.cos(backAng) * len0 + perpX * wave0;
-          const y0 = cy + Math.sin(backAng) * len0 + perpY * wave0;
-          const x1 = cx + Math.cos(backAng) * len1 + perpX * wave1;
-          const y1 = cy + Math.sin(backAng) * len1 + perpY * wave1;
-          const fade = 1 - f1 * 0.85;
-          this.auraGraphics.lineStyle(8.5 * (1 - f0 * 0.68) * s, 0x0b0718, 0.78 * fade);
-          this.auraGraphics.lineBetween(x0, y0, x1, y1);
-          this.auraGraphics.lineStyle(3.6 * (1 - f0 * 0.68) * s, side > 0 ? 0xe040fb : 0x00e5ff, 0.95 * fade);
-          this.auraGraphics.lineBetween(x0, y0, x1, y1);
-        }
-      }
-
-      // 4. High-contrast radial duration gauge + 4 orbiting Will-o'-the-Wisp Soul Flames
-      this.auraGraphics.lineStyle(3.4 * s, 0x00e5ff, 0.96);
-      this.auraGraphics.beginPath();
-      this.auraGraphics.arc(cx, cy, ghostR * 1.1, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
-      this.auraGraphics.strokePath();
-
-      for (let w = 0; w < 4; w++) {
-        const wa = this.auraPulseClock * 5.8 + (w * Math.PI) / 2;
-        const wx = cx + Math.cos(wa) * (ghostR * 1.12);
-        const wy = cy + Math.sin(wa) * (ghostR * 1.12);
-        this.auraGraphics.fillStyle(0x0b0718, 0.92);
-        this.auraGraphics.fillCircle(wx, wy, 4.6 * s);
-        this.auraGraphics.fillStyle(w % 2 === 0 ? 0x00e5ff : 0xe040fb, 0.98);
-        this.auraGraphics.fillCircle(wx, wy, 2.8 * s);
-      }
-    }
-
-    // 1C. 2x Cryo Slow & Freeze-Exposure Warning Ring + 3D Translucent Faceted Ice Block (`frozenRemainingSec > 0`)!
-    const chillRatio = this.getCryoChillRatio();
-    if ((this.onIceFloor || chillRatio > 0.04) && this.frozenRemainingSec <= 0) {
-      const s = this.scaleRatio;
-      const cx = this.kinematics.x;
-      const cy = this.kinematics.y;
-      const ringR = this.kinematics.radius * 1.48;
-
-      this.auraGraphics.fillStyle(0x062233, 0.16 + chillRatio * 0.24);
-      this.auraGraphics.fillCircle(cx, cy, ringR * 0.94);
-      this.auraGraphics.lineStyle(3.0 * s, 0x051c2c, 0.72);
-      this.auraGraphics.strokeCircle(cx, cy, ringR);
-      this.auraGraphics.lineStyle(1.8 * s, 0x84ffff, 0.92);
-      this.auraGraphics.strokeCircle(cx, cy, ringR);
-
-      // Growing frost crystal spikes around treads as chill approaches 100% freeze!
-      const spikeCount = 6;
-      for (let i = 0; i < spikeCount; i++) {
-        const a = this.auraPulseClock * 1.8 + (i / spikeCount) * Math.PI * 2;
-        const inner = this.kinematics.radius * 0.95;
-        const outer = inner + (4 + chillRatio * 9) * s;
-        this.auraGraphics.lineStyle(2.8 * s, 0x051c2c, 0.8);
-        this.auraGraphics.lineBetween(
-          cx + Math.cos(a) * inner,
-          cy + Math.sin(a) * inner,
-          cx + Math.cos(a) * outer,
-          cy + Math.sin(a) * outer,
-        );
-        this.auraGraphics.lineStyle(1.6 * s, 0xe0f7fa, 0.96);
-        this.auraGraphics.lineBetween(
-          cx + Math.cos(a) * inner,
-          cy + Math.sin(a) * inner,
-          cx + Math.cos(a) * outer,
-          cy + Math.sin(a) * outer,
-        );
-      }
-
-      if (chillRatio > 0.03) {
-        const urgentColor = chillRatio > 0.68 ? 0xffffff : 0x00e5ff;
-        this.auraGraphics.lineStyle(3.8 * s, urgentColor, 0.98);
-        this.auraGraphics.beginPath();
-        this.auraGraphics.arc(
-          cx,
-          cy,
-          ringR * 1.12,
-          -Math.PI / 2,
-          -Math.PI / 2 + Math.PI * 2 * chillRatio,
-          false,
-        );
-        this.auraGraphics.strokePath();
-      }
-    }
-
-    if (this.frozenRemainingSec > 0) {
-      const s = this.scaleRatio;
-      const cx = this.kinematics.x;
-      const cy = this.kinematics.y;
-      const r = this.kinematics.radius;
-      const thawRatio = Math.max(
-        0,
-        Math.min(1, this.frozenRemainingSec / POWERUP_CONFIG.cryoFreezeDurationSec),
-      );
-
-      // 1. Sub-zero ground frost pool & jagged perimeter icicles underneath the Ice Block (`auraGraphics` depth 13)
-      this.auraGraphics.fillStyle(0x052233, 0.72);
-      this.auraGraphics.lineStyle(2.8 * s, 0x031521, 0.94);
-      this.auraGraphics.beginPath();
-      for (let i = 0; i < 12; i++) {
-        const a = (i / 12) * Math.PI * 2;
-        const rad = i % 2 === 0 ? r * 2.28 : r * 1.68;
-        const px = cx + Math.cos(a) * rad;
-        const py = cy + Math.sin(a) * rad;
-        if (i === 0) this.auraGraphics.moveTo(px, py);
-        else this.auraGraphics.lineTo(px, py);
-      }
-      this.auraGraphics.closePath();
-      this.auraGraphics.fillPath();
-      this.auraGraphics.strokePath();
-
-      // 2. 3D Isometric Beveled Crystal Ice Cube Encasing OVER the Tank (`overlayGraphics` depth 14.8!)
-      const hw = r * 1.68;
-      const hh = r * 1.52;
-      const bev = r * 0.46;
-      const dropY = 6.0 * s;
-
-      const buildOctagon = (ox: number, oy: number, wHalf: number, hHalf: number, b: number) => [
-        { x: ox - wHalf + b, y: oy - hHalf },
-        { x: ox + wHalf - b, y: oy - hHalf },
-        { x: ox + wHalf, y: oy - hHalf + b },
-        { x: ox + wHalf, y: oy + hHalf - b },
-        { x: ox + wHalf - b, y: oy + hHalf },
-        { x: ox - wHalf + b, y: oy + hHalf },
-        { x: ox - wHalf, y: oy + hHalf - b },
-        { x: ox - wHalf, y: oy - hHalf + b },
-      ];
-
-      const basePoly = buildOctagon(cx, cy + dropY, hw, hh, bev);
-      const topPoly = buildOctagon(cx, cy - 2.5 * s, hw, hh, bev);
-
-      // Lower 3D extrusion wall (translucent deep-cyan side thickness)
-      this.overlayGraphics.fillStyle(0x00838f, 0.44);
-      this.overlayGraphics.lineStyle(3.0 * s, 0x041824, 0.96);
-      this.overlayGraphics.beginPath();
-      for (let i = 0; i < basePoly.length; i++) {
-        if (i === 0) this.overlayGraphics.moveTo(basePoly[i].x, basePoly[i].y);
-        else this.overlayGraphics.lineTo(basePoly[i].x, basePoly[i].y);
-      }
-      this.overlayGraphics.closePath();
-      this.overlayGraphics.fillPath();
-      this.overlayGraphics.strokePath();
-
-      // Translucent Glass-Cyan Crystal Ice Cube Face OVER the tank (tank stays clearly visible inside!)
-      this.overlayGraphics.fillStyle(0x4dd0e1, 0.34);
-      this.overlayGraphics.lineStyle(2.8 * s, 0x84ffff, 0.98);
-      this.overlayGraphics.beginPath();
-      for (let i = 0; i < topPoly.length; i++) {
-        if (i === 0) this.overlayGraphics.moveTo(topPoly[i].x, topPoly[i].y);
-        else this.overlayGraphics.lineTo(topPoly[i].x, topPoly[i].y);
-      }
-      this.overlayGraphics.closePath();
-      this.overlayGraphics.fillPath();
-      this.overlayGraphics.strokePath();
-
-      // Vertical 3D crystal pillar edges connecting top face to base face
-      this.overlayGraphics.lineStyle(2.0 * s, 0xe0f7fa, 0.92);
-      for (const idx of [2, 3, 4, 5, 6]) {
-        this.overlayGraphics.lineBetween(
-          topPoly[idx].x,
-          topPoly[idx].y,
-          basePoly[idx].x,
-          basePoly[idx].y,
-        );
-      }
-
-      // Inner crystal crown bezel + diagonal glass specular reflection stripes OVER tank!
-      const innerPoly = buildOctagon(cx, cy - 2.5 * s, hw * 0.74, hh * 0.74, bev * 0.74);
-      this.overlayGraphics.lineStyle(1.7 * s, 0xffffff, 0.9);
-      this.overlayGraphics.beginPath();
-      for (let i = 0; i < innerPoly.length; i++) {
-        if (i === 0) this.overlayGraphics.moveTo(innerPoly[i].x, innerPoly[i].y);
-        else this.overlayGraphics.lineTo(innerPoly[i].x, innerPoly[i].y);
-      }
-      this.overlayGraphics.closePath();
-      this.overlayGraphics.strokePath();
-
-      this.overlayGraphics.lineStyle(2.8 * s, 0xffffff, 0.94);
-      this.overlayGraphics.lineBetween(cx - hw * 0.65, cy - hh * 0.55, cx - hw * 0.1, cy - hh * 0.88);
-      this.overlayGraphics.lineBetween(cx - hw * 0.78, cy + hh * 0.18, cx + hw * 0.38, cy - hh * 0.82);
-      this.overlayGraphics.lineBetween(cx + hw * 0.15, cy + hh * 0.65, cx + hw * 0.74, cy + hh * 0.05);
-
-      // Thaw countdown arc around the Ice Block
-      this.overlayGraphics.lineStyle(3.2 * s, 0x00e5ff, 0.96);
-      this.overlayGraphics.beginPath();
-      this.overlayGraphics.arc(
-        cx,
-        cy,
-        r * 2.34,
-        -Math.PI / 2,
-        -Math.PI / 2 + Math.PI * 2 * thawRatio,
-        false,
-      );
-      this.overlayGraphics.strokePath();
-    }
-
-    // 1D. Reaper-Grade EMP Short-Circuit (`Chập Mạch Đảo Lái & Cướp Cò` — Spinning Inverted-Steering Arrows!)
-    if (this.empJamRemainingSec > 0) {
-      const s = this.scaleRatio;
-      const cx = this.kinematics.x;
-      const cy = this.kinematics.y;
-      const jamR = this.kinematics.radius * 1.72;
-
-      this.auraGraphics.fillStyle(0x09071a, 0.42);
-      this.auraGraphics.fillCircle(cx, cy, jamR * 0.9);
-      this.auraGraphics.lineStyle(2.6 * s, 0x651fff, 0.92);
-      this.auraGraphics.strokeCircle(cx, cy, jamR);
-
-      for (let k = 0; k < 6; k++) {
-        const baseA = this.auraPulseClock * 24 + (k * Math.PI * 2) / 6;
-        const x0 = cx + Math.cos(baseA) * (jamR * 0.52);
-        const y0 = cy + Math.sin(baseA) * (jamR * 0.52);
-        const xm = cx + Math.cos(baseA + 0.28) * (jamR * 1.22);
-        const ym = cy + Math.sin(baseA + 0.28) * (jamR * 1.22);
-        const x1 = cx + Math.cos(baseA + 0.54) * (jamR * 0.66);
-        const y1 = cy + Math.sin(baseA + 0.54) * (jamR * 0.66);
-        this.overlayGraphics.lineStyle(4.2 * s, 0x09071a, 0.85);
-        this.overlayGraphics.lineBetween(x0, y0, xm, ym);
-        this.overlayGraphics.lineBetween(xm, ym, x1, y1);
-        this.overlayGraphics.lineStyle(2.2 * s, k % 2 === 0 ? 0xffea00 : 0x00e5ff, 0.98);
-        this.overlayGraphics.lineBetween(x0, y0, xm, ym);
-        this.overlayGraphics.lineBetween(xm, ym, x1, y1);
-      }
-
-      // Bold Obsidian + Electric-Gold `⇄` Inverted-Steering Short-Circuit Icon above turret!
-      const iy = cy - this.kinematics.radius * 1.68;
-      const hw = 7.6 * s;
-      this.overlayGraphics.lineStyle(4.8 * s, 0x09071a, 0.95);
-      this.overlayGraphics.lineBetween(cx - hw, iy - 2.2 * s, cx + hw, iy - 2.2 * s);
-      this.overlayGraphics.lineBetween(cx - hw, iy + 2.6 * s, cx + hw, iy + 2.6 * s);
-
-      this.overlayGraphics.lineStyle(2.5 * s, 0xffea00, 1.0);
-      this.overlayGraphics.lineBetween(cx - hw, iy - 2.2 * s, cx + hw, iy - 2.2 * s);
-      this.overlayGraphics.lineBetween(cx + hw, iy - 2.2 * s, cx + hw - 3.6 * s, iy - 5.2 * s);
-      this.overlayGraphics.lineBetween(cx + hw, iy - 2.2 * s, cx + hw - 3.6 * s, iy + 0.8 * s);
-
-      this.overlayGraphics.lineStyle(2.5 * s, 0x00e5ff, 1.0);
-      this.overlayGraphics.lineBetween(cx + hw, iy + 2.6 * s, cx - hw, iy + 2.6 * s);
-      this.overlayGraphics.lineBetween(cx - hw, iy + 2.6 * s, cx - hw + 3.6 * s, iy - 0.4 * s);
-      this.overlayGraphics.lineBetween(cx - hw, iy + 2.6 * s, cx - hw + 3.6 * s, iy + 5.6 * s);
-    }
-
-    // 2. Equipped Skill Aura + Laser Charge / Reaper Windup Telegraphs
-    if (this.skillState.skill) {
-      const desc = getSkillDescriptor(this.skillState.skill);
-      const pulse = 1 + Math.sin(this.auraPulseClock * 8) * 0.08;
-      this.auraGraphics.lineStyle(
-        2.0 * this.scaleRatio,
-        desc.accentColor,
-        0.52 + Math.sin(this.auraPulseClock * 8) * 0.16,
-      );
-      this.auraGraphics.strokeCircle(
-        this.kinematics.x,
-        this.kinematics.y,
-        this.kinematics.radius * 1.42 * pulse,
-      );
-
-      if (this.isReaperWindingUp() || this.isReaperSweeping()) {
-        const s = this.scaleRatio;
-        const cx = this.kinematics.x;
-        const cy = this.kinematics.y;
-        const windupProg = this.getReaperWindupProgress();
-        const sigilR =
-          windupProg !== null
-            ? this.kinematics.radius * (2.65 - windupProg * 0.82)
-            : this.kinematics.radius * (1.85 + Math.sin(this.auraPulseClock * 12) * 0.12);
-
-        // Obsidian-Black & Blood-Crimson abyssal magic circle + rotating 8-point runic star!
-        this.auraGraphics.fillStyle(0x0b0c10, windupProg !== null ? 0.48 + windupProg * 0.28 : 0.56);
-        this.auraGraphics.fillCircle(cx, cy, sigilR * 0.96);
-        this.auraGraphics.lineStyle(2.8 * s, 0xff1744, 0.95);
-        this.auraGraphics.strokeCircle(cx, cy, sigilR);
-        this.auraGraphics.lineStyle(1.6 * s, 0x111216, 0.9);
-        this.auraGraphics.strokeCircle(cx, cy, sigilR * 0.72);
-
-        const runeRot = this.auraPulseClock * (windupProg !== null ? -5.5 : 3.0);
-        for (let r = 0; r < 8; r++) {
-          const ra = runeRot + (r / 8) * Math.PI * 2;
-          const x0 = cx + Math.cos(ra) * (sigilR * 0.56);
-          const y0 = cy + Math.sin(ra) * (sigilR * 0.56);
-          const x1 = cx + Math.cos(ra) * (sigilR * 1.14);
-          const y1 = cy + Math.sin(ra) * (sigilR * 1.14);
-          this.auraGraphics.lineStyle(2.0 * s, r % 2 === 0 ? 0xff1744 : 0x111216, 0.92);
-          this.auraGraphics.lineBetween(x0, y0, x1, y1);
-        }
-      }
-
-      if (chargeProgress !== null) {
-        const muzzle = this.getMuzzleWorldPos();
-        const s = this.scaleRatio;
-
-        // 1. Contracting hexagonal cyber-capacitor ring + 6 orbiting plasma nodes around tank hull
-        const outerR = this.kinematics.radius * (2.28 - chargeProgress * 0.56);
-        const spinA = this.auraPulseClock * (3.2 + chargeProgress * 7.5);
-        this.auraGraphics.lineStyle(1.8 * s, 0x0091ea, 0.45 + chargeProgress * 0.45);
-        this.auraGraphics.strokeCircle(this.kinematics.x, this.kinematics.y, outerR);
-
-        for (let n = 0; n < 6; n++) {
-          const na = spinA + (n / 6) * Math.PI * 2;
-          const nx = this.kinematics.x + Math.cos(na) * outerR;
-          const ny = this.kinematics.y + Math.sin(na) * outerR;
-          this.auraGraphics.fillStyle(n % 2 === 0 ? 0x00e5ff : 0xffffff, 0.88);
-          this.auraGraphics.fillCircle(nx, ny, (1.8 + chargeProgress * 1.4) * s);
-        }
-
-        // 2. High-contrast radial progress gauge around tank
-        this.auraGraphics.lineStyle(3.6 * s, 0x00e5ff, 0.96);
-        this.auraGraphics.beginPath();
-        this.auraGraphics.arc(
-          this.kinematics.x,
-          this.kinematics.y,
-          this.kinematics.radius * 1.68,
-          -Math.PI / 2,
-          -Math.PI / 2 + Math.PI * 2 * chargeProgress,
-          false,
-        );
-        this.auraGraphics.strokePath();
-
-        // 3. Holographic +-15 deg parabolic auto-lock funnel + sweeping radar beam
-        const guideLen = (88 + chargeProgress * 34) * s;
-        const coneRad = (POWERUP_CONFIG.laserAutoAimConeDeg * Math.PI) / 180;
-        const leftAng = this.kinematics.angle - coneRad;
-        const rightAng = this.kinematics.angle + coneRad;
-
-        this.auraGraphics.fillStyle(0x00b0ff, 0.06 + chargeProgress * 0.12);
-        this.auraGraphics.beginPath();
-        this.auraGraphics.moveTo(muzzle.x, muzzle.y);
-        this.auraGraphics.lineTo(
-          muzzle.x + Math.cos(leftAng) * guideLen,
-          muzzle.y + Math.sin(leftAng) * guideLen,
-        );
-        this.auraGraphics.lineTo(
-          muzzle.x + Math.cos(rightAng) * guideLen,
-          muzzle.y + Math.sin(rightAng) * guideLen,
-        );
-        this.auraGraphics.closePath();
-        this.auraGraphics.fillPath();
-
-        const sweepAng =
-          this.kinematics.angle + Math.sin(this.auraPulseClock * 11) * coneRad;
-        this.auraGraphics.lineStyle(1.4 * s, 0x80d8ff, 0.42 + chargeProgress * 0.35);
-        this.auraGraphics.lineBetween(
-          muzzle.x,
-          muzzle.y,
-          muzzle.x + Math.cos(sweepAng) * guideLen,
-          muzzle.y + Math.sin(sweepAng) * guideLen,
-        );
-
-        this.auraGraphics.lineStyle(1.6 * s, 0x00e5ff, 0.45 + chargeProgress * 0.4);
-        this.auraGraphics.lineBetween(
-          muzzle.x,
-          muzzle.y,
-          muzzle.x + Math.cos(this.kinematics.angle) * (guideLen * 1.1),
-          muzzle.y + Math.sin(this.kinematics.angle) * (guideLen * 1.1),
-        );
-        for (const ca of [leftAng, rightAng]) {
-          this.auraGraphics.lineStyle(1.1 * s, 0x40c4ff, 0.3);
-          this.auraGraphics.lineBetween(
-            muzzle.x,
-            muzzle.y,
-            muzzle.x + Math.cos(ca) * guideLen,
-            muzzle.y + Math.sin(ca) * guideLen,
-          );
-        }
-
-        // 4. Multi-tier imploding muzzle plasma singularity + cross-star flare!
-        const orbR = (4.2 + chargeProgress * 11.5) * s;
-        this.auraGraphics.fillStyle(0x0066ff, 0.28 + chargeProgress * 0.36);
-        this.auraGraphics.fillCircle(muzzle.x, muzzle.y, orbR * 1.85);
-        this.auraGraphics.fillStyle(0x00e5ff, 0.55 + chargeProgress * 0.4);
-        this.auraGraphics.fillCircle(muzzle.x, muzzle.y, orbR * 1.18);
-        this.auraGraphics.fillStyle(0xffffff, 0.96);
-        this.auraGraphics.fillCircle(muzzle.x, muzzle.y, orbR * 0.55);
-
-        const flareSpan = orbR * (1.5 + Math.sin(this.auraPulseClock * 26) * 0.35);
-        this.auraGraphics.lineStyle(2.0 * s, 0xffffff, 0.85);
-        for (let k = 0; k < 2; k++) {
-          const fa = this.kinematics.angle + (k * Math.PI) / 2 + this.auraPulseClock * 4;
-          this.auraGraphics.lineBetween(
-            muzzle.x - Math.cos(fa) * flareSpan,
-            muzzle.y - Math.sin(fa) * flareSpan,
-            muzzle.x + Math.cos(fa) * flareSpan,
-            muzzle.y + Math.sin(fa) * flareSpan,
-          );
-        }
-      }
-    }
+    renderTankAurasAndOverlays({
+      kinematics: this.kinematics,
+      scaleRatio: this.scaleRatio,
+      auraPulseClock: this.auraPulseClock,
+      hasArmorBar: this.hasArmorBar,
+      hpRatio: this.getHpRatio(),
+      shieldRemainingSec: this.shieldRemainingSec,
+      phantomRemainingSec: this.phantomRemainingSec,
+      onIceFloor: this.onIceFloor,
+      chillRatio: this.getCryoChillRatio(),
+      frozenRemainingSec: this.frozenRemainingSec,
+      empJamRemainingSec: this.empJamRemainingSec,
+      equippedSkill: this.skillState.skill,
+      isReaperWindingUp: this.isReaperWindingUp(),
+      isReaperSweeping: this.isReaperSweeping(),
+      reaperWindupProgress: this.getReaperWindupProgress(),
+      laserChargeProgress: chargeProgress,
+      muzzlePos: this.getMuzzleWorldPos(),
+      auraGraphics: this.auraGraphics,
+      overlayGraphics: this.overlayGraphics,
+    });
   }
 
   canFire(): boolean {
